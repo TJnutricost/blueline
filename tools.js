@@ -17,11 +17,11 @@
 
   const T = { pick: null, speech: null, gdrag: null, simEls: null, hot: null, eatClick: false };
   const A = { on: false, mode: 'select', keep: false, drag: null };
-  const D = { tool: null, color: GUIDE, cur: null };
+  const D = { tool: null, color: GUIDE, cur: null, selected: null, drag: null };
   const emptyPop = () => ({
     priority: 'must', bps: new Set(), scope: 'one', groupIdx: 0, scopeTouched: false, tweaks: {}, textEdit: null, hide: false,
     figma: '', variant: null, match: null, move: null, align: {}, alignInfo: {}, snap: { x: 0, y: 0 }, measures: [], colors: [],
-    marks: [], marksDirty: false, els: [], el: null, item: null, committed: false, auto: false,
+    marks: [], marksDirty: false, edits: new Map(), els: [], el: null, item: null, committed: false, auto: false,
   });
   let P = emptyPop();
   const touched = new WeakMap(); // el -> { prop: { v, p } } inline styles we overwrote for previews
@@ -33,6 +33,8 @@
   let ovSaveT = 0;
   const OV = { host: null, img: null, state: { dataUrl: null, opacity: 50, width: 0, x: 0, y: 0, diff: false, visible: true } };
   let sheet = null;
+  let activeTool = null;
+  let visibleMeasureIndex = null;
 
   // ------------------------------------------------------------------ helpers
 
@@ -51,12 +53,88 @@
   const toast = (m) => BL.toast(m);
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
   const matches = (n) => `${n} match${n === 1 ? '' : 'es'}`;
-  const hasPreview = (it) => !!((it.tweaks && it.tweaks.length) || it.textEdit || it.hidden);
+  const hasPreview = (it) => !!(it.elementEdits?.some(hasPreview) || (it.tweaks && it.tweaks.length) || it.textEdit || it.hidden);
   const appliesHere = (it) => !it.bps || !it.bps.length || it.bps.includes(bpNow());
   const isRegionPop = () => !!(S.pop && (S.pop.region || S.pop.item?.kind === 'region'));
   const setOn = (x, on) => { const b = q(`[data-x="${x}"]`); if (b) b.classList.toggle('on', !!on); };
   const textOf = (e, n = 24) => clip((e.innerText ?? e.textContent ?? '').replace(/\s+/g, ' ').trim(), n);
   const pickable = (e) => (e.target instanceof Element && e.target !== document.documentElement && e.target !== document.body && !mine(e.target) ? e.target : null);
+
+  // Keep the existing tool functions focused on one active element. Records are
+  // keyed by DOM instance while composing, and by the existing selector on disk.
+  const EDIT_KEYS = ['tweaks', 'textEdit', 'hide', 'match', 'move', 'align', 'alignInfo', 'snap', 'measures', 'scope', 'scopeTouched', 'groupIdx'];
+  function rememberElement() {
+    if (!P.el) return;
+    const record = {};
+    for (const key of EDIT_KEYS) record[key] = P[key];
+    P.edits.set(P.el, record);
+  }
+  function visitElement(el, fn) {
+    rememberElement();
+    const previous = P.el;
+    const record = P.edits.get(el) || emptyPop();
+    P.el = el;
+    for (const key of EDIT_KEYS) P[key] = record[key];
+    try { return fn(); } finally {
+      rememberElement();
+      P.el = previous;
+      const old = P.edits.get(previous) || emptyPop();
+      for (const key of EDIT_KEYS) P[key] = old[key];
+    }
+  }
+  function chooseElement(index) {
+    const el = P.els[index];
+    if (!el || el === P.el) return;
+    if (editing) finishEdit(true);
+    if (T.pick) endPick(null);
+    rememberElement();
+    P.el = el;
+    const record = P.edits.get(el) || emptyPop();
+    for (const key of EDIT_KEYS) P[key] = record[key];
+    visibleMeasureIndex = P.measures.length ? P.measures.length - 1 : null;
+    activeTool = P.measures.length ? 'measure' : Object.keys(P.align).length ? 'align' : P.move || P.match || P.textEdit || P.hide ? 'elements' : activeTool;
+    loadCompose();
+    q('[data-d="props"]').open = !!Object.keys(P.tweaks).length;
+  }
+  function elementFields() {
+    rememberElement();
+    return P.els.map((el) => visitElement(el, () => ({
+      el: alsoInfo(el), scope: scopeInfo(), tweaks: Object.values(P.tweaks).map((t) => ({ ...t })),
+      textEdit: P.textEdit, hidden: P.hide, match: P.match,
+      move: P.move ? { to: P.move.to, position: P.move.position } : null,
+      align: alignFields(), measures: P.measures.map(({ label, selector, summary }) => ({ label, selector, summary })),
+    })));
+  }
+  function restoreElementRecord(el, data) {
+    const record = emptyPop();
+    (data.tweaks || []).forEach((t) => { record.tweaks[t.prop] = { ...t }; });
+    record.textEdit = data.textEdit ? { ...data.textEdit } : null;
+    record.hide = !!data.hidden;
+    record.match = data.match || null;
+    record.move = data.move ? { ...data.move, toEl: BL.query(data.move.to.selector) } : null;
+    record.measures = (data.measures || []).map((m) => ({ ...m }));
+    record.scope = data.scope?.mode || 'one';
+    record.scopeTouched = !!data.scope?.chosen;
+    record.groupIdx = Math.max(0, groupOptions(el).findIndex((o) => o.label === data.scope?.container));
+    for (const a of data.align || []) {
+      const g = guidesHere().find((x) => x.id === a.guideId || x.name === a.guide);
+      if (g) { record.align[g.id] = a.edge; record.alignInfo[g.id] = { offset: a.offset, shift: a.shift || 0, axis: a.axis }; record.snap[a.axis] = a.shift || 0; }
+    }
+    P.edits.set(el, record);
+  }
+  function renderElementEditor() {
+    let box = q('.element-editor');
+    if (!box) { box = mk('<div class="element-editor"></div>'); q('.tool-ribbon').before(box); }
+    rememberElement();
+    const open = box.querySelector('details')?.open || false;
+    const descriptions = P.els.map((el, i) => {
+      const r = P.edits.get(el) || emptyPop();
+      const changes = [Object.keys(r.tweaks).length ? `${Object.keys(r.tweaks).length} CSS values` : '', r.hide ? 'hidden' : '', r.textEdit ? 'text' : '', r.move ? 'move' : '', r.match ? 'match style' : '', Object.keys(r.align).length ? 'alignment' : '', r.measures.length ? 'measurements' : ''].filter(Boolean);
+      return `<div class="strip"><button class="xb" data-x="edit-element" data-i="${i}" title="Open all edits for this specific instance">${el === P.el ? '● Editing' : 'Selected'} ${i + 1}: ${esc(BL.label(el))}</button><span class="sub">${esc(changes.join(', ') || 'No edits')}</span></div>`;
+    });
+    box.innerHTML = `<label class="sub">Editing one specific instance <select class="xin element-choice" aria-label="Element to edit">${P.els.map((el, i) => `<option value="${i}"${el === P.el ? ' selected' : ''}>${i + 1}: ${esc(BL.label(el))} · ${esc(textOf(el, 24))}</option>`).join('')}</select></label><details class="xd"${open ? ' open' : ''}><summary>Selected elements &amp; edits (${P.els.length})</summary>${descriptions.join('')}</details><div class="sub">Tools affect the instance above. Scope controls how broadly its CSS correction should be implemented.</div>`;
+    box.hidden = !P.els.length;
+  }
 
   // ------------------------------------------------------------------ inline previews (all targets of a note)
 
@@ -86,6 +164,7 @@
 
   function applyItemPreview(it, on) {
     if (it.path !== here() || it.kind === 'region') return;
+    if (it.elementEdits) { for (const edit of it.elementEdits) applyItemPreview({ ...edit, path: it.path, bps: it.bps }, on); return; }
     const live = on && appliesHere(it);
     const els = targetsOf(it);
     for (const el of els) {
@@ -104,11 +183,12 @@
   }
 
   function revertLive() {
-    for (const el of P.els) {
-      for (const prop of Object.keys(P.tweaks)) restoreInline(el, prop);
-      if (P.hide) restoreInline(el, 'display');
+    rememberElement();
+    for (const [el, record] of P.edits) {
+      for (const prop of Object.keys(record.tweaks)) restoreInline(el, prop);
+      if (record.hide) restoreInline(el, 'display');
+      if (record.textEdit && !el.children.length) el.textContent = record.textEdit.before;
     }
-    if (P.textEdit && P.els[0] && !P.els[0].children.length) P.els[0].textContent = P.textEdit.before;
   }
 
   // ------------------------------------------------------------------ similar elements (scope)
@@ -310,20 +390,25 @@
       g.appendChild(n);
       return n;
     };
-    const box = (r, c) => add('rect', { x: r.left, y: r.top, width: r.width ?? r.right - r.left, height: r.height ?? r.bottom - r.top, fill: 'none', stroke: c, 'stroke-width': 1.5 });
+    const box = (r, c) => add('rect', { x: r.left, y: r.top, width: r.width ?? r.right - r.left, height: r.height ?? r.bottom - r.top, fill: 'none', stroke: c, 'stroke-width': 1, 'stroke-dasharray': '3 5', opacity: .7 });
     box(ra, INK);
     box(rb, WARM);
     const m = measureRects(ra, rb);
-    const label = (x, y, t) => add('text', { x, y, 'text-anchor': 'middle', 'font-size': 11, 'font-weight': 700, fill: GUIDE, stroke: '#fff', 'stroke-width': 3, 'paint-order': 'stroke', 'font-family': 'ui-monospace, Menlo, monospace' }, t);
+    const label = (x, y, t) => {
+      const pad = 65;
+      const safeX = Math.max(Math.min(x, innerWidth - pad), Math.min(pad, innerWidth / 2));
+      const safeY = Math.max(18, Math.min(y, innerHeight - 16));
+      return add('text', { x: safeX, y: safeY, 'text-anchor': 'middle', 'font-size': 11, 'font-weight': 600, fill: GUIDE, stroke: '#fff', 'stroke-width': 3, 'paint-order': 'stroke', 'font-family': 'ui-monospace, Menlo, monospace' }, t);
+    };
     if (m.gapX > 0) {
       const x1 = m.relX === 'right' ? ra.right : ra.left;
       const x2 = m.relX === 'right' ? rb.left : rb.right;
       const o0 = Math.max(ra.top, rb.top);
       const o1 = Math.min(ra.bottom, rb.bottom);
       const y = o1 > o0 ? (o0 + o1) / 2 : m.relY === 'below' ? (ra.bottom + rb.top) / 2 : (rb.bottom + ra.top) / 2;
-      add('line', { x1, y1: y, x2, y2: y, stroke: GUIDE, 'stroke-width': 1.5 });
+      add('line', { x1, y1: y, x2, y2: y, stroke: GUIDE, 'stroke-width': 1.2, 'stroke-dasharray': '3 4' });
       add('line', { x1, y1: y - 5, x2: x1, y2: y + 5, stroke: GUIDE }); add('line', { x1: x2, y1: y - 5, x2, y2: y + 5, stroke: GUIDE });
-      label((x1 + x2) / 2, y - 6, `${m.gapX}`);
+      label((x1 + x2) / 2, y - 6, `${m.gapX}px`);
     }
     if (m.gapY > 0) {
       const y1 = m.relY === 'below' ? ra.bottom : ra.top;
@@ -331,14 +416,37 @@
       const o0 = Math.max(ra.left, rb.left);
       const o1 = Math.min(ra.right, rb.right);
       const x = o1 > o0 ? (o0 + o1) / 2 : m.relX === 'right' ? (ra.right + rb.left) / 2 : (rb.right + ra.left) / 2;
-      add('line', { x1: x, y1, x2: x, y2, stroke: GUIDE, 'stroke-width': 1.5 });
+      add('line', { x1: x, y1, x2: x, y2, stroke: GUIDE, 'stroke-width': 1.2, 'stroke-dasharray': '3 4' });
       add('line', { x1: x - 5, y1, x2: x + 5, y2: y1, stroke: GUIDE }); add('line', { x1: x - 5, y1: y2, x2: x + 5, y2, stroke: GUIDE });
-      label(x + 14, (y1 + y2) / 2 + 4, `${m.gapY}`);
+      label(x + 14, (y1 + y2) / 2 + 4, `${m.gapY}px`);
+    }
+    // Intersecting or nested elements have no edge-to-edge gap.
+    // Show their center offset instead of incorrectly calling it a gap.
+    if (m.gapX === 0 && m.gapY === 0) {
+      const x1 = ra.left + (ra.width ?? ra.right - ra.left) / 2;
+      const y1 = ra.top + (ra.height ?? ra.bottom - ra.top) / 2;
+      const x2 = rb.left + (rb.width ?? rb.right - rb.left) / 2;
+      const y2 = rb.top + (rb.height ?? rb.bottom - rb.top) / 2;
+      add('line', { x1, y1, x2, y2, stroke: GUIDE, 'stroke-width': 1.2, 'stroke-dasharray': '3 4' });
+      label((x1 + x2) / 2, (y1 + y2) / 2 - 9, `center offset ${Math.round(Math.hypot(x2 - x1, y2 - y1))}px`);
     }
     return m;
   }
 
   const clearMeas = () => { const g = q('.x-meas'); if (g) g.textContent = ''; };
+
+  function showNoteMeasurement() {
+    // Selection hover owns this SVG until the second target is confirmed.
+    if (T.pick) return;
+    const g = q('.x-meas');
+    if (!g) return;
+    if (!S.pop || !P.measures.length) { g.textContent = ''; return; }
+    const source = P.el?.isConnected ? P.el : (P.item?.el?.selector ? BL.query(P.item.el.selector) : null);
+    const latest = P.measures[visibleMeasureIndex ?? (P.measures.length - 1)] || P.measures[P.measures.length - 1];
+    const target = latest?.selector ? BL.query(latest.selector) : null;
+    if (!source || !target || source === target) { g.textContent = ''; return; }
+    drawMeasure(source.getBoundingClientRect(), target.getBoundingClientRect());
+  }
 
   // ------------------------------------------------------------------ CSV + price sheet
 
@@ -434,8 +542,35 @@
     .pop-head { display: none; }
     .pop-foot { position: sticky; bottom: 0; background: #fff; border-top: 1px solid #EDEFF3; margin: 4px -12px 0; padding: 10px 12px; z-index: 2; }
     .primary.done { background: #16A34A; }
+    .tool-ribbon { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; margin-top: 3px; }
+    .tool-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; align-items: center; justify-content: center; min-height: 55px; padding: 5px 2px; border: 1px solid #D9DCE4; border-radius: 8px; background: #fff; font-size: 11px; font-weight: 600; }
+    .tool-main:hover, .tool-action:hover { border-color: #8798F2; background: #F5F7FF; }
+    .tool-main[aria-pressed="true"] { color: #1A33C7; background: #EEF1FF; border-color: #2B4EFF; box-shadow: inset 0 0 0 1px #2B4EFF; }
+    .tool-main:disabled { opacity: .4; cursor: not-allowed; }
+    .tool-action.on { color: #1A33C7; background: #EEF1FF; border-color: #2B4EFF; }
+    .tool-main svg { flex: none; }
+    .tool-panel { margin-top: 6px; border: 1px solid #E2E5EC; background: #FCFCFF; border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+    .tool-panel .sub { font-size: 11px; }
+    .tool-draw-actions { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
+    .tool-draw-actions button { min-width: 0; font-size: 10px; padding: 6px 0; white-space: nowrap; }
+    .tool-draw-actions .on { color: #1A33C7; background: #EEF1FF; border-color: #2B4EFF; }
+    .tool-color-row { flex-wrap: wrap; gap: 7px; }
+    .tool-custom-color { display: flex; align-items: center; gap: 3px; font-size: 10px; cursor: pointer; }
+    .draw-custom { width: 26px; height: 24px; padding: 0; border: 1px solid #D9DCE4; border-radius: 5px; cursor: pointer; background: none; }
+    .tool-footer-row { flex-wrap: wrap; }
+    .tool-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+    .tool-action { min-width: 0; display: flex; align-items: center; gap: 7px; text-align: left; padding: 8px; border: 1px solid #E2E5EC; border-radius: 6px; background: #fff; font-size: 11px; font-weight: 600; }
+    .tool-action svg { width: 16px; height: 16px; flex: none; }
+    .tool-wide { align-self: flex-start; }
+    .tool-measure-list { display: flex; flex-direction: column; gap: 6px; }
+    .measure-row { display: flex; flex-direction: column; gap: 5px; padding: 7px; border: 1px solid #DEE4F5; border-radius: 6px; background: #fff; }
+    .measure-row.current { border-color: #2B4EFF; }
+    .measure-row strong { font-size: 11.5px; }
+    .measure-row .sub { overflow-wrap: anywhere; }
+    .measure-actions { display: flex; gap: 5px; flex-wrap: wrap; }
+    .measure-actions .xb { font-size: 10px; padding: 5px 6px; }
     .toast { z-index: 9; }
-    .pop.is-region .xe, .pop.is-region .xe1, .pop.is-multi .xe1, .pop.no-el .xe, .pop.no-el .xe1 { display: none !important; }
+    .pop.is-region .xe, .pop.is-region .xe1, .pop.no-el .xe, .pop.no-el .xe1 { display: none !important; }
 
     .tbg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
     .tb { padding: 5px 0; border: 1px solid #E2E5EC; border-radius: 6px; font-size: 11.5px; font-weight: 600; color: #4A5063; }
@@ -610,36 +745,80 @@
         <button class="chip" data-bp="desktop" aria-pressed="false" title="990px and wider">Desktop</button><button class="chip" data-bp="all" aria-pressed="false" title="All screen sizes">All</button></div></div></details>
   `;
 
+  // Icons use the same stroke weight and dimensions across all tool CTAs.
+  const icon = (inner) => `<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
+  const TOOL_ICON = {
+    draw: icon('<path d="m4 20 5-1 11-11-4-4L5 15l-1 5Z"/><path d="m14 6 4 4"/>'),
+    measure: icon('<path d="M3 8 8 3l13 13-5 5L3 8Z"/><path d="m7 7 2-2m0 5 2-2m0 5 2-2m0 5 2-2"/>'),
+    align: icon('<path d="M4 3v18M20 3v18M8 6h8v12H8z"/><path d="M12 1v22" stroke-dasharray="2 3"/>'),
+    elements: icon('<rect x="4" y="4" width="10" height="10" rx="1"/><path d="M14 10h6v10h-9v-6"/>'),
+    move: icon('<path d="M12 2v20M2 12h20m-13-7 3-3 3 3m-6 14 3 3 3-3M5 9l-3 3 3 3m14-6 3 3-3 3"/>'),
+    match: icon('<path d="M12 3a9 9 0 1 0 9 9h-9V3Z"/><path d="M14 3v7h7"/>'),
+    edit: icon('<path d="m4 20 5-1L20 8l-4-4L5 15l-1 5Z"/><path d="M4 5h7"/>'),
+    hide: icon('<path d="M3 3l18 18M10 10a3 3 0 0 0 4 4"/><path d="M8 5a10 10 0 0 1 4-1c5 0 9 5 10 8-.4 1-1.4 2.6-3 4M6 7C4 8.5 2.7 10.5 2 12c1 3 5 8 10 8a10 10 0 0 0 4-.8"/>'),
+    sample: icon('<path d="m13 5 6 6m-2-8 4 4-11 11-4 1 1-4L18 4"/><path d="M3 21h6"/>'),
+  };
+
   const MORE_HTML = `
     <div class="x-strips"></div>
-    <div class="stephead"><span class="stepn">3</span>Optional: try it, mark it up</div>
-    <details class="xd xe" data-d="props"><summary>Change how it looks <span class="sub style-sum"></span></summary>
-      <div class="sub" style="margin-top:3px">Edit a value to preview it on the page. − / + or ↑ ↓ nudge it (Shift = ×10).</div>
+    <div class="stephead"><span class="stepn">3</span>Annotation tools</div>
+    <div class="tool-ribbon" role="toolbar" aria-label="Annotation tools">
+      <button type="button" class="tool-main" data-x="tool-draw" data-tool="draw" aria-pressed="false" title="Draw arrows, shapes, freehand marks, or text on the page">${TOOL_ICON.draw}<span>Draw</span></button>
+      <button type="button" class="tool-main" data-x="tool-measure" data-tool="measure" aria-pressed="false" title="Measure the space between two page elements or change a measurement target">${TOOL_ICON.measure}<span>Measure</span></button>
+      <button type="button" class="tool-main" data-x="tool-align" data-tool="align" aria-pressed="false" title="Add guide lines and align your selected element with them">${TOOL_ICON.align}<span>Align</span></button>
+      <button type="button" class="tool-main" data-x="tool-elements" data-tool="elements" aria-pressed="false" title="Move, copy styling, edit text, hide, or sample a color">${TOOL_ICON.elements}<span>Elements</span></button>
+    </div>
+
+    <div class="tool-panel" data-tool-panel="draw" hidden>
+      <div class="tool-draw-actions" role="group" aria-label="Drawing shapes">
+        <button type="button" class="xb" data-draw="arrow" title="Draw an arrow from one point to another">&#8599; Arrow</button>
+        <button type="button" class="xb" data-draw="box" title="Draw a rectangular outline">&#9633; Box</button>
+        <button type="button" class="xb" data-draw="circle" title="Draw an ellipse or circle">&#9675; Circle</button>
+        <button type="button" class="xb" data-draw="pen" title="Draw freehand lines">&#9998; Pen</button>
+        <button type="button" class="xb" data-draw="text" title="Place a text annotation on the page">T Text</button>
+      </div>
+      <div class="xrow"><button class="xb" data-x="draw-edit" title="Select an arrow, then drag an endpoint or its body">Edit drawings</button><button class="xb" data-x="draw-delete" title="Delete the selected arrow">Delete selected arrow</button></div>
+      <div class="xrow tool-color-row">
+        <span class="sub">Color</span>
+        <div class="dots">${DRAW_COLORS.map((c) => `<button type="button" class="dot" data-dc="${c}" style="background:${c}" title="Use ${c} for new drawings" aria-label="Drawing color ${c}"></button>`).join('')}</div>
+        <label class="tool-custom-color" title="Choose any annotation color"><input type="color" class="draw-custom" aria-label="Custom drawing color" value="${GUIDE}"><span>Custom</span></label>
+      </div>
+      <div class="xrow tool-footer-row"><span class="sub draw-sum"></span><span style="flex:1"></span><button class="xb" data-x="draw-undo" title="Undo the last mark in this note">Undo</button><button class="xb" data-x="draw-clear" title="Remove all drawn marks from this note">Clear</button></div>
+      <div class="sub">Choose a shape, then draw on the page. Esc stops drawing. Color applies to new marks.</div>
+    </div>
+
+    <div class="tool-panel" data-tool-panel="measure" hidden>
+      <button type="button" class="xb tool-wide" data-x="measure-new" title="Select a second element to measure the distance from this note's element">+ Measure to an element</button>
+      <div class="tool-measure-list"></div>
+      <div class="sub">Measurements stay visible on the page while this note is open, and are included in the exported prompt.</div>
+    </div>
+
+    <div class="tool-panel" data-tool-panel="align" hidden>
+      <div class="xrow"><button class="xb" data-x="g-v" title="Add a vertical guide line you can drag into place">+ Vertical guide</button><button class="xb" data-x="g-h" title="Add a horizontal guide line you can drag into place">+ Horizontal guide</button></div>
+      <div class="align-rows"></div>
+      <div class="sub">Drag guides on the page, then align your selected element's edge or center to one.</div>
+    </div>
+
+    <div class="tool-panel" data-tool-panel="elements" hidden>
+      <div class="tool-grid">
+        <button type="button" class="tool-action" data-x="move-here" title="Pick a new position for the selected element">${TOOL_ICON.move}<span>Move</span></button>
+        <button type="button" class="tool-action" data-x="match" title="Pick another element to preview its styling on this one">${TOOL_ICON.match}<span>Match style</span></button>
+        <label class="sub"><input type="checkbox" class="match-all"> Apply match style to all selected</label>
+        <button type="button" class="tool-action" data-x="edittext" title="Edit this element's text directly on the page">${TOOL_ICON.edit}<span>Edit text</span></button>
+        <button type="button" class="tool-action" data-x="hide" title="Temporarily hide the selected element to preview the layout">${TOOL_ICON.hide}<span class="hide-label">Hide</span></button>
+        <button type="button" class="tool-action" data-x="pop-color" title="Sample a color from the webpage and copy its hex value">${TOOL_ICON.sample}<span>Sample color</span></button>
+      </div>
+    </div>
+
+    <details class="xd xe" data-d="props"><summary>CSS property adjustments <span class="sub style-sum"></span></summary>
+      <div class="sub" style="margin-top:3px">Preview CSS values on the selected element. Your changes are included automatically in the prompt.</div>
       <div class="style-rows"></div>
-      <div class="xrow" style="margin-top:6px"><button class="xb" data-x="style-reset" title="Undo all previewed changes to this element">Reset all</button></div></details>
-    <details class="xd xe" data-d="actions"><summary>Do something with this element</summary>
-      <div class="acts">
-        <button class="act xe1" data-x="move-here" title="Pick where this element should go instead"><b>Move it somewhere else</b><span>Pick the spot it should go instead</span></button>
-        <button class="act xe1" data-x="match" title="Compare it with another element and list the style differences"><b>Make it look like another element</b><span>Pick one to copy the style from</span></button>
-        <button class="act xe1" data-x="measure-to" title="Read the distance in pixels to another element"><b>Measure the distance to another element</b><span>Pick one to measure to</span></button>
-        <button class="act xe1" data-x="edittext" title="Retype its text right on the page"><b>Edit its text</b><span>Retype it on the page</span></button>
-        <button class="act" data-x="hide" title="Hide it to preview the layout without it"><b>Hide it</b><span>See the layout without it</span></button>
-        <button class="act" data-x="pop-color" title="Click anywhere on screen to copy that color"><b>Sample a color from the screen</b><span>Copies the hex code and adds it to the note</span></button>
-      </div></details>
-    <details class="xd xe1" data-d="scope"><summary>Apply to <span class="sub scope-sum"></span></summary>
+      <div class="xrow" style="margin-top:6px"><button class="xb" data-x="style-reset" title="Undo all previewed CSS changes to this element">Reset all</button></div></details>
+    <details class="xd xe1" data-d="scope"><summary>Apply CSS changes to <span class="sub scope-sum"></span></summary>
       <label class="radio"><input type="radio" name="scope" value="one" checked> Just this one</label>
       <label class="radio"><input type="radio" name="scope" value="group"> All like it inside <select class="xin grp-sel" style="width:auto;max-width:170px"></select></label>
       <label class="radio"><input type="radio" name="scope" value="all"> Everywhere on the site <span class="sub all-count"></span></label>
       <div class="sub scope-info"></div></details>
-    <details class="xd xe1" data-d="align"><summary>Line up with a guide</summary>
-      <div class="align-rows"></div></details>
-    <details class="xd" data-d="draw"><summary>Draw on the page <span class="sub draw-sum"></span></summary>
-      <div class="xbtns" style="margin-top:4px">
-        <button class="xb" data-draw="arrow" title="Draw an arrow">Arrow</button><button class="xb" data-draw="box" title="Draw a rectangle">Box</button><button class="xb" data-draw="circle" title="Draw an ellipse">Circle</button>
-        <button class="xb" data-draw="pen" title="Draw freehand">Pen</button><button class="xb" data-draw="text" title="Click to place text">Text</button></div>
-      <div class="xrow" style="margin-top:6px"><div class="dots">${DRAW_COLORS.map((c, i) => `<button class="dot${i === 0 ? ' on' : ''}" data-dc="${c}" style="background:${c}" aria-label="Color ${c}"></button>`).join('')}</div>
-        <span style="flex:1"></span><button class="xb" data-x="draw-undo" title="Remove the last drawing">Undo</button><button class="xb" data-x="draw-clear" title="Remove all drawings from this note">Clear</button></div>
-      <div class="sub">Pick a shape, then drag on the page. Drawings stay with the note and appear in its screenshot. Esc stops drawing.</div></details>
     <details class="xd" data-d="link"><summary>Figma link &amp; product variant</summary>
       <input class="xin figma-in" placeholder="Figma frame link (optional)" style="margin-top:4px">
       <div class="shop-only" hidden><input class="xin var-q" placeholder="Find a product or variant (read-only)" style="margin-top:6px"><div class="var-res"></div></div></details>
@@ -727,7 +906,7 @@
     root.querySelector('.x-top').innerHTML = TOP_HTML;
     root.querySelector('.x-more').innerHTML = MORE_HTML;
     const body = root.querySelector('.body');
-    root.querySelector('.x-step2').innerHTML = '<div class="stephead"><span class="stepn">2</span>What should change?</div>';
+    root.querySelector('.x-step2').innerHTML = '<div class="stephead"><span class="stepn">2</span>Corrections</div>';
     const add = mk('<button class="addnote" data-x="add-note" title="Open a new note. You can attach it to an element, or keep it as a general note"><span class="an-label">＋ Add note</span></button>');
     const startRow = mk(`<div class="startrow"><div class="sub">Or start straight from the page:</div><div class="sbtns">
       <button class="sbtn" data-x="start-select" title="Click an element on the page to attach a note to it (Alt+P)"><b>Select element</b><span>Click it on the page</span></button>
@@ -737,7 +916,7 @@
     body.appendChild(root.querySelector('.x-tools'));
     const tools = root.querySelector('.bar .tools');
     tools.insertBefore(mk('<button class="mk-toggle" data-x="marks" title="Show an outline around each noted element on the page, or just the numbered badges">Outlines</button>'), tools.firstChild);
-    makeDraggable(panel, root.querySelector('.bar'), { ignore: '.tools button, input, select, textarea, [data-nodrag]', onEnd: () => { const r = panel.getBoundingClientRect(); S.prefs.pos = { left: Math.round(r.left), top: Math.round(r.top) }; BL.savePrefs(); } });
+    makeDraggable(panel, root.querySelector('.bar'), { ignore: 'button, a, input, select, textarea, [data-nodrag]', onEnd: () => { const r = panel.getBoundingClientRect(); S.prefs.pos = { left: Math.round(r.left), top: Math.round(r.top) }; BL.savePrefs(); } });
     makeDraggable(root.querySelector('.xov'), root.querySelector('.xov-h'), { translate: true });
     makeDraggable(root.querySelector('.xsheet'), root.querySelector('.xsheet header'), { translate: true });
     root.addEventListener('click', onClick);
@@ -923,7 +1102,16 @@
     }
     if (!(T.pick || A.on || D.tool)) return;
     const isPtr = e.type.startsWith('pointer');
-    if (BL.fromUI(e) && !(isPtr && (A.drag || D.cur))) return;
+    // Blueline controls must never be intercepted by page-picking or drawing.
+    if (BL.fromUI(e)) {
+      if (isPtr && (e.type === 'pointerup' || e.type === 'pointercancel')) {
+        A.drag = null;
+        D.cur = null;
+        if (D.drag) { P.marksDirty = e.type === 'pointerup'; if (e.type === 'pointercancel') P.marks[D.selected] = D.drag.before; D.drag = null; renderDrawn(); }
+        hideDr();
+      }
+      return;
+    }
     e.preventDefault();
     e.stopImmediatePropagation();
     if (!isPtr) return;
@@ -1057,6 +1245,8 @@
 
   // Swap what the open note points at, keeping its text, type, priority, drawings, and colors.
   function setTarget(t) {
+    rememberElement();
+    const oldEdits = P.edits;
     revertLive();
     P.tweaks = {}; P.hide = false; P.textEdit = null; P.align = {}; P.alignInfo = {}; P.snap = { x: 0, y: 0 };
     P.move = null; P.match = null; P.measures = []; P.variant = null;
@@ -1064,14 +1254,21 @@
     S.pop.page = false;
     if (t.region) { P.els = []; P.el = null; S.pop.region = t.region; S.pop.el = null; S.pop.els = []; }
     else { P.els = t.els; P.el = t.els[0]; S.pop.region = null; S.pop.el = P.el; S.pop.els = P.els; }
+    P.edits = new Map(P.els.filter((el) => oldEdits.has(el)).map((el) => [el, oldEdits.get(el)]));
+    const current = P.edits.get(P.el) || emptyPop();
+    for (const key of EDIT_KEYS) P[key] = current[key];
+    rememberElement();
+    for (const [el, record] of P.edits) applyItemPreview({ ...record, tweaks: Object.values(record.tweaks), hidden: record.hide, el: targetInfo(el), path: here() }, true);
+    activeTool = null;
+    visibleMeasureIndex = null;
     loadCompose();
-    if (P.els.length) for (const k of ['props', 'actions']) { const dd = q(`[data-d="${k}"]`); if (dd) dd.open = true; }
   }
 
   // ------------------------------------------------------------------ compose lifecycle
 
   hooks.onPopOpen = (el, item) => {
     P = emptyPop();
+    const matchAll = q('.match-all'); if (matchAll) matchAll.checked = false;
     P.item = item || null;
     const sp = S.pop;
     if (item) {
@@ -1101,14 +1298,23 @@
     }
     if (sp?.move) P.move = { to: targetInfo(sp.move.toEl), toEl: sp.move.toEl, position: sp.move.position };
     else if (item?.move) P.move = { to: item.move.to, toEl: BL.query(item.move.to.selector), position: item.move.position };
+    if (item && P.els.length) {
+      for (const target of P.els) {
+        const data = item.elementEdits?.find((e) => e.el.selector === BL.cssPath(target));
+        if (data) restoreElementRecord(target, data);
+        else if (!item.elementEdits) restoreElementRecord(target, { ...item, textEdit: target === P.els[0] ? item.textEdit : null, move: target === P.els[0] ? item.move : null, align: target === P.els[0] ? item.align : [], match: target === P.els[0] ? item.match : null, measures: target === P.els[0] ? item.measures : [] });
+      }
+      const current = P.edits.get(P.el) || emptyPop();
+      for (const key of EDIT_KEYS) P[key] = current[key];
+    }
     S.pop.els = P.els;
     q('.panel').classList.add('composing');
     q('.pop-note').placeholder = sp?.move && !item ? 'Anything to add? (optional)' : 'Describe what should change, in your own words';
-    for (const d of qa('.pop details')) d.open = (d.dataset.d === 'props' || d.dataset.d === 'actions') && !!P.el;
+    for (const d of qa('.pop details')) d.open = false;
     if (Object.keys(P.tweaks).length) q('[data-d="props"]').open = true;
     if (P.scope !== 'one') q('[data-d="scope"]').open = true;
-    if (Object.keys(P.align).length) q('[data-d="align"]').open = true;
-    if (P.marks.some((m) => !m.auto)) q('[data-d="draw"]').open = true;
+    activeTool = P.measures.length ? 'measure' : Object.keys(P.align).length ? 'align' : P.marks.some((m) => !m.auto) ? 'draw' : null;
+    visibleMeasureIndex = P.measures.length ? P.measures.length - 1 : null;
     BL.hideHL();
     loadCompose();
     clampPanel();
@@ -1132,6 +1338,7 @@
     q('.pop-el').textContent = P.el ? BL.label(P.el) : '';
     updateTypeHint();
     renderSel();
+    renderElementEditor();
     syncChips();
     buildStyleRows();
     buildAlignRows();
@@ -1139,6 +1346,8 @@
     renderStrips();
     updateHideButton();
     syncDrawUi();
+    syncToolPanels();
+    updatePrerequisites();
     const issues = P.el ? detectIssuesSafe(P.el) : P.item?.el?.issues || [];
     const ul = q('.issues');
     ul.textContent = '';
@@ -1175,7 +1384,7 @@
       <button class="xb${A.on && A.mode === 'select' && !A.keep ? ' on' : ''}" data-x="sel-element" title="Click an element on the page to attach this note to it">Select element</button>
       <button class="xb${A.on && A.mode === 'circle' ? ' on' : ''}" data-x="sel-circle" title="Drag a circle around an element or an empty spot. Blueline finds the element under it">Circle an area</button>
       ${P.els.length && !rg ? `<button class="xb${A.on && A.keep ? ' on' : ''}" data-x="sel-add" title="Include more elements in this same note">+ Add another element</button>` : ''}</div>`;
-    box.innerHTML = `<div class="stephead"><span class="stepn">1</span>${editing ? `Editing note ${num}` : 'What is this about?'}</div>${chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}${buttons}<div class="sub">${hint}</div>`;
+    box.innerHTML = `<div class="stephead"><span class="stepn">1</span>Selected elements to change${editing ? ` (note ${num})` : ''}</div>${chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}${buttons}<div class="sub">${hint}</div>`;
   }
 
   hooks.onPopClose = () => {
@@ -1193,6 +1402,8 @@
     const panel = q('.panel');
     if (panel) panel.classList.remove('composing');
     P = emptyPop();
+    activeTool = null;
+    visibleMeasureIndex = null;
     setTimeout(() => { renderAnn(); applyAllPreviews(); }, 0);
   };
 
@@ -1204,9 +1415,21 @@
     if (sum) sum.textContent = `${P.priority === 'nice' ? 'Nice to have' : 'Must fix'} · ${all ? 'all screen sizes' : ['mobile', 'tablet', 'desktop'].filter((b) => P.bps.has(b)).join(' + ') || 'any size'}`;
   }
 
+  function updatePrerequisites() {
+    for (const b of qa('[data-x="move-here"], [data-x="match"], [data-x="hide"], [data-x="measure-new"], [data-x="align-go"], [data-x="edittext"]')) {
+      const reason = !P.el ? 'Select an element first.' : b.dataset.x === 'edittext' && P.el.children.length ? 'Select the text element itself; this element contains other elements.' : '';
+      b.disabled = !!reason;
+      if (!b.dataset.readyTitle) b.dataset.readyTitle = b.title;
+      b.title = reason || b.dataset.readyTitle;
+    }
+    let hint = q('.element-guidance');
+    if (!hint) { hint = mk('<div class="sub element-guidance"></div>'); q('[data-tool-panel="elements"]').prepend(hint); }
+    hint.textContent = P.el ? `Actions apply to ${BL.label(P.el)} (instance ${P.els.indexOf(P.el) + 1}). Match style asks you to pick a reference element next.` : 'Select an element above to enable element actions. Sample color is available without a selection.';
+  }
+
   function updateHideButton() {
     const b = q('[data-x="hide"]');
-    if (b) { b.textContent = P.hide ? 'Show it' : 'Hide it'; b.classList.toggle('on', P.hide); }
+    if (b) { const label = b.querySelector('.hide-label'); if (label) label.textContent = P.hide ? 'Show' : 'Hide'; else b.textContent = P.hide ? 'Show it' : 'Hide it'; b.classList.toggle('on', P.hide); }
   }
 
   // ------------------------------------------------------------------ scope ("Apply to")
@@ -1214,7 +1437,7 @@
   function updateScope() {
     const sm = q('.x-sim');
     const el = P.el;
-    if (!el || P.els.length > 1 || isRegionPop()) { T.simEls = null; if (sm) sm.textContent = ''; return; }
+    if (!el || isRegionPop()) { T.simEls = null; if (sm) sm.textContent = ''; return; }
     const opts = groupOptions(el);
     const all = similar(el, 'all');
     const sel = q('.grp-sel');
@@ -1290,19 +1513,20 @@
     const prop = row.dataset.prop;
     const from = row.dataset.from;
     const v = raw.trim();
-    if (!v || v === from) { for (const el of P.els) restoreInline(el, prop); delete P.tweaks[prop]; }
+    if (!v || v === from) { restoreInline(P.el, prop); delete P.tweaks[prop]; }
     else {
       const val = normInput(prop, v);
-      for (const el of P.els) setInline(el, prop, val);
+      setInline(P.el, prop, val);
       P.tweaks[prop] = { prop, from, to: val, token: tokenHint(prop, val, BL.stylingOf(P.el).includes('tailwind')) };
     }
     refreshRow(row);
+    renderElementEditor();
     q('.style-sum').textContent = tweakCount() ? `${tweakCount()} changed` : '';
     renderAnn();
   }
 
   function resetStyles() {
-    for (const el of P.els) for (const prop of Object.keys(P.tweaks)) restoreInline(el, prop);
+    if (P.el) for (const prop of Object.keys(P.tweaks)) restoreInline(P.el, prop);
     P.tweaks = {};
     P.align = {}; P.alignInfo = {}; P.snap = { x: 0, y: 0 };
     buildStyleRows();
@@ -1324,6 +1548,7 @@
     BL.saveBatch();
     renderAnn();
     updateToolbar();
+    if (S.pop) buildAlignRows();
     toast(`Guide ${name} added. Drag it into place.`);
   }
 
@@ -1381,11 +1606,29 @@
     const box = q('.align-rows');
     if (!box) return;
     const gs = guidesHere();
-    if (!gs.length) { box.innerHTML = '<div class="sub" style="margin-top:3px">No guides on this page. Add one from the Guides tool, then snap this element to it here.</div>'; return; }
-    box.innerHTML = gs.map((g) => {
+    box.innerHTML = gs.length ? gs.map((g) => {
       const info = P.alignInfo[g.id];
-      return `<div class="xrow" style="margin-top:4px"><span class="xlabel" style="min-width:74px">Guide ${esc(g.name)} · ${g.axis} ${Math.round(g.pos)}</span><div class="chips">${EDGES[g.axis].map(([k, l]) => `<button class="chip" data-x="snap" data-g="${g.id}" data-edge="${k}" aria-pressed="${P.align[g.id] === k}">${l}</button>`).join('')}</div></div>${P.align[g.id] && info ? `<div class="sub" style="margin-left:80px">Snapped. Moved ${Math.abs(rnd(info.shift))}px (it was ${Math.abs(rnd(info.offset))}px ${info.offset >= 0 ? (g.axis === 'x' ? 'right' : 'below') : g.axis === 'x' ? 'left' : 'above'} of the guide).</div>` : ''}`;
-    }).join('');
+      return `<div class="strip" style="flex-wrap:wrap;margin-top:4px"><b>Guide ${esc(g.name)} · ${g.axis === 'x' ? 'vertical' : 'horizontal'} ${Math.round(g.pos)}px</b><button class="xb" data-x="g-del" data-id="${esc(g.id)}" title="Delete this guide and clear its alignment assignments">✕ Delete guide</button><select class="xin align-edge" data-g="${esc(g.id)}" aria-label="Edge for guide ${esc(g.name)}">${EDGES[g.axis].map(([k, l]) => `<option value="${k}"${P.align[g.id] === k ? ' selected' : ''}>${l}</option>`).join('')}</select><button class="xb" data-x="align-go" data-g="${esc(g.id)}" title="Align the active instance to this guide">Align to guide</button>${info ? `<span class="sub">${esc(BL.label(P.el))}: ${P.align[g.id]} aligned · ${rnd(info.shift)}px</span><button class="xb" data-x="align-clear" data-g="${esc(g.id)}" title="Undo this instance's alignment to this guide">Undo alignment</button>` : ''}</div>`;
+    }).join('') : '<div class="sub">Create a guide above, drag it into position, choose an element and edge, then click Align to guide.</div>';
+    if (!P.el && gs.length) box.insertAdjacentHTML('beforeend', '<div class="sub">Select an element first to align it.</div>');
+  }
+  function removeGuide(id) {
+    rememberElement();
+    for (const el of P.els) visitElement(el, () => { if (P.align[id]) snapTo(id, P.align[id], true); });
+    for (const item of S.batch?.items || []) {
+      for (const data of item.elementEdits || [item]) {
+        const removed = (data.align || []).filter((a) => a.guideId === id || a.guide === guidesHere().find((g) => g.id === id)?.name);
+        if (!removed.length) continue;
+        const el = BL.query(data.el?.selector);
+        if (el) restoreInline(el, 'translate');
+        data.align = data.align.filter((a) => !removed.includes(a));
+        const remaining = data.align;
+        const translate = (data.tweaks || []).find((t) => t.snap && t.prop === 'translate');
+        if (translate) { if (remaining.length) translate.to = `${remaining.find((a) => a.axis === 'x')?.shift || 0}px ${remaining.find((a) => a.axis === 'y')?.shift || 0}px`; else data.tweaks = data.tweaks.filter((t) => t !== translate); }
+      }
+    }
+    if (S.batch) S.batch.guides = (S.batch.guides || []).filter((g) => g.id !== id);
+    BL.saveBatch(); renderAnn(); updateToolbar(); renderGuideList(); buildAlignRows();
   }
 
   function edgePos(r, edge) {
@@ -1393,13 +1636,13 @@
   }
 
   // Preview-snap the element's edge onto the guide by shifting it with `translate`.
-  function snapTo(gid, edge) {
+  function snapTo(gid, edge, clear = false) {
     const el = P.el;
     const g = guidesHere().find((x) => x.id === gid);
     if (!el || !g) return;
     const axis = g.axis;
     const same = Object.keys(P.align).filter((id) => (guidesHere().find((x) => x.id === id) || {}).axis === axis);
-    const toggledOff = P.align[gid] === edge;
+    const toggledOff = clear;
     same.forEach((id) => { delete P.align[id]; delete P.alignInfo[id]; });
     restoreInline(el, 'translate');
     P.snap[axis] = 0;
@@ -1441,7 +1684,7 @@
       const edge = P.align[g.id];
       const info = P.alignInfo[g.id];
       if (!edge || !info) continue;
-      out.push({ guide: g.name, axis: g.axis, edge, guidePos: Math.round(g.pos), offset: info.offset, shift: info.shift });
+      out.push({ guideId: g.id, guide: g.name, axis: g.axis, edge, guidePos: Math.round(g.pos), offset: info.offset, shift: info.shift });
     }
     return out;
   }
@@ -1534,12 +1777,18 @@
     if (!g) return;
     g.textContent = '';
     g.setAttribute('transform', `translate(${-scrollX} ${-scrollY})`);
-    if (S.prefs.marks === 'badges') return;
     const list = [];
-    for (const it of itemsHere()) { if (S.pop?.item?.id === it.id) continue; (it.marks || []).forEach((m) => list.push(m)); }
+    // "Outlines: off" hides other notes' drawings, never the marks being drawn or edited now.
+    if (S.prefs.marks !== 'badges') for (const it of itemsHere()) { if (S.pop?.item?.id === it.id) continue; (it.marks || []).forEach((m) => list.push(m)); }
     (P.marks || []).forEach((m) => list.push(m));
     if (D.cur) list.push(D.cur);
     for (const s of list) g.appendChild(svgShape(s));
+    const selected = D.tool === 'edit' ? P.marks[D.selected] : null;
+    if (selected?.t === 'arrow') for (const p of [selected.a, selected.b]) {
+      const handle = document.createElementNS(SVGNS, 'circle');
+      Object.entries({ cx: p.x, cy: p.y, r: 7, fill: '#fff', stroke: selected.c, 'stroke-width': 2 }).forEach(([k, v]) => handle.setAttribute(k, v));
+      g.appendChild(handle);
+    }
   }
 
   function renderSim() {
@@ -1577,7 +1826,8 @@
       g.appendChild(t);
     };
     if (S.prefs.marks !== 'badges') for (const it of itemsHere()) if (it.move) draw(BL.query(it.el.selector), BL.query(it.move.to.selector), it.move.position);
-    if (S.pop && P.move && P.el) draw(P.el, P.move.toEl, P.move.position);
+    if (S.prefs.marks !== 'badges') for (const it of itemsHere()) for (const edit of it.elementEdits || []) if (edit.move) draw(BL.query(edit.el.selector), BL.query(edit.move.to.selector), edit.move.position);
+    if (S.pop) { rememberElement(); for (const [el, r] of P.edits) if (r.move) draw(el, r.move.toEl, r.move.position); }
   }
 
   function renderAnn() {
@@ -1586,6 +1836,7 @@
     renderMarks();
     renderDrawn();
     renderArrows();
+    showNoteMeasurement();
     if (T.simEls) renderSim();
     const rg = S.pop?.region;
     if (rg) {
@@ -1641,24 +1892,31 @@
   function startDrawing(tool) {
     setAnnotate(false, true);
     cancelTools();
+    D.selected = null; D.drag = null;
     D.tool = D.tool === tool ? null : tool;
+    renderDrawn();
     syncDrawUi();
     BL.cursorStyle(!!D.tool);
-    if (D.tool) showBar(D.tool === 'text' ? 'Click where the text should go. Esc stops drawing.' : 'Drag on the page to draw. Esc stops drawing.'); else hideBar();
+    if (D.tool) showBar(D.tool === 'edit' ? 'Click an arrow. Drag either endpoint or its body. Choose a color or Delete selected arrow. Esc ends editing.' : D.tool === 'text' ? 'Click where the text should go. Esc stops drawing.' : 'Drag on the page to draw. Esc stops drawing.'); else hideBar();
   }
 
   function stopDrawing() {
     if (!D.tool && !D.cur) return;
     D.tool = null;
-    D.cur = null;
+    D.cur = null; D.selected = null; D.drag = null;
+    renderDrawn();
     hideBar();
     BL.cursorStyle(A.on);
     syncDrawUi();
   }
 
   function syncDrawUi() {
+    setOn('draw-edit', D.tool === 'edit');
+    const del = q('[data-x="draw-delete"]'); if (del) del.disabled = !P.marks[D.selected] || D.tool !== 'edit';
     for (const b of qa('[data-draw]')) b.classList.toggle('on', b.dataset.draw === D.tool);
     for (const b of qa('[data-dc]')) b.classList.toggle('on', b.dataset.dc === D.color);
+    const custom = q('.draw-custom');
+    if (custom) custom.value = /^#[0-9a-f]{6}$/i.test(D.color) ? D.color : GUIDE;
     const s = q('.draw-sum');
     const drawn = P.marks.filter((m) => !m.auto).length;
     if (s) s.textContent = drawn ? `${drawn} drawing${drawn === 1 ? '' : 's'}` : '';
@@ -1666,6 +1924,7 @@
 
   function drawMouse(e) {
     const p = { x: e.clientX + scrollX, y: e.clientY + scrollY };
+    if (D.tool === 'edit') { editArrowPointer(e, p); return; }
     if (e.type === 'pointerdown' && e.button === 0) {
       if (D.tool === 'text') { textPrompt(e, p); return; }
       D.cur = D.tool === 'pen' ? { t: 'pen', c: D.color, pts: [p] } : { t: D.tool, c: D.color, a: p, b: p };
@@ -1680,6 +1939,36 @@
       syncDrawUi();
       renderAnn();
     }
+  }
+
+  function arrowHit(mark, p) {
+    for (const key of ['a', 'b']) if (Math.hypot(p.x - mark[key].x, p.y - mark[key].y) <= 12) return key;
+    const dx = mark.b.x - mark.a.x, dy = mark.b.y - mark.a.y;
+    const len = dx * dx + dy * dy;
+    const t = len ? Math.max(0, Math.min(1, ((p.x - mark.a.x) * dx + (p.y - mark.a.y) * dy) / len)) : 0;
+    return Math.hypot(p.x - mark.a.x - t * dx, p.y - mark.a.y - t * dy) <= 10 ? 'body' : null;
+  }
+  function editArrowPointer(e, p) {
+    if (e.type === 'pointerdown' && e.button === 0) {
+      D.selected = null; D.drag = null;
+      for (let i = P.marks.length - 1; i >= 0; i--) {
+        const mark = P.marks[i];
+        if (mark.t !== 'arrow' || mark.auto) continue;
+        const part = arrowHit(mark, p);
+        if (part) { D.selected = i; D.color = mark.c; D.drag = { part, origin: p, before: JSON.parse(JSON.stringify(mark)) }; break; }
+      }
+    } else if (e.type === 'pointermove' && D.drag) {
+      const mark = P.marks[D.selected], d = D.drag;
+      const dx = p.x - d.origin.x, dy = p.y - d.origin.y;
+      for (const key of ['a', 'b']) if (d.part === key || d.part === 'body') mark[key] = { x: d.before[key].x + dx, y: d.before[key].y + dy };
+    } else if (e.type === 'pointercancel' && D.drag) { P.marks[D.selected] = D.drag.before; D.drag = null; }
+    else if (e.type === 'pointerup' && D.drag) { P.marksDirty = true; D.drag = null; }
+    syncDrawUi(); renderDrawn();
+  }
+  function setDrawingColor(color) {
+    D.color = color;
+    if (D.tool === 'edit' && P.marks[D.selected]?.t === 'arrow') { P.marks[D.selected].c = color; P.marksDirty = true; renderDrawn(); }
+    syncDrawUi();
   }
 
   function textPrompt(e, p) {
@@ -1876,6 +2165,51 @@
 
   // ------------------------------------------------------------------ strips (move, match, text, measures, colors, variant)
 
+  // Measurement overlay is deliberately visible only while its note is open.
+  function renderMeasurePanel() {
+    const box = q('.tool-measure-list');
+    if (!box) return;
+    const add = q('[data-x="measure-new"]');
+    if (add) add.disabled = !P.el;
+    box.innerHTML = P.measures.length ? P.measures.map((m, i) => `
+      <div class="measure-row${(visibleMeasureIndex === i || (visibleMeasureIndex === null && i === P.measures.length - 1)) ? ' current' : ''}">
+        <strong>${i + 1}. ${esc(m.label)}</strong>
+        <span class="sub">${esc(m.summary)}</span>
+        <div class="measure-actions">
+          <button type="button" class="xb" data-x="measure-show" data-i="${i}" title="Show this measurement on the webpage">Show</button>
+          <button type="button" class="xb" data-x="measure-change" data-i="${i}" ${P.el ? '' : 'disabled'} title="Choose another second element without changing the original selected element">Change target</button>
+          <button type="button" class="xb" data-x="rm-measure" data-i="${i}" title="Remove this measurement from the note">Remove</button>
+        </div>
+      </div>`).join('') : '<div class="sub">No measurements yet. Choose Measure to an element to start.</div>';
+  }
+
+  function syncToolPanels() {
+    if (!S.ui) return;
+    for (const btn of qa('.tool-main')) {
+      const unavailable = btn.dataset.tool === 'measure' && !P.el;
+      btn.disabled = !!unavailable;
+      if (!btn.dataset.readyTitle) btn.dataset.readyTitle = btn.title;
+      btn.title = unavailable ? 'Select an element first to measure from it.' : btn.dataset.readyTitle;
+      btn.setAttribute('aria-pressed', String(activeTool === btn.dataset.tool && !unavailable));
+    }
+    for (const p of qa('[data-tool-panel]')) p.hidden = p.dataset.toolPanel !== activeTool;
+    if (activeTool === 'measure') renderMeasurePanel();
+    if (activeTool === 'align') buildAlignRows();
+  }
+
+  function activateTool(name) {
+    const next = activeTool === name ? null : name;
+    if (next !== 'draw') stopDrawing();
+    activeTool = next;
+    syncToolPanels();
+    const pop = q('.pop');
+    const ribbon = q('.tool-ribbon');
+    if (activeTool && pop && ribbon) {
+      const delta = ribbon.getBoundingClientRect().top - pop.getBoundingClientRect().top;
+      pop.scrollTop = Math.max(0, pop.scrollTop + delta - 10);
+    }
+  }
+
   function renderStrips() {
     const box = q('.x-strips');
     if (!box) return;
@@ -1887,8 +2221,9 @@
     }
     if (P.match) rows.push(`<div class="strip"><span>Match <b>${esc(P.match.label)}</b>: ${P.match.diffs.length} difference${P.match.diffs.length === 1 ? '' : 's'}</span><span><button class="xb" data-x="match-apply">Preview</button>${rm('rm-match')}</span></div>`);
     if (P.textEdit) rows.push(`<div class="strip"><span>Text: “${esc(clip(P.textEdit.before, 24))}” → “${esc(clip(P.textEdit.after, 24))}”</span>${rm('rm-text')}</div>`);
-    P.measures.forEach((m, i) => rows.push(`<div class="strip"><span>Measure to <b>${esc(m.label)}</b>: ${esc(m.summary)}</span>${rm('rm-measure', i)}</div>`));
-    if (P.colors.length) rows.push(`<div class="strip"><span>${P.colors.map((c) => `<span class="swatch" style="background:${c}"></span>${c}`).join('  ')}</span>${rm('rm-colors')}</div>`);
+    let samples = q('.sampled-colors');
+    if (!samples) { samples = mk('<div class="sampled-colors"></div>'); q('[data-tool-panel="elements"]').appendChild(samples); }
+    samples.innerHTML = P.colors.map((c, i) => `<div class="strip"><span><span class="swatch" style="background:${esc(c)}"></span>${esc(c)}</span><button class="xb" data-x="color-copy" data-i="${i}" title="Copy this hex color">Copy</button><button class="xb" data-x="color-remove" data-i="${i}" title="Remove this sampled color">Remove</button></div>`).join('');
     if (P.variant) {
       const v = P.variant;
       const sr = sheet && v.sku ? sheet.rows.find((r) => r.sku === v.sku) : null;
@@ -1916,7 +2251,7 @@
     const dt = e.target.closest('[data-draw]');
     if (dt) { startDrawing(dt.dataset.draw); return; }
     const dc = e.target.closest('[data-dc]');
-    if (dc) { D.color = dc.dataset.dc; syncDrawUi(); return; }
+    if (dc) { setDrawingColor(dc.dataset.dc); return; }
     const b = e.target.closest('[data-x]');
     if (!b || b.tagName === 'INPUT') return;
     const x = b.dataset.x;
@@ -1935,27 +2270,40 @@
       case 'g-h': addGuide('y'); break;
       case 'g-show': S.prefs.guidesHidden = !S.prefs.guidesHidden; BL.savePrefs(); renderAnn(); updateToolbar(); break;
       case 'g-eye': { const g = (S.batch?.guides || []).find((x2) => x2.id === b.dataset.id); if (g) { g.hidden = !g.hidden; BL.saveBatch(); renderAnn(); renderGuideList(); } break; }
-      case 'g-del': if (S.batch?.guides) { S.batch.guides = S.batch.guides.filter((g) => g.id !== b.dataset.id); BL.saveBatch(); renderAnn(); updateToolbar(); if (S.pop) buildAlignRows(); } break;
+      case 'g-del': removeGuide(b.dataset.id); break;
       case 'mk-open': { const it = BL.findItem(b.dataset.id); if (!it) break; if (S.pop) toast('Save or cancel the note you\u2019re editing first.'); else hooksFocus(it); break; }
       case 'sel-rm': if (P.els.length > 1) setTarget({ els: P.els.filter((_, i) => i !== +b.dataset.i) }); else BL.closePop(); break;
       case 'dictate': toggleDictation(); break;
       case 'edittext': startEditText(); break;
       case 'hide': togglePopHide(); break;
       case 'match': startMatch(); break;
-      case 'measure-to': startMeasureTo(); break;
+      case 'measure-to': case 'measure-new': startMeasureTo(); break;
+      case 'tool-draw': activateTool('draw'); break;
+      case 'tool-measure': activateTool('measure'); break;
+      case 'tool-align': activateTool('align'); break;
+      case 'tool-elements': activateTool('elements'); break;
+      case 'measure-show': visibleMeasureIndex = +b.dataset.i; renderMeasurePanel(); renderAnn(); break;
+      case 'measure-change': changeMeasureTarget(+b.dataset.i); break;
       case 'pop-color': dropper((hex) => { P.colors.push(hex); copyText(hex); renderStrips(); toast(`${hex} copied`); }); break;
       case 'st-drop': { const row = b.closest('.st'); dropper((hex) => { row.querySelector('.sv').value = hex; styleInput(row, hex); }); break; }
       case 'st-dec': case 'st-inc': { const row = b.closest('.st'); const inp = row.querySelector('.sv'); styleInput(row, stepVal(row.dataset.prop, inp.value || row.dataset.from, x === 'st-inc' ? 1 : -1, e.shiftKey)); inp.value = P.tweaks[row.dataset.prop] ? P.tweaks[row.dataset.prop].to : row.dataset.from; break; }
       case 'style-reset': resetStyles(); break;
       case 'snap': snapTo(b.dataset.g, b.dataset.edge); break;
+      case 'align-go': snapTo(b.dataset.g, b.closest('.strip').querySelector('.align-edge').value); break;
+      case 'align-clear': snapTo(b.dataset.g, P.align[b.dataset.g], true); break;
+      case 'edit-element': chooseElement(+b.dataset.i); break;
       case 'move-here': moveHere(); break;
-      case 'draw-undo': P.marks.pop(); P.marksDirty = true; syncDrawUi(); renderAnn(); break;
-      case 'draw-clear': P.marks = []; P.marksDirty = true; syncDrawUi(); renderAnn(); break;
+      case 'draw-edit': startDrawing('edit'); break;
+      case 'draw-delete': if (D.tool === 'edit' && P.marks[D.selected]) { P.marks.splice(D.selected, 1); D.selected = null; P.marksDirty = true; syncDrawUi(); renderAnn(); } break;
+      case 'draw-undo': D.selected = null; P.marks.pop(); P.marksDirty = true; syncDrawUi(); renderAnn(); break;
+      case 'draw-clear': D.selected = null; P.marks = []; P.marksDirty = true; syncDrawUi(); renderAnn(); break;
       case 'rm-move': P.move = null; renderStrips(); renderAnn(); break;
       case 'rm-match': P.match = null; renderStrips(); break;
-      case 'match-apply': applyMatchPreview(); break;
+      case 'match-apply': if (q('.match-all')?.checked) applyMatchToAll(); else applyMatchPreview(); break;
       case 'rm-text': if (P.el && P.textEdit && !P.el.children.length) P.el.textContent = P.textEdit.before; P.textEdit = null; renderStrips(); break;
-      case 'rm-measure': P.measures.splice(+b.dataset.i, 1); renderStrips(); break;
+      case 'rm-measure': P.measures.splice(+b.dataset.i, 1); visibleMeasureIndex = P.measures.length ? P.measures.length - 1 : null; renderMeasurePanel(); renderAnn(); break;
+      case 'color-copy': copyText(P.colors[+b.dataset.i]); toast('Color copied'); break;
+      case 'color-remove': P.colors.splice(+b.dataset.i, 1); renderStrips(); break;
       case 'rm-colors': P.colors = []; renderStrips(); break;
       case 'rm-variant': P.variant = null; renderStrips(); break;
       case 'var-product': pickProduct(b.dataset.handle); break;
@@ -1969,6 +2317,7 @@
       case 'sh-clear': sheet = null; chrome.storage.local.remove('blueline:sheet'); if (S.batch) { delete S.batch.priceReport; BL.saveBatch(); } renderSheet(); break;
       default: break;
     }
+    if (S.pop) { renderElementEditor(); updatePrerequisites(); }
   }
 
   function hooksFocus(it) {
@@ -1982,6 +2331,7 @@
 
   function onInput(e) {
     const t = e.target;
+    if (t.classList.contains('draw-custom')) { setDrawingColor(t.value); return; }
     if (t.classList.contains('sv')) { styleInput(t.closest('.st'), t.value); return; }
     if (t.classList.contains('sw')) { const row = t.closest('.st'); row.querySelector('.sv').value = t.value; styleInput(row, t.value); return; }
     if (t.classList.contains('figma-in')) { P.figma = t.value.trim(); return; }
@@ -1991,6 +2341,7 @@
 
   function onChange(e) {
     const t = e.target;
+    if (t.classList.contains('element-choice')) { chooseElement(+t.value); return; }
     if (t.name === 'scope') { P.scope = t.value; P.scopeTouched = true; updateScope(); }
     else if (t.classList.contains('grp-sel')) { P.groupIdx = +t.value; P.scope = 'group'; P.scopeTouched = true; updateScope(); }
     else if (t.classList.contains('mv-pos') && P.move) { P.move.position = t.value; renderAnn(); }
@@ -2047,16 +2398,16 @@
   }
 
   function togglePopHide() {
-    if (!P.els.length) return;
+    if (!P.el) { toast('Select an element first.'); return; }
     P.hide = !P.hide;
-    for (const el of P.els) { if (P.hide) setInline(el, 'display', 'none'); else restoreInline(el, 'display'); }
+    if (P.hide) setInline(P.el, 'display', 'none'); else restoreInline(P.el, 'display');
     updateHideButton();
     renderAnn();
   }
 
   function startEditText() {
     const el = P.el;
-    if (!el || editing || P.els.length !== 1) return;
+    if (!el || editing) { toast('Select an element first.'); return; }
     if (el.children.length) { toast('This element has other elements inside. Select the text element itself.'); return; }
     const before = P.textEdit ? P.textEdit.before : el.textContent.trim();
     editing = { el, before };
@@ -2108,8 +2459,26 @@
     }
     const info = targetInfo(r.el);
     P.match = { label: info.label, selector: info.selector, src: info.src, diffs: diffs.slice(0, 12) };
+    if (q('.match-all')?.checked) for (const el of P.els) visitElement(el, () => {
+      const style = getComputedStyle(el);
+      P.match = { ...info, diffs: MATCH_PROPS.map((prop) => ({ prop, from: style.getPropertyValue(prop).trim(), to: b.getPropertyValue(prop).trim() })).filter((d) => d.from !== d.to).slice(0, 12) };
+    });
     renderStrips();
     toast(diffs.length ? `${diffs.length} difference${diffs.length === 1 ? '' : 's'} found. Tap Preview to try them.` : 'These already look identical.');
+  }
+
+  function applyMatchToAll() {
+    const reference = P.match;
+    const target = reference?.selector ? BL.query(reference.selector) : null;
+    if (!target) { toast('Pick a match-style reference element first.'); return; }
+    const targetStyle = getComputedStyle(target);
+    const values = MATCH_PROPS.map((prop) => ({ prop, to: targetStyle.getPropertyValue(prop).trim() }));
+    for (const el of P.els) visitElement(el, () => {
+      const style = getComputedStyle(el);
+      P.match = { ...reference, diffs: values.map(({ prop, to }) => ({ prop, to, from: style.getPropertyValue(prop).trim() })).filter((d) => d.from !== d.to).slice(0, 12) };
+      applyMatchPreview();
+    });
+    loadCompose();
   }
 
   function applyMatchPreview() {
@@ -2124,15 +2493,43 @@
     q('[data-d="props"]').open = true;
   }
 
+  // Changing a measurement target keeps the note's source element unchanged.
+  // Escape leaves the previous target and saved measurement intact.
+  async function changeMeasureTarget(index) {
+    if (!P.el || !P.measures[index]) return;
+    const source = P.el;
+    const picked = await pickOne('Click a different measurement target. Esc keeps the previous target.',
+      (el) => { if (el && el !== source) drawMeasure(source.getBoundingClientRect(), el.getBoundingClientRect()); });
+    if (!picked || !picked.el || picked.el === source) { renderAnn(); return; }
+    const m = measureRects(source.getBoundingClientRect(), picked.el.getBoundingClientRect());
+    const info = targetInfo(picked.el);
+    P.measures[index] = { label: info.label, selector: info.selector, ...m, summary: measureText(m) };
+    visibleMeasureIndex = index;
+    activeTool = 'measure';
+    syncToolPanels();
+    renderAnn();
+  }
+
   async function startMeasureTo() {
     if (!P.el) return;
     const a = P.el;
     const r = await pickOne('Measure: hover to preview the distance, click the element to record it. Esc cancels.', (el) => { if (el && el !== a) drawMeasure(a.getBoundingClientRect(), el.getBoundingClientRect()); });
-    if (!r) return;
+    if (!r || !r.el || r.el === a) { renderAnn(); return; }
     const m = measureRects(a.getBoundingClientRect(), r.el.getBoundingClientRect());
     const info = targetInfo(r.el);
     P.measures.push({ label: info.label, selector: info.selector, ...m, summary: measureText(m) });
+    visibleMeasureIndex = P.measures.length - 1;
+    activeTool = 'measure';
     renderStrips();
+    syncToolPanels();
+    renderAnn();
+    // The results are above the actions. Reveal them without moving the page.
+    const pop = q('.pop');
+    const strip = q('.tool-measure-list');
+    if (pop && strip) {
+      const distance = strip.getBoundingClientRect().top - pop.getBoundingClientRect().top;
+      pop.scrollTop = Math.max(0, pop.scrollTop + distance - 12);
+    }
   }
 
   // ------------------------------------------------------------------ design overlay
@@ -2327,7 +2724,7 @@
     const marks = P.marks.slice();
     const marksDirty = P.marksDirty;
     if (!region && P.el) {
-      f.scope = P.els.length > 1 ? undefined : scopeInfo();
+      f.scope = scopeInfo();
       const tw = Object.values(P.tweaks);
       f.tweaks = tw.length ? tw.map(({ prop, from, to, token, snap }) => ({ prop, from, to, token, snap })) : undefined;
       f.textEdit = P.textEdit || undefined;
@@ -2339,36 +2736,35 @@
       f.measures = P.measures.length ? P.measures.map(({ label, selector, summary }) => ({ label, selector, summary })) : undefined;
       f.variant = P.variant || undefined;
       f.also = P.els.length > 1 ? P.els.slice(1).map(alsoInfo) : undefined;
+      f.elementEdits = elementFields();
+      for (const key of ['scope', 'tweaks', 'textEdit', 'hidden', 'match', 'move', 'align', 'measures']) f[key] = undefined;
       if (P.move) defaultNote = `Move this ${posText[P.move.position]} ${P.move.to.label}`;
       else if (P.textEdit) defaultNote = `Change the text to \u201c${P.textEdit.after}\u201d`;
       else if (P.hide) defaultNote = 'Remove this element';
       else if (al.length) defaultNote = `Align to guide ${al[0].guide}`;
       else if (tw.some((t) => !t.snap)) defaultNote = `Use the previewed style values (${tw.filter((t) => !t.snap).map((t) => t.prop).join(', ')})`;
     }
+    if (!defaultNote && f.elementEdits?.some((e) => hasPreview(e) || e.move || e.match || e.align.length || e.measures.length)) defaultNote = 'Apply the recorded per-element corrections';
     if (!defaultNote && marks.length) defaultNote = 'See the marks drawn on the page';
     // Inspect the element as the source has it, without our live previews applied.
-    const live = Object.values(P.tweaks).map((t) => ({ prop: t.prop, to: t.to }));
-    const els = P.els.slice();
-    const hid = P.hide;
-    const te = P.textEdit;
+    const liveEdits = f.elementEdits || [];
     const around = (fn) => {
-      if (!els.length) return fn();
-      for (const el of els) { live.forEach((t) => restoreInline(el, t.prop)); if (hid) restoreInline(el, 'display'); }
-      if (te && !els[0].children.length) els[0].textContent = te.before;
-      applyAllPreviews(true);
-      try { return fn(); } finally {
-        applyAllPreviews();
-        for (const el of els) { live.forEach((t) => setInline(el, t.prop, t.to)); if (hid) setInline(el, 'display', 'none'); }
-        if (te && !els[0].children.length) els[0].textContent = te.after;
-      }
+      if (!liveEdits.length) return fn();
+      const apply = (on) => liveEdits.forEach((edit) => applyItemPreview({ ...edit, path: here() }, on));
+      apply(false); applyAllPreviews(true);
+      try { return fn(); } finally { applyAllPreviews(); apply(true); }
     };
+
     return {
       fields: f, defaultNote, around,
       commit: () => { P.committed = true; },
       onSaved: async (it) => {
         BL.savePrefs();
         applyItemPreview(it, S.prefs.previews !== false);
-        if (marksDirty && marks.length) await captureMarked(it, marks);
+        if (marksDirty) {
+          if (marks.length) { await chrome.storage.local.remove(BL.shotKey(it.id) + ':markup'); it.hasMarkup = false; it.markupPath = undefined; await BL.saveBatch(); await captureMarked(it, marks); }
+          else { await chrome.storage.local.remove(BL.shotKey(it.id) + ':markup'); it.hasMarkup = false; it.markupPath = undefined; await BL.saveBatch(); }
+        }
         updateToolbar();
         renderAnn();
       },
@@ -2466,7 +2862,15 @@
   hooks.promptItem = (it) => {
     const L = [];
     const add = (s) => L.push(`- ${s}`);
-    if (it.also?.length) {
+    if (it.elementEdits?.length) {
+      add('Selected instances have independent corrections. Apply only the actions recorded under each instance and respect its Scope.');
+      for (const edit of it.elementEdits) {
+        L.push(`- **Instance ${ref(edit.el.label, edit.el.selector)}**`);
+        const details = hooks.promptItem({ ...edit, scope: { ...edit.scope, chosen: true }, path: it.path });
+        L.push(...details.filter((line) => line && line !== '**Author\u2019s annotations**').map((line) => `  ${line}`));
+      }
+    }
+    if (!it.elementEdits && it.also?.length) {
       add(`Also applies to ${it.also.length} more element${it.also.length === 1 ? '' : 's'}. Make the same change to each:`);
       it.also.forEach((a) => L.push(`  - ${ref(a.label, a.selector)}${a.text ? ` "${a.text}"` : ''} (${a.size})${a.rendered ? `, rendered at ${code(a.rendered)}` : ''}${a.section ? `, in ${code(a.section)}` : ''}`));
     }
@@ -2484,7 +2888,7 @@
     for (const m of it.measures || []) add(`Measured to ${ref(m.label, m.selector)}: ${m.summary}`);
     if (it.colors?.length) add(`Sampled colors: ${it.colors.map(code).join(', ')}`);
     if (it.auto) add('Selected by circling an area on the page, so the target was matched automatically. Confirm it against the marked-up screenshot.');
-    if (it.marks?.length) add(`Drawn on the page: ${marksSummary(it.marks)}. See the marked-up screenshot.`);
+    if (it.marks?.length) { add(`Drawn on the page: ${marksSummary(it.marks)}. See the marked-up screenshot.`); for (const m of it.marks.filter((m) => m.t === 'arrow')) add(`Arrow ${m.c}: page coordinates (${rnd(m.a.x)}, ${rnd(m.a.y)}) → (${rnd(m.b.x)}, ${rnd(m.b.y)}).`); }
     if (it.figma) add(`Figma: ${it.figma}`);
     if (it.variant) {
       const v = it.variant;
@@ -2496,6 +2900,7 @@
   // ------------------------------------------------------------------ exports for tests
 
   BL.toolsApi = {
+    elementFields, chooseElement, rememberElement, restoreElementRecord, visitElement, arrowHit, editArrowPointer, setDrawingColor, applyItemPreview, revertLive, removeGuide, styleInput, togglePopHide, buildAlignRows, emptyPop,
     similarSelector, similar, groupOptions, scopeInfo, tokenHint, spacingClasses, regionContext, measureRects, measureText, parseCSV, sheetFromRows, checkPrices,
     normForVar, stepVal, normInput, priceReportText, scopeLines, marksSummary, snapTo, autoSelect, startSelect, startCircle, T, A, D, getP: () => P, setP: (p) => { P = p; }, setAnnotate, setTarget, makeDraggable,
   };
