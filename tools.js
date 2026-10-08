@@ -310,20 +310,25 @@
       g.appendChild(n);
       return n;
     };
-    const box = (r, c) => add('rect', { x: r.left, y: r.top, width: r.width ?? r.right - r.left, height: r.height ?? r.bottom - r.top, fill: 'none', stroke: c, 'stroke-width': 1.5 });
+    const box = (r, c) => add('rect', { x: r.left, y: r.top, width: r.width ?? r.right - r.left, height: r.height ?? r.bottom - r.top, fill: 'none', stroke: c, 'stroke-width': 1, 'stroke-dasharray': '3 5', opacity: .7 });
     box(ra, INK);
     box(rb, WARM);
     const m = measureRects(ra, rb);
-    const label = (x, y, t) => add('text', { x, y, 'text-anchor': 'middle', 'font-size': 11, 'font-weight': 700, fill: GUIDE, stroke: '#fff', 'stroke-width': 3, 'paint-order': 'stroke', 'font-family': 'ui-monospace, Menlo, monospace' }, t);
+    const label = (x, y, t) => {
+      const pad = 65;
+      const safeX = Math.max(Math.min(x, innerWidth - pad), Math.min(pad, innerWidth / 2));
+      const safeY = Math.max(18, Math.min(y, innerHeight - 16));
+      return add('text', { x: safeX, y: safeY, 'text-anchor': 'middle', 'font-size': 11, 'font-weight': 600, fill: GUIDE, stroke: '#fff', 'stroke-width': 3, 'paint-order': 'stroke', 'font-family': 'ui-monospace, Menlo, monospace' }, t);
+    };
     if (m.gapX > 0) {
       const x1 = m.relX === 'right' ? ra.right : ra.left;
       const x2 = m.relX === 'right' ? rb.left : rb.right;
       const o0 = Math.max(ra.top, rb.top);
       const o1 = Math.min(ra.bottom, rb.bottom);
       const y = o1 > o0 ? (o0 + o1) / 2 : m.relY === 'below' ? (ra.bottom + rb.top) / 2 : (rb.bottom + ra.top) / 2;
-      add('line', { x1, y1: y, x2, y2: y, stroke: GUIDE, 'stroke-width': 1.5 });
+      add('line', { x1, y1: y, x2, y2: y, stroke: GUIDE, 'stroke-width': 1.2, 'stroke-dasharray': '3 4' });
       add('line', { x1, y1: y - 5, x2: x1, y2: y + 5, stroke: GUIDE }); add('line', { x1: x2, y1: y - 5, x2, y2: y + 5, stroke: GUIDE });
-      label((x1 + x2) / 2, y - 6, `${m.gapX}`);
+      label((x1 + x2) / 2, y - 6, `${m.gapX}px`);
     }
     if (m.gapY > 0) {
       const y1 = m.relY === 'below' ? ra.bottom : ra.top;
@@ -331,14 +336,37 @@
       const o0 = Math.max(ra.left, rb.left);
       const o1 = Math.min(ra.right, rb.right);
       const x = o1 > o0 ? (o0 + o1) / 2 : m.relX === 'right' ? (ra.right + rb.left) / 2 : (rb.right + ra.left) / 2;
-      add('line', { x1: x, y1, x2: x, y2, stroke: GUIDE, 'stroke-width': 1.5 });
+      add('line', { x1: x, y1, x2: x, y2, stroke: GUIDE, 'stroke-width': 1.2, 'stroke-dasharray': '3 4' });
       add('line', { x1: x - 5, y1, x2: x + 5, y2: y1, stroke: GUIDE }); add('line', { x1: x - 5, y1: y2, x2: x + 5, y2, stroke: GUIDE });
-      label(x + 14, (y1 + y2) / 2 + 4, `${m.gapY}`);
+      label(x + 14, (y1 + y2) / 2 + 4, `${m.gapY}px`);
+    }
+    // Intersecting or nested elements have no edge-to-edge gap.
+    // Show their center offset instead of incorrectly calling it a gap.
+    if (m.gapX === 0 && m.gapY === 0) {
+      const x1 = ra.left + (ra.width ?? ra.right - ra.left) / 2;
+      const y1 = ra.top + (ra.height ?? ra.bottom - ra.top) / 2;
+      const x2 = rb.left + (rb.width ?? rb.right - rb.left) / 2;
+      const y2 = rb.top + (rb.height ?? rb.bottom - rb.top) / 2;
+      add('line', { x1, y1, x2, y2, stroke: GUIDE, 'stroke-width': 1.2, 'stroke-dasharray': '3 4' });
+      label((x1 + x2) / 2, (y1 + y2) / 2 - 9, `center offset ${Math.round(Math.hypot(x2 - x1, y2 - y1))}px`);
     }
     return m;
   }
 
   const clearMeas = () => { const g = q('.x-meas'); if (g) g.textContent = ''; };
+
+  function showNoteMeasurement() {
+    // Selection hover owns this SVG until the second target is confirmed.
+    if (T.pick) return;
+    const g = q('.x-meas');
+    if (!g) return;
+    if (!S.pop || !P.measures.length) { g.textContent = ''; return; }
+    const source = P.el?.isConnected ? P.el : (P.item?.el?.selector ? BL.query(P.item.el.selector) : null);
+    const latest = P.measures[P.measures.length - 1];
+    const target = latest?.selector ? BL.query(latest.selector) : null;
+    if (!source || !target || source === target) { g.textContent = ''; return; }
+    drawMeasure(source.getBoundingClientRect(), target.getBoundingClientRect());
+  }
 
   // ------------------------------------------------------------------ CSV + price sheet
 
@@ -737,7 +765,7 @@
     body.appendChild(root.querySelector('.x-tools'));
     const tools = root.querySelector('.bar .tools');
     tools.insertBefore(mk('<button class="mk-toggle" data-x="marks" title="Show an outline around each noted element on the page, or just the numbered badges">Outlines</button>'), tools.firstChild);
-    makeDraggable(panel, root.querySelector('.bar'), { ignore: '.tools button, input, select, textarea, [data-nodrag]', onEnd: () => { const r = panel.getBoundingClientRect(); S.prefs.pos = { left: Math.round(r.left), top: Math.round(r.top) }; BL.savePrefs(); } });
+    makeDraggable(panel, root.querySelector('.bar'), { ignore: 'button, a, input, select, textarea, [data-nodrag]', onEnd: () => { const r = panel.getBoundingClientRect(); S.prefs.pos = { left: Math.round(r.left), top: Math.round(r.top) }; BL.savePrefs(); } });
     makeDraggable(root.querySelector('.xov'), root.querySelector('.xov-h'), { translate: true });
     makeDraggable(root.querySelector('.xsheet'), root.querySelector('.xsheet header'), { translate: true });
     root.addEventListener('click', onClick);
@@ -923,7 +951,15 @@
     }
     if (!(T.pick || A.on || D.tool)) return;
     const isPtr = e.type.startsWith('pointer');
-    if (BL.fromUI(e) && !(isPtr && (A.drag || D.cur))) return;
+    // Blueline controls must never be intercepted by page-picking or drawing.
+    if (BL.fromUI(e)) {
+      if (isPtr && (e.type === 'pointerup' || e.type === 'pointercancel')) {
+        A.drag = null;
+        D.cur = null;
+        hideDr();
+      }
+      return;
+    }
     e.preventDefault();
     e.stopImmediatePropagation();
     if (!isPtr) return;
@@ -1586,6 +1622,7 @@
     renderMarks();
     renderDrawn();
     renderArrows();
+    showNoteMeasurement();
     if (T.simEls) renderSim();
     const rg = S.pop?.region;
     if (rg) {
@@ -2133,6 +2170,14 @@
     const info = targetInfo(r.el);
     P.measures.push({ label: info.label, selector: info.selector, ...m, summary: measureText(m) });
     renderStrips();
+    renderAnn();
+    // The results are above the actions. Reveal them without moving the page.
+    const pop = q('.pop');
+    const strip = q('.x-strips');
+    if (pop && strip) {
+      const distance = strip.getBoundingClientRect().top - pop.getBoundingClientRect().top;
+      pop.scrollTop = Math.max(0, pop.scrollTop + distance - 12);
+    }
   }
 
   // ------------------------------------------------------------------ design overlay
