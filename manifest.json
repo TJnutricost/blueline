@@ -1,0 +1,63 @@
+{
+  "manifest_version": 3,
+  "name": "Blueline: QC to Claude Code",
+  "version": "0.5.1",
+  "description": "Click elements, draw regions, move things, drop guides, tweak styles, and export an analysis prompt for Claude Code. Shopify, Next.js/React, and plain HTML.",
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "scripting",
+    "downloads"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Toggle Blueline (Alt+Shift+Q)",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+Q"
+      },
+      "description": "Toggle Blueline on this tab"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "page-hook.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js",
+        "tools.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
