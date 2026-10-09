@@ -15,13 +15,14 @@
   const SVGNS = 'http://www.w3.org/2000/svg';
   const DRAW_COLORS = [GUIDE, INK, '#F5B400', '#16A34A', '#111111'];
 
-  const T = { pick: null, speech: null, gdrag: null, simEls: null, hot: null, eatClick: false };
+  const T = { pick: null, speech: null, gdrag: null, simEls: null, hot: null, eatClick: false, shiftSel: null, shiftHeld: false };
   const A = { on: false, mode: 'select', keep: false, drag: null };
   const D = { tool: null, color: GUIDE, cur: null, selected: null, drag: null };
   const emptyPop = () => ({
     priority: 'must', bps: new Set(), scope: 'one', groupIdx: 0, scopeTouched: false, tweaks: {}, textEdit: null, hide: false,
     figma: '', variant: null, match: null, move: null, align: {}, alignInfo: {}, snap: { x: 0, y: 0 }, measures: [], colors: [],
     marks: [], marksDirty: false, edits: new Map(), els: [], el: null, item: null, committed: false, auto: false,
+    parked: new Map(), cleared: false,
   });
   let P = emptyPop();
   const touched = new WeakMap(); // el -> { prop: { v, p } } inline styles we overwrote for previews
@@ -130,7 +131,7 @@
     const descriptions = P.els.map((el, i) => {
       const r = P.edits.get(el) || emptyPop();
       const changes = [Object.keys(r.tweaks).length ? `${Object.keys(r.tweaks).length} CSS values` : '', r.hide ? 'hidden' : '', r.textEdit ? 'text' : '', r.move ? 'move' : '', r.match ? 'match style' : '', Object.keys(r.align).length ? 'alignment' : '', r.measures.length ? 'measurements' : ''].filter(Boolean);
-      return `<div class="strip"><button class="xb" data-x="edit-element" data-i="${i}" title="Open all edits for this specific instance">${el === P.el ? '● Editing' : 'Selected'} ${i + 1}: ${esc(BL.label(el))}</button><span class="sub">${esc(changes.join(', ') || 'No edits')}</span></div>`;
+      return `<div class="strip"><button class="xb" data-x="edit-element" data-i="${i}" title="Open all edits for this specific instance">${el === P.el ? '● Editing' : 'Selected'} ${i + 1}: ${esc(elName(el))}</button><span class="sub">${esc(changes.join(', ') || 'No edits')}</span></div>`;
     });
     box.innerHTML = `<label class="sub">Editing one specific instance <select class="xin element-choice" aria-label="Element to edit">${P.els.map((el, i) => `<option value="${i}"${el === P.el ? ' selected' : ''}>${i + 1}: ${esc(BL.label(el))} · ${esc(textOf(el, 24))}</option>`).join('')}</select></label><details class="xd"${open ? ' open' : ''}><summary>Selected elements &amp; edits (${P.els.length})</summary>${descriptions.join('')}</details><div class="sub">Tools affect the instance above. Scope controls how broadly its CSS correction should be implemented.</div>`;
     box.hidden = !P.els.length;
@@ -189,6 +190,125 @@
       if (record.hide) restoreInline(el, 'display');
       if (record.textEdit && !el.children.length) el.textContent = record.textEdit.before;
     }
+  }
+
+  // ------------------------------------------------------------------ undo (annotation changes in the open note)
+  // Each completed action pushes a snapshot of the note's annotation state taken just before it.
+  // Selection, scope, and saved notes are left alone; only annotations roll back.
+
+  const UNDO_MAX = 50;
+  let undoStack = [];
+  let undoKey = null;
+  let undoT = 0;
+
+  function cloneRecord(r) {
+    return {
+      ...r,
+      tweaks: JSON.parse(JSON.stringify(r.tweaks || {})), align: { ...r.align }, alignInfo: JSON.parse(JSON.stringify(r.alignInfo || {})), snap: { ...r.snap },
+      measures: (r.measures || []).map((m) => ({ ...m })), textEdit: r.textEdit ? { ...r.textEdit } : null, move: r.move ? { ...r.move } : null,
+    };
+  }
+
+  function snapshot() {
+    rememberElement();
+    return {
+      marks: P.marks.map((m) => JSON.parse(JSON.stringify(m))), colors: [...P.colors],
+      edits: new Map([...P.edits].map(([el, r]) => [el, cloneRecord(r)])), visibleMeasureIndex,
+    };
+  }
+
+  // key coalesces bursts of the same edit (typing a CSS value, repeated nudges) into one step.
+  function record(key = null) {
+    if (!S.pop) return;
+    const now = Date.now();
+    if (key && key === undoKey && now - undoT < 1500) { undoT = now; return; }
+    undoKey = key;
+    undoT = now;
+    undoStack.push(snapshot());
+    if (undoStack.length > UNDO_MAX) undoStack.shift();
+    syncUndo();
+  }
+  // Shift-click and Shift-drag change the selection itself, so their undo step restores it too.
+  function recordSelection() {
+    if (!S.pop) return;
+    const s = snapshot();
+    s.sel = { els: [...P.els], region: S.pop.region || null, page: !!S.pop.page, auto: P.auto };
+    pushSnapshot(s);
+  }
+  function pushSnapshot(s) { undoKey = null; undoStack.push(s); if (undoStack.length > UNDO_MAX) undoStack.shift(); syncUndo(); }
+  function clearUndo() { undoStack = []; undoKey = null; syncUndo(); }
+
+  // Saved notes keep their history for this page session, so Undo still works after Save.
+  const histories = new Map(); // item id -> snapshot stack
+  let historyOrder = []; // item ids, most recently saved last
+  let pendingUndo = null;
+  function rememberHistory(id, stack) {
+    historyOrder = historyOrder.filter((x) => x !== id);
+    if (stack.length) { histories.set(id, stack); historyOrder.push(id); } else histories.delete(id);
+  }
+  function forgetHistory(id) { histories.delete(id); historyOrder = historyOrder.filter((x) => x !== id); }
+  function lastUndoable() {
+    for (let i = historyOrder.length - 1; i >= 0; i--) {
+      const it = BL.findItem(historyOrder[i]);
+      if (it && it.path === here() && histories.get(it.id)?.length) return it;
+    }
+    return null;
+  }
+
+  function syncUndo() {
+    const b = q('[data-x="undo"]');
+    if (!b) return;
+    const saved = S.pop ? null : lastUndoable();
+    b.disabled = S.pop ? !undoStack.length : !saved;
+    b.title = b.disabled ? `Nothing to undo (${UNDO_KEY})`
+      : saved ? `Undo the last change in note ${S.batch.items.indexOf(saved) + 1}. It reopens so you can update or cancel (${UNDO_KEY})`
+        : `Undo the last annotation change (${UNDO_KEY})`;
+  }
+
+  // Undo in the open note, or reopen the most recently saved note and undo there.
+  function undoAction() {
+    if (S.pop) return undo();
+    const it = lastUndoable();
+    if (!it) return false;
+    pendingUndo = it.id;
+    hooksFocus(it);
+    return true;
+  }
+
+  function applyRecord(el, r) {
+    for (const t of Object.values(r.tweaks || {})) setInline(el, t.prop, t.to);
+    if (r.hide) setInline(el, 'display', 'none');
+    if (r.textEdit && !el.children.length) el.textContent = r.textEdit.after;
+  }
+
+  function undo(msg = 'Undone') {
+    if (!S.pop || !undoStack.length) return false;
+    if (editing) finishEdit(false);
+    if (T.pick) endPick(null);
+    D.cur = null; D.drag = null; D.selected = null;
+    const s = undoStack.pop();
+    undoKey = null;
+    if (s.sel) {
+      const tool = activeTool;
+      if (s.sel.region) setTarget({ region: s.sel.region, auto: s.sel.auto });
+      else { setTarget({ els: s.sel.els, auto: s.sel.auto }); if (!s.sel.els.length) { S.pop.page = true; renderSel(); } }
+      activeTool = tool;
+    }
+    revertLive();
+    const keep = new Map([...P.edits].map(([el, r]) => [el, { scope: r.scope, scopeTouched: r.scopeTouched, groupIdx: r.groupIdx }]));
+    // Area-selection outlines follow the current selection, not the undo history.
+    P.marks = s.sel ? s.marks : [...s.marks.filter((m) => !m.auto), ...P.marks.filter((m) => m.auto)];
+    P.colors = s.colors;
+    P.marksDirty = true;
+    P.edits = new Map(P.els.map((el) => [el, { ...(s.edits.get(el) || emptyPop()), ...(keep.get(el) || {}) }]));
+    for (const [el, r] of P.edits) applyRecord(el, r);
+    const cur = P.edits.get(P.el) || emptyPop();
+    for (const key of EDIT_KEYS) P[key] = cur[key];
+    visibleMeasureIndex = P.measures.length ? Math.min(s.visibleMeasureIndex ?? P.measures.length - 1, P.measures.length - 1) : null;
+    loadCompose();
+    syncUndo();
+    toast(msg);
+    return true;
   }
 
   // ------------------------------------------------------------------ similar elements (scope)
@@ -522,15 +642,17 @@
     .x-layers { position: fixed; inset: 0; pointer-events: none; z-index: -1; }
     .x-svg { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 
-    .panel { width: 340px; max-height: min(80vh, 680px); }
-    .panel.composing { max-height: min(86vh, 740px); }
+    .panel { width: 340px; max-height: min(80vh, 680px, calc(100vh - var(--bl-bottom, 16px) - 8px)); }
+    .panel.composing { max-height: min(86vh, 740px, calc(100vh - var(--bl-bottom, 16px) - 8px)); }
     .panel.composing .body, .panel.composing .foot { display: none; }
     .panel.collapsed .pop { display: none !important; }
     .bar { cursor: grab; user-select: none; }
     .bar:active { cursor: grabbing; }
     .bar .tools button, .bar .brand { cursor: pointer; }
-    .mk-toggle { font-size: 11px; font-weight: 600; color: #4A5063; border: 1px solid #E2E5EC; border-radius: 6px; padding: 2px 7px; margin-right: 4px; }
-    .mk-toggle:hover { background: #F5F7FF; }
+    .bar .icon svg { display: block; margin: auto; }
+    .mk-toggle { color: #A0A6B6; }
+    .mk-toggle[aria-pressed="true"] { color: #1A33C7; }
+    .hd-undo:disabled { opacity: .35; cursor: default; background: none; }
     .pick, .pick-hint { display: none !important; }
     .addnote { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 12px; border-radius: 9px; background: ${INK}; color: #fff; font-weight: 650; font-size: 13px; text-align: left; }
     .addnote:hover { background: #1A33C7; }
@@ -568,6 +690,8 @@
     .measure-row strong { font-size: 11.5px; }
     .measure-row .sub { overflow-wrap: anywhere; }
     .measure-actions { display: flex; gap: 5px; flex-wrap: wrap; }
+    .measure-pair { flex-wrap: wrap; gap: 5px; }
+    .measure-pair .xin { width: auto; max-width: 120px; }
     .measure-actions .xb { font-size: 10px; padding: 5px 6px; }
     .toast { z-index: 9; }
     .pop.is-region .xe, .pop.is-region .xe1, .pop.no-el .xe, .pop.no-el .xe1 { display: none !important; }
@@ -664,7 +788,6 @@
     .xsheet { width: min(560px, 100%); max-height: 100%; overflow: auto; background: #fff; border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 24px 60px rgba(30,34,48,.3); }
     .xsheet header { display: flex; justify-content: space-between; align-items: center; cursor: grab; user-select: none; }
     .sh-out { font: 12px/1.5 ui-monospace, Menlo, monospace; background: #FAFBFC; border: 1px solid #E2E5EC; border-radius: 8px; padding: 8px; white-space: pre-wrap; max-height: 260px; overflow: auto; }
-    .dr.circle { border-radius: 50%; }
     .stephead { display: flex; align-items: center; gap: 7px; font-weight: 650; font-size: 12.5px; color: #1E2230; margin-top: 2px; }
     .stepn { width: 18px; height: 18px; border-radius: 50%; background: #1E2230; color: #fff; font-size: 11px; line-height: 18px; text-align: center; flex: none; }
     .x-typehint { font-size: 11.5px; color: #6B7183; margin-top: -4px; }
@@ -687,6 +810,7 @@
     .empty .step { display: flex; gap: 7px; margin-top: 5px; }
     .empty .step i { font-style: normal; width: 17px; height: 17px; border-radius: 50%; background: #E6E9F2; color: #4A5063; font-size: 11px; font-weight: 700; line-height: 17px; text-align: center; flex: none; }
     .tchip.auto { background: #FFF3E0; color: #8A4B00; }
+    .note.auto-note { color: #6B7183; font-style: italic; }
   `;
 
   const LAYERS_HTML = `
@@ -739,7 +863,7 @@
     <div class="xrow"><button class="xb" data-x="dictate" title="Speak your note instead of typing it">Speak your note</button></div>
     <details class="xd" data-d="meta"><summary>Priority &amp; screen size <span class="sub meta-sum"></span></summary>
       <div class="xrow" style="margin-top:5px"><span class="xlabel">Priority</span><div class="chips">
-        <button class="chip" data-prio="must" aria-pressed="true" title="Needs to be fixed">Must fix</button><button class="chip" data-prio="nice" aria-pressed="false" title="Only if there is time. Claude Code does these last">Nice to have</button></div></div>
+        <button class="chip" data-prio="must" aria-pressed="true" title="Needs to be fixed">Must fix</button><button class="chip" data-prio="nice" aria-pressed="false" title="Only if there is time. Done last">Nice to have</button></div></div>
       <div class="xrow" style="margin-top:5px"><span class="xlabel" title="Which screen sizes this change should apply to">Screen size</span><div class="chips">
         <button class="chip" data-bp="mobile" aria-pressed="false" title="Phones, under 750px wide">Mobile</button><button class="chip" data-bp="tablet" aria-pressed="false" title="750 to 989px wide">Tablet</button>
         <button class="chip" data-bp="desktop" aria-pressed="false" title="990px and wider">Desktop</button><button class="chip" data-bp="all" aria-pressed="false" title="All screen sizes">All</button></div></div></details>
@@ -759,12 +883,18 @@
     sample: icon('<path d="m13 5 6 6m-2-8 4 4-11 11-4 1 1-4L18 4"/><path d="M3 21h6"/>'),
   };
 
+  const hdIcon = (inner) => `<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
+  const OUTLINE_ICON = hdIcon('<rect x="2.5" y="2.5" width="11" height="11" rx="1.5" stroke-dasharray="2.6 2.2"/>');
+  const UNDO_ICON = hdIcon('<path d="M5.5 3 2.5 6l3 3"/><path d="M2.5 6h7a4 4 0 0 1 0 8H7"/>');
+  const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
+  const UNDO_KEY = IS_MAC ? '⌘Z' : 'Ctrl+Z';
+
   const MORE_HTML = `
     <div class="x-strips"></div>
     <div class="stephead"><span class="stepn">3</span>Annotation tools</div>
     <div class="tool-ribbon" role="toolbar" aria-label="Annotation tools">
       <button type="button" class="tool-main" data-x="tool-draw" data-tool="draw" aria-pressed="false" title="Draw arrows, shapes, freehand marks, or text on the page">${TOOL_ICON.draw}<span>Draw</span></button>
-      <button type="button" class="tool-main" data-x="tool-measure" data-tool="measure" aria-pressed="false" title="Measure the space between two page elements or change a measurement target">${TOOL_ICON.measure}<span>Measure</span></button>
+      <button type="button" class="tool-main" data-x="tool-measure" data-tool="measure" aria-pressed="false" title="Measure the space between two elements. Starts right away: pick elements on the page, or measure between the two you selected">${TOOL_ICON.measure}<span>Measure</span></button>
       <button type="button" class="tool-main" data-x="tool-align" data-tool="align" aria-pressed="false" title="Add guide lines and align your selected element with them">${TOOL_ICON.align}<span>Align</span></button>
       <button type="button" class="tool-main" data-x="tool-elements" data-tool="elements" aria-pressed="false" title="Move, copy styling, edit text, hide, or sample a color">${TOOL_ICON.elements}<span>Elements</span></button>
     </div>
@@ -783,13 +913,14 @@
         <div class="dots">${DRAW_COLORS.map((c) => `<button type="button" class="dot" data-dc="${c}" style="background:${c}" title="Use ${c} for new drawings" aria-label="Drawing color ${c}"></button>`).join('')}</div>
         <label class="tool-custom-color" title="Choose any annotation color"><input type="color" class="draw-custom" aria-label="Custom drawing color" value="${GUIDE}"><span>Custom</span></label>
       </div>
-      <div class="xrow tool-footer-row"><span class="sub draw-sum"></span><span style="flex:1"></span><button class="xb" data-x="draw-undo" title="Undo the last mark in this note">Undo</button><button class="xb" data-x="draw-clear" title="Remove all drawn marks from this note">Clear</button></div>
+      <div class="xrow tool-footer-row"><span class="sub draw-sum"></span><span style="flex:1"></span><button class="xb" data-x="draw-undo" title="Remove the most recent drawing in this note">Remove last</button><button class="xb" data-x="draw-clear" title="Remove all drawn marks from this note">Clear</button></div>
       <div class="sub">Choose a shape, then draw on the page. Esc stops drawing. Color applies to new marks.</div>
     </div>
 
     <div class="tool-panel" data-tool-panel="measure" hidden>
-      <button type="button" class="xb tool-wide" data-x="measure-new" title="Select a second element to measure the distance from this note's element">+ Measure to an element</button>
+      <div class="measure-pair xrow" hidden></div>
       <div class="tool-measure-list"></div>
+      <button type="button" class="xb tool-wide" data-x="measure-new" title="Click another element on the page to measure to">+ Measure to another element</button>
       <div class="sub">Measurements stay visible on the page while this note is open, and are included in the exported prompt.</div>
     </div>
 
@@ -876,21 +1007,35 @@
     handle.addEventListener('pointercancel', end);
   }
 
+  // The panel is anchored by its BOTTOM edge: expanding grows it upward, collapsing or leaving a
+  // note shrinks it downward. Its max-height follows the room above that edge (via --bl-bottom),
+  // so content scrolls inside the panel instead of running off screen.
+  const PANEL_GAP = 16;
+  let sessionPos = null; // { left, bottom } after a drag, until Blueline closes
   function applyPanelPos() {
     const p = q('.panel');
-    if (!p || !S.prefs.pos) return;
-    const left = Math.min(Math.max(4, S.prefs.pos.left), Math.max(4, window.innerWidth - 120));
-    const top = Math.min(Math.max(4, S.prefs.pos.top), Math.max(4, window.innerHeight - 60));
-    Object.assign(p.style, { left: `${left}px`, top: `${top}px`, right: 'auto', bottom: 'auto' });
+    if (!p) return;
+    const W = document.documentElement.clientWidth || window.innerWidth; // excludes the page scrollbar
+    const H = window.innerHeight;
+    // A dragged position lasts only while Blueline is open; it is never stored. Clear any position
+    // older versions saved, so every opening docks bottom-right.
+    if ('pos' in S.prefs) { delete S.prefs.pos; BL.savePrefs(); }
+    const pos = sessionPos;
+    let bottom = PANEL_GAP;
+    if (pos) {
+      bottom = pos.bottom;
+      const left = Math.min(Math.max(4, pos.left), Math.max(4, W - p.offsetWidth - 4));
+      Object.assign(p.style, { left: `${left}px`, right: 'auto', top: 'auto' });
+    } else {
+      Object.assign(p.style, { left: '', right: '', top: '' });
+    }
+    // Leave enough room above the anchor for the panel's content; a minimized panel needs only its bar.
+    const need = p.classList.contains('collapsed') ? (q('.bar')?.offsetHeight || 40) + 8 : Math.min(360, H - 16);
+    bottom = Math.max(4, Math.min(bottom, H - need));
+    p.style.bottom = `${bottom}px`;
+    p.style.setProperty('--bl-bottom', `${bottom}px`);
   }
-
-  function clampPanel() {
-    const p = q('.panel');
-    if (!p || !p.style.top) return;
-    const r = p.getBoundingClientRect();
-    if (r.bottom > window.innerHeight - 8) p.style.top = `${Math.max(8, window.innerHeight - r.height - 8)}px`;
-    if (r.right > window.innerWidth - 4) p.style.left = `${Math.max(4, window.innerWidth - r.width - 4)}px`;
-  }
+  const clampPanel = applyPanelPos;
 
   // ------------------------------------------------------------------ mount
 
@@ -910,13 +1055,19 @@
     const add = mk('<button class="addnote" data-x="add-note" title="Open a new note. You can attach it to an element, or keep it as a general note"><span class="an-label">＋ Add note</span></button>');
     const startRow = mk(`<div class="startrow"><div class="sub">Or start straight from the page:</div><div class="sbtns">
       <button class="sbtn" data-x="start-select" title="Click an element on the page to attach a note to it (Alt+P)"><b>Select element</b><span>Click it on the page</span></button>
-      <button class="sbtn" data-x="start-circle" title="Drag a circle around an element, or around an empty spot. Blueline finds the element under it"><b>Circle an area</b><span>Drag around it</span></button></div></div>`);
+      <button class="sbtn" data-x="start-area" title="Drag a rectangle over an element, several elements, or an empty spot. Blueline finds the elements inside it"><b>Select area</b><span>Drag a rectangle</span></button></div></div>`);
     body.insertBefore(add, body.firstChild);
     add.after(startRow);
     body.appendChild(root.querySelector('.x-tools'));
     const tools = root.querySelector('.bar .tools');
-    tools.insertBefore(mk('<button class="mk-toggle" data-x="marks" title="Show an outline around each noted element on the page, or just the numbered badges">Outlines</button>'), tools.firstChild);
-    makeDraggable(panel, root.querySelector('.bar'), { ignore: 'button, a, input, select, textarea, [data-nodrag]', onEnd: () => { const r = panel.getBoundingClientRect(); S.prefs.pos = { left: Math.round(r.left), top: Math.round(r.top) }; BL.savePrefs(); } });
+    tools.insertBefore(mk(`<button class="icon hd-undo" data-x="undo" title="Undo the last annotation change (${UNDO_KEY})" aria-label="Undo" disabled>${UNDO_ICON}</button>`), tools.firstChild);
+    tools.insertBefore(mk(`<button class="icon mk-toggle" data-x="marks" aria-pressed="true" aria-label="Outlines">${OUTLINE_ICON}</button>`), tools.firstChild);
+    makeDraggable(panel, root.querySelector('.bar'), { ignore: 'button, a, input, select, textarea, [data-nodrag]', onEnd: () => {
+      const save = (r) => { sessionPos = { left: Math.round(r.left), bottom: Math.round(window.innerHeight - r.bottom) }; };
+      save(panel.getBoundingClientRect());
+      applyPanelPos(); // pull back on screen, then remember where it actually landed
+      save(panel.getBoundingClientRect());
+    } });
     makeDraggable(root.querySelector('.xov'), root.querySelector('.xov-h'), { translate: true });
     makeDraggable(root.querySelector('.xsheet'), root.querySelector('.xsheet header'), { translate: true });
     root.addEventListener('click', onClick);
@@ -934,6 +1085,7 @@
   };
 
   hooks.onUnmount = () => {
+    sessionPos = null; // closing Blueline forgets where it was dragged
     cancelTools();
     stopDrawing();
     setAnnotate(false, true);
@@ -950,6 +1102,8 @@
     attached = true;
     PTR.concat(SWALLOW).forEach((t) => window.addEventListener(t, onEvt, true));
     window.addEventListener('keydown', onKey, true);
+    window.addEventListener('keyup', onKeyUp, true);
+    window.addEventListener('blur', onKeyUp);
     window.addEventListener('resize', clampPanel);
     document.addEventListener('paste', onPaste, true);
   }
@@ -959,6 +1113,8 @@
     attached = false;
     PTR.concat(SWALLOW).forEach((t) => window.removeEventListener(t, onEvt, true));
     window.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('keyup', onKeyUp, true);
+    window.removeEventListener('blur', onKeyUp);
     window.removeEventListener('resize', clampPanel);
     document.removeEventListener('paste', onPaste, true);
   }
@@ -974,7 +1130,11 @@
     pv.querySelector('b').textContent = S.prefs.previews !== false ? 'Hide my live edits' : 'Show my live edits';
     const g = guidesHere().length;
     q('[data-x="guides"] b').textContent = g ? `Guide lines (${g} on this page)` : 'Add guide lines';
-    q('[data-x="marks"]').textContent = S.prefs.marks === 'badges' ? 'Outlines: off' : 'Outlines: on';
+    const mt = q('[data-x="marks"]');
+    const outlines = S.prefs.marks !== 'badges';
+    mt.setAttribute('aria-pressed', String(outlines));
+    mt.title = outlines ? 'Outlines on: each noted element has an outline. Click to show numbered badges only (drawings in the open note stay visible).' : 'Outlines off: only numbered badges show. Click to outline each noted element again.';
+    syncUndo();
     q('[data-x="g-show"]').textContent = S.prefs.guidesHidden ? 'Show all' : 'Hide all';
     renderGuideList();
   }
@@ -990,14 +1150,14 @@
   function hideBar() { const b = q('.x-bar'); if (b) b.hidden = true; }
 
   const BAR_MSG = {
-    select: 'Select an element: click it on the page (or drag a circle around it). Shift-click adds more.',
+    select: 'Select an element: click it on the page (or drag a rectangle around it). Shift-click adds more.',
     add: 'Add more elements: click each one you want to include, then press Done.',
-    circle: 'Circle an area: drag around the element(s). Blueline picks what is under your circle.',
+    area: 'Select area: drag a rectangle over the element(s). Blueline picks what is inside it.',
   };
 
   function syncModeButtons() {
     for (const b of qa('[data-x="start-select"], [data-x="sel-element"]')) b.classList.toggle('on', A.on && A.mode === 'select' && !A.keep);
-    for (const b of qa('[data-x="start-circle"], [data-x="sel-circle"]')) b.classList.toggle('on', A.on && A.mode === 'circle');
+    for (const b of qa('[data-x="start-area"], [data-x="sel-area"]')) b.classList.toggle('on', A.on && A.mode === 'area');
     for (const b of qa('[data-x="sel-add"]')) b.classList.toggle('on', A.on && A.keep);
   }
 
@@ -1011,7 +1171,7 @@
     if (on) showBar(keep ? BAR_MSG.add : BAR_MSG[mode], keep ? 'Done' : 'Cancel (Esc)');
     else if (!T.pick && !D.tool) hideBar();
     if (!on) { drawHl2(null); hideDr(); }
-    BL.cursorStyle(on || !!D.tool || !!T.pick);
+    syncCursor();
     syncModeButtons();
     if (!quiet && S.pop) renderSel();
   }
@@ -1022,10 +1182,10 @@
     setAnnotate(true, false, 'select', !!keep);
   }
 
-  function startCircle() {
+  function startArea() {
     if (S.pop?.item) { toast('Finish or cancel this note first.'); return; }
     if (!S.pop) BL.openPop(null, null, { page: true, els: [] });
-    setAnnotate(true, false, 'circle', false);
+    setAnnotate(true, false, 'area', false);
   }
 
   hooks.toggleAnnotate = () => { if (A.on) setAnnotate(false); else startSelect(false); };
@@ -1040,7 +1200,7 @@
     return new Promise((resolve) => {
       T.pick = { resolve, live };
       showBar(msg);
-      BL.cursorStyle(true);
+      syncCursor();
       const panel = q('.panel');
       if (panel) panel.style.visibility = 'hidden';
     });
@@ -1053,7 +1213,7 @@
     hideBar();
     drawHl2(null);
     clearMeas();
-    BL.cursorStyle(false);
+    syncCursor();
     const panel = q('.panel');
     if (panel) panel.style.visibility = '';
     p.resolve(val);
@@ -1076,11 +1236,10 @@
     const dr = q('.dr');
     dr.hidden = false;
     dr.classList.remove('set');
-    dr.classList.add('circle');
     Object.assign(dr.style, { left: `${Math.min(x0, x1)}px`, top: `${Math.min(y0, y1)}px`, width: `${Math.abs(x1 - x0)}px`, height: `${Math.abs(y1 - y0)}px` });
     dr.querySelector('.sz').textContent = `${Math.round(Math.abs(x1 - x0))}×${Math.round(Math.abs(y1 - y0))}`;
   }
-  const hideDr = () => { const dr = q('.dr'); if (dr) { dr.hidden = true; dr.classList.remove('circle'); } };
+  const hideDr = () => { const dr = q('.dr'); if (dr) dr.hidden = true; };
 
   // ------------------------------------------------------------------ pointer + keyboard routing
   // Chrome does not fire mousedown/mouseup when pointerdown is cancelled, so everything here is
@@ -1094,20 +1253,22 @@
 
   function onEvt(e) {
     if (!S.active) return;
+    if ((e.type === 'pointermove' || e.type === 'pointerdown') && e.shiftKey !== T.shiftHeld) { T.shiftHeld = e.shiftKey; syncCursor(); }
+    if (e.type === 'pointermove') { T.lastPt = { x: e.clientX, y: e.clientY }; shiftHover(BL.fromUI(e) ? null : pickable(e)); }
     if (T.eatClick && !(T.pick || A.on || D.tool) && /^(click|mouseup|dblclick|auxclick)$/.test(e.type) && !BL.fromUI(e)) {
       if (e.type === 'click') T.eatClick = false;
       e.preventDefault();
       e.stopImmediatePropagation();
       return;
     }
-    if (!(T.pick || A.on || D.tool)) return;
+    if (!(T.pick || A.on || D.tool)) { shiftSelect(e); return; }
     const isPtr = e.type.startsWith('pointer');
     // Blueline controls must never be intercepted by page-picking or drawing.
     if (BL.fromUI(e)) {
       if (isPtr && (e.type === 'pointerup' || e.type === 'pointercancel')) {
         A.drag = null;
         D.cur = null;
-        if (D.drag) { P.marksDirty = e.type === 'pointerup'; if (e.type === 'pointercancel') P.marks[D.selected] = D.drag.before; D.drag = null; renderDrawn(); }
+        if (D.drag) { if (e.type === 'pointercancel') { P.marks[D.selected] = D.drag.before; D.drag = null; } else endArrowDrag(); renderDrawn(); }
         hideDr();
       }
       return;
@@ -1120,14 +1281,116 @@
     else if (A.on) annotatePointer(e);
   }
 
+  // Shift + click toggles one element; Shift + drag draws a rectangle and adds what is inside it
+  // (same detection as Select area). Works whenever Blueline is on and no other tool is active;
+  // with no note open it starts a new one. The whole press is swallowed, so the page never acts on it
+  // (no link, no text selection, no image drag).
+  const DRAG_MIN = 6;
+  function shiftSelect(e) {
+    if (T.shiftSel) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const st = T.shiftSel;
+      if (e.type === 'pointercancel') { T.shiftSel = null; hideDr(); return; }
+      if (e.type === 'pointermove' && !st.cancelled) {
+        if (!st.moved && Math.hypot(e.clientX - st.x0, e.clientY - st.y0) > DRAG_MIN) st.moved = true;
+        if (st.moved) { drawHl2(null); drawDr(st.x0, st.y0, e.clientX, e.clientY); }
+        return;
+      }
+      if (e.type !== 'pointerup') return;
+      T.shiftSel = null;
+      hideDr();
+      eatNextClick();
+      if (st.cancelled) { syncCursor(); return; }
+      const w = Math.abs(e.clientX - st.x0);
+      const h = Math.abs(e.clientY - st.y0);
+      if (st.moved && w >= 10 && h >= 10) shiftArea({ left: Math.min(st.x0, e.clientX), top: Math.min(st.y0, e.clientY), width: w, height: h, right: Math.max(st.x0, e.clientX), bottom: Math.max(st.y0, e.clientY) });
+      else if (st.el) shiftToggle(st.el);
+      syncCursor(); // opening a note resets the cursor; Shift may still be held
+      return;
+    }
+    if (e.type !== 'pointerdown' || e.button !== 0 || !e.shiftKey || e.metaKey || e.ctrlKey || e.altKey || BL.fromUI(e)) return;
+    T.shiftSel = { el: pickable(e), x0: e.clientX, y0: e.clientY, moved: false, cancelled: false };
+    syncCursor();
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }
+
+  // Saved element notes on this page can gain or lose elements; region, whole-page, and other-page
+  // notes have no element list to change.
+  // A note started from the page with Shift keeps keyboard focus on the page (not the note box), so the
+  // next Cmd/Ctrl+Z undoes the selection instead of going to the empty text box.
+  function openForShift() {
+    BL.openPop(null, null, { page: true, els: [] });
+    setTimeout(() => { const ta = q('.pop-note'); if (ta && !ta.value) ta.blur(); }, 0);
+  }
+
+  function lockedTarget() {
+    if (P.item && (P.item.kind === 'region' || P.item.kind === 'page' || (!P.els.length && !P.cleared))) { toast('This note isn\u2019t attached to elements on this page. Start a new note to select elements.'); return true; }
+    return false;
+  }
+
+  function shiftToggle(el) {
+    if (!S.pop) { openForShift(); recordSelection(); setTarget({ els: [el] }); return; }
+    if (lockedTarget()) return;
+    if (P.els.length === 1 && P.els[0] === el && !isRegionPop()) { toast('That is the only selected element. Use ✕ on its chip to remove it.'); return; }
+    const tool = activeTool;
+    recordSelection();
+    if (P.item) setTarget({ els: P.els.includes(el) ? P.els.filter((x) => x !== el) : [...P.els, el] });
+    else selectElement(el, true);
+    if (tool && S.pop && !activeTool) { activeTool = tool; syncToolPanels(); }
+  }
+
+  function shiftArea(vr) {
+    const found = autoSelect(vr);
+    if (S.pop && lockedTarget()) return;
+    const adding = !!(S.pop && P.els.length && !isRegionPop());
+    if (adding && !found.els.some((x) => !P.els.includes(x))) { toast(found.els.length ? 'Everything in that area is already selected.' : 'No elements found in that area.'); return; }
+    if (!S.pop) openForShift();
+    const tool = activeTool;
+    recordSelection();
+    if (P.item) setTarget({ els: [...P.els, ...found.els.filter((x) => !P.els.includes(x))], auto: true });
+    else areaDone(vr, adding, found);
+    if (tool && S.pop && !activeTool) { activeTool = tool; syncToolPanels(); }
+  }
+
+  // Labels that tell same-selector elements apart: "a.card.stat · 53 Active assets".
+  function elName(el, els = P.els) {
+    const base = BL.label(el);
+    const dup = els.some((o) => o !== el && BL.label(o) === base);
+    const t = dup ? textOf(el, 28) : '';
+    return t ? `${base} · ${t}` : base;
+  }
+
   function pickPointer(e) {
     const el = pickable(e);
     if (e.type === 'pointermove') { drawHl2(el); if (T.pick.live) T.pick.live(el, e); }
     else if (e.type === 'pointerup' && e.button <= 0 && el) { eatNextClick(); endPick({ el, x: e.clientX, y: e.clientY }); }
   }
 
+  // Text fields keep their own undo; only annotation undo is ours.
+  const typingIn = (e) => {
+    const t = e.composedPath()[0];
+    return !!editing || (!!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || '')));
+  };
+
   function onKey(e) {
     if (!S.active) return;
+    if (e.key === 'Escape' && T.shiftSel && !T.shiftSel.cancelled) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      T.shiftSel.cancelled = true; // the release that follows is swallowed, so nothing is clicked
+      hideDr();
+      return;
+    }
+    if (e.key === 'Shift' && !typingIn(e)) { T.shiftHeld = true; syncCursor(); shiftHoverAtPointer(); }
+    if ((e.key === 'z' || e.key === 'Z' || e.code === 'KeyZ') && (IS_MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) && !e.shiftKey && !e.altKey) {
+      if (typingIn(e) || !(S.pop ? undoStack.length : lastUndoable())) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      undoAction();
+      return;
+    }
     if (e.key === 'Escape' && !(T.pick || D.tool || A.on)) {
       const m = q('[data-m="sheet"]');
       if (m && !m.hidden) { e.preventDefault(); e.stopImmediatePropagation(); m.hidden = true; return; }
@@ -1141,7 +1404,62 @@
     }
   }
 
-  // Which element(s) did the circle mean? Elements inside it, else the one under its middle, else an empty area.
+  function onKeyUp(e) {
+    if (e.type === 'keyup' && e.key !== 'Shift') return;
+    T.shiftHeld = false;
+    syncCursor();
+    shiftHover(null);
+  }
+
+  // While Shift is held and a Shift selection is available, preview the element under the pointer
+  // with the Select element hover outline and label. Hidden during a drag, while typing, while another
+  // tool owns the pointer, and as soon as Shift is released.
+  const typingFocus = () => {
+    let a = document.activeElement;
+    while (a?.shadowRoot?.activeElement) a = a.shadowRoot.activeElement;
+    return !!a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
+  };
+  function shiftHover(el) {
+    const show = !!el && T.shiftHeld && shiftReady() && !T.shiftSel?.moved && !typingFocus();
+    if (show) { drawHl2(el, true); T.shiftHover = true; } else if (T.shiftHover) { T.shiftHover = false; if (!(A.on || T.pick)) drawHl2(null); }
+  }
+  function shiftHoverAtPointer() {
+    if (!T.lastPt) return;
+    const el = document.elementFromPoint(T.lastPt.x, T.lastPt.y);
+    shiftHover(el && !mine(el) && el !== document.documentElement && el !== document.body ? el : null);
+  }
+
+  // The crosshair shows while a tool or a Shift selection is in progress, or while Shift is held and
+  // a Shift selection is available. Every cursor change goes through here so none can go stale.
+  const shiftReady = () => S.active && !(T.pick || A.on || D.tool) && !editing;
+  function syncCursor() {
+    BL.cursorStyle(!!(A.on || D.tool || T.pick || T.shiftSel || (T.shiftHeld && shiftReady())));
+  }
+
+  const visibleColor = (c) => { const x = BL.rgba(c || ''); return !!x && x.a > 0; };
+  const hasBox = (cs) => visibleColor(cs.backgroundColor) || cs.backgroundImage !== 'none' || cs.boxShadow !== 'none' ||
+    ['Top', 'Right', 'Bottom', 'Left'].some((s) => parseFloat(cs[`border${s}Width`]) > 0 && cs[`border${s}Style`] !== 'none' && visibleColor(cs[`border${s}Color`]));
+  const ownText = (e) => [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+  const SELF_CONTAINED = /^(A|BUTTON|LABEL|INPUT|SELECT|TEXTAREA|IMG|SVG|VIDEO|CANVAS|IFRAME|PICTURE|H[1-6]|P|LI|TD|TH|FIGURE|SUMMARY)$/i;
+
+  // The part of an element a person sees: for unboxed text elements, the bounds of the text itself.
+  function visibleRect(e, r, cs) {
+    if (/^(IMG|SVG|VIDEO|CANVAS|IFRAME|INPUT|SELECT|TEXTAREA|BUTTON)$/i.test(e.tagName) || hasBox(cs)) return r;
+    if (!e.textContent.trim() || [...e.children].some((k) => !/^inline/.test(getComputedStyle(k).display))) return r;
+    const range = document.createRange();
+    range.selectNodeContents(e);
+    const t = range.getBoundingClientRect();
+    if (!t.width || !t.height) return r;
+    const left = Math.max(t.left, r.left);
+    const top = Math.max(t.top, r.top);
+    const right = Math.min(t.right, r.right);
+    const bottom = Math.min(t.bottom, r.bottom);
+    return { left, top, right, bottom, width: right - left, height: bottom - top };
+  }
+
+  const isPlainWrapper = (e, cs) => !SELF_CONTAINED.test(e.tagName) && !hasBox(cs) && !ownText(e);
+
+  // Which element(s) did the area selection mean? Elements inside it, else the one under its middle, else an empty area.
   function autoSelect(vr) {
     const area = (r) => Math.max(0, r.width) * Math.max(0, r.height);
     const B = { left: vr.left, top: vr.top, right: vr.right ?? vr.left + vr.width, bottom: vr.bottom ?? vr.top + vr.height, width: vr.width, height: vr.height };
@@ -1155,18 +1473,30 @@
     const pool = [root, ...[...root.querySelectorAll('*')].slice(0, 2500)];
     const cands = [];
     for (const e of pool) {
-      if (mine(e) || /^(SCRIPT|STYLE|LINK|META|BR|NOSCRIPT|TEMPLATE|HEAD|TITLE|PATH|DEFS)$/i.test(e.tagName)) continue;
-      const r = e.getBoundingClientRect();
+      if (e === root || mine(e) || /^(SCRIPT|STYLE|LINK|META|BR|NOSCRIPT|TEMPLATE|HEAD|TITLE|PATH|DEFS|G|USE|TSPAN)$/i.test(e.tagName)) continue;
+      const raw = e.getBoundingClientRect();
+      if (area(raw) < 16 || !overlap(raw)) continue;
+      const cs = getComputedStyle(e);
+      if (cs.visibility === 'hidden' || +cs.opacity === 0) continue;
+      // Score by what is visible: a block heading's box spans its container, but its text may not.
+      const r = visibleRect(e, raw, cs);
       const aE = area(r);
-      if (aE < 16) continue;
       const inter = overlap(r);
-      if (!inter) continue;
-      cands.push({ e, aE, inside: inter / aE });
+      if (aE < 16 || !inter) continue;
+      if (inter / aE >= 0.6 && aE >= Math.max(64, 0.01 * aB)) cands.push({ e, cs });
     }
-    let inside = cands.filter((c) => c.inside >= 0.75 && c.aE >= 0.04 * aB && c.e !== root);
-    const set = new Set(inside.map((c) => c.e));
-    inside = inside.filter((c) => { for (let p = c.e.parentElement; p; p = p.parentElement) if (set.has(p)) return false; return true; });
-    if (inside.length && inside.length <= 6) return { els: inside.map((c) => c.e), how: 'inside' };
+    const set = new Set(cands.map((c) => c.e));
+    const outermost = (list) => list.filter((c) => { for (let p = c.e.parentElement; p; p = p.parentElement) if (set.has(p)) return !list.some((o) => o.e === p); return true; });
+    // A plain layout wrapper (no box, no text of its own) stands for its children: select them instead.
+    const expand = (list) => list.flatMap((c) => {
+      if (!isPlainWrapper(c.e, c.cs)) return [c];
+      const kids = outermost(cands.filter((x) => x.e !== c.e && c.e.contains(x.e)));
+      return kids.length >= 2 ? expand(kids) : [c];
+    });
+    const top = outermost(cands);
+    const picked = expand(top);
+    const chosen = picked.length <= 8 ? picked : top;
+    if (chosen.length && chosen.length <= 8) return { els: chosen.map((c) => c.e), how: 'inside' };
     for (let e = stack[0]; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
       const r = e.getBoundingClientRect();
       if (area(r) > 10 * aB) break;
@@ -1197,7 +1527,7 @@
       eatNextClick();
       const w = Math.abs(e.clientX - d.x0);
       const h = Math.abs(e.clientY - d.y0);
-      if (d.moved && w >= 10 && h >= 10) circleDone({ left: Math.min(d.x0, e.clientX), top: Math.min(d.y0, e.clientY), width: w, height: h, right: Math.max(d.x0, e.clientX), bottom: Math.max(d.y0, e.clientY) }, d.add || A.keep);
+      if (d.moved && w >= 10 && h >= 10) areaDone({ left: Math.min(d.x0, e.clientX), top: Math.min(d.y0, e.clientY), width: w, height: h, right: Math.max(d.x0, e.clientX), bottom: Math.max(d.y0, e.clientY) }, d.add || A.keep);
       else if (d.el) selectElement(d.el, d.add || A.keep);
     }
   }
@@ -1216,16 +1546,15 @@
     finishSelect();
   }
 
-  function circleDone(vr, add) {
+  function areaDone(vr, add, found = autoSelect(vr)) {
     if (S.pop?.item) { toast('Finish or cancel this note first.'); return; }
-    const found = autoSelect(vr);
     if (!S.pop) BL.openPop(null, null, { page: true, els: [] });
     P.marks = P.marks.filter((m) => !m.auto);
     if (found.els.length) {
       const els = add && P.els.length ? [...P.els, ...found.els.filter((x) => !P.els.includes(x))] : found.els;
       setTarget({ els, auto: true });
     } else regionSelected(vr);
-    P.marks.push({ t: 'circle', c: D.color, auto: true, a: { x: vr.left + scrollX, y: vr.top + scrollY }, b: { x: vr.right + scrollX, y: vr.bottom + scrollY } });
+    P.marks.push({ t: 'box', c: D.color, auto: true, a: { x: vr.left + scrollX, y: vr.top + scrollY }, b: { x: vr.right + scrollX, y: vr.bottom + scrollY } });
     P.marksDirty = true;
     syncDrawUi();
     renderAnn();
@@ -1246,15 +1575,16 @@
   // Swap what the open note points at, keeping its text, type, priority, drawings, and colors.
   function setTarget(t) {
     rememberElement();
-    const oldEdits = P.edits;
+    const oldEdits = new Map([...(P.parked || []), ...P.edits]);
     revertLive();
     P.tweaks = {}; P.hide = false; P.textEdit = null; P.align = {}; P.alignInfo = {}; P.snap = { x: 0, y: 0 };
     P.move = null; P.match = null; P.measures = []; P.variant = null;
     P.auto = !!t.auto;
     S.pop.page = false;
     if (t.region) { P.els = []; P.el = null; S.pop.region = t.region; S.pop.el = null; S.pop.els = []; }
-    else { P.els = t.els; P.el = t.els[0]; S.pop.region = null; S.pop.el = P.el; S.pop.els = P.els; }
+    else { P.els = t.els; P.el = t.els[0] || null; S.pop.region = null; S.pop.el = P.el; S.pop.els = P.els; }
     P.edits = new Map(P.els.filter((el) => oldEdits.has(el)).map((el) => [el, oldEdits.get(el)]));
+    P.parked = new Map([...oldEdits].filter(([el]) => !P.els.includes(el)));
     const current = P.edits.get(P.el) || emptyPop();
     for (const key of EDIT_KEYS) P[key] = current[key];
     rememberElement();
@@ -1268,6 +1598,9 @@
 
   hooks.onPopOpen = (el, item) => {
     P = emptyPop();
+    clearUndo();
+    // A copy, so Cancel leaves the saved note's history as it was.
+    if (item && histories.has(item.id)) undoStack = histories.get(item.id).slice();
     const matchAll = q('.match-all'); if (matchAll) matchAll.checked = false;
     P.item = item || null;
     const sp = S.pop;
@@ -1308,8 +1641,9 @@
       for (const key of EDIT_KEYS) P[key] = current[key];
     }
     S.pop.els = P.els;
+    setTimeout(syncCursor, 0);
     q('.panel').classList.add('composing');
-    q('.pop-note').placeholder = sp?.move && !item ? 'Anything to add? (optional)' : 'Describe what should change, in your own words';
+    q('.pop-note').placeholder = sp?.move && !item ? 'Anything to add? (optional)' : 'Describe what should change. Optional if your annotations say it all.';
     for (const d of qa('.pop details')) d.open = false;
     if (Object.keys(P.tweaks).length) q('[data-d="props"]').open = true;
     if (P.scope !== 'one') q('[data-d="scope"]').open = true;
@@ -1318,6 +1652,11 @@
     BL.hideHL();
     loadCompose();
     clampPanel();
+    syncUndo();
+    if (pendingUndo && pendingUndo === item?.id) {
+      pendingUndo = null;
+      setTimeout(() => undo('Undone. Update the note to keep this, or Cancel.'), 0);
+    }
   };
 
   const TYPE_TIPS = { bug: 'Something is broken or behaves wrongly.', polish: 'Spacing, size, color or alignment needs adjusting.', copy: 'Wording, labels or messages need changing.', feature: 'Something new that does not exist yet.' };
@@ -1366,26 +1705,55 @@
     const editing = !!P.item;
     const rg = S.pop?.region || (P.item?.kind === 'region' ? P.item.region : null);
     const chips = [];
-    if (rg) chips.push(`<span class="tchip${P.auto ? ' auto' : ''}" title="An empty area you marked">▭ Empty area ${rg.w}×${rg.h} in ${esc(rg.ctx.container.label)}</span>`);
+    if (rg) chips.push(`<span class="tchip${P.auto ? ' auto' : ''}" title="An empty area you selected">▭ Empty area ${rg.w}×${rg.h} in ${esc(rg.ctx.container.label)}</span>`);
     else if (P.item?.kind === 'page') chips.push('<span class="tchip">Whole page (general note)</span>');
-    else if (!P.els.length && P.item) chips.push(`<span class="tchip">${esc(P.item.el.label)}</span>`);
-    else P.els.forEach((e, i) => chips.push(`<span class="tchip${P.auto ? ' auto' : ''}" title="${esc(BL.cssPath(e))}">${esc(BL.label(e))}${editing ? '' : `<button data-x="sel-rm" data-i="${i}" aria-label="Remove ${esc(BL.label(e))} from this note" title="Remove from this note">✕</button>`}</span>`));
+    else if (!P.els.length && P.item && !P.cleared) chips.push(`<span class="tchip">${esc(P.item.el.label)}</span>`);
+    else P.els.forEach((e, i) => chips.push(`<span class="tchip${P.auto ? ' auto' : ''}" title="${esc(BL.cssPath(e))}">${esc(elName(e))}${editing ? '' : `<button data-x="sel-rm" data-i="${i}" aria-label="Remove ${esc(elName(e))} from this note" title="Remove from this note">✕</button>`}</span>`));
     const none = !chips.length;
     const num = editing ? S.batch.items.indexOf(P.item) + 1 : 0;
     let hint = '';
-    if (A.on) hint = A.keep ? 'Click each element you want to add, then press Done.' : A.mode === 'circle' ? 'Drag a circle around what you mean.' : 'Click an element on the page (or drag around it).';
+    if (A.on) hint = A.keep ? 'Click each element you want to add, then press Done.' : A.mode === 'area' ? 'Drag a rectangle over what you mean.' : 'Click an element on the page (or drag around it).';
+    else if (none) hint = `${PICK_HINT}${P.cleared || editing ? '' : ' Or skip this to save a general note about the whole page.'}`;
     else if (editing && !P.els.length && P.item.kind !== 'region' && P.item.kind !== 'page') hint = `This note is on ${esc(P.item.path)}. Open that page to edit its target.`;
-    else if (editing) hint = 'A saved note\u2019s target can\u2019t change. To point somewhere else, delete it and add a new note.';
-    else if (P.auto && rg) hint = 'No element was under your circle, so this marks an empty area. That works for "add something here".';
-    else if (P.auto) hint = 'Picked automatically from your circle. Remove it above or choose again if it\u2019s wrong.';
-    else if (none) hint = 'Nothing selected yet. Choose a button below, or skip this to save a general note about the whole page.';
-    else hint = 'Need to open a menu or tab first? Do that, then press Select element again.';
+    else if (editing) hint = 'Shift-click elements on the page to add or remove them from this note.';
+    else if (P.auto && rg) hint = 'No element was inside your selection, so this marks an empty area. That works for "add something here".';
+    else if (P.auto) hint = 'Picked automatically from your selected area. Remove it above or choose again if it\u2019s wrong.';
+    else hint = 'Shift-click elements on the page to add or remove them. Need to open a menu or tab first? Do that, then press Select element again.';
     const buttons = editing ? '' : `<div class="xbtns">
       <button class="xb${A.on && A.mode === 'select' && !A.keep ? ' on' : ''}" data-x="sel-element" title="Click an element on the page to attach this note to it">Select element</button>
-      <button class="xb${A.on && A.mode === 'circle' ? ' on' : ''}" data-x="sel-circle" title="Drag a circle around an element or an empty spot. Blueline finds the element under it">Circle an area</button>
+      <button class="xb${A.on && A.mode === 'area' ? ' on' : ''}" data-x="sel-area" title="Drag a rectangle over an element, several elements, or an empty spot. Blueline finds the elements inside it">Select area</button>
       ${P.els.length && !rg ? `<button class="xb${A.on && A.keep ? ' on' : ''}" data-x="sel-add" title="Include more elements in this same note">+ Add another element</button>` : ''}</div>`;
-    box.innerHTML = `<div class="stephead"><span class="stepn">1</span>Selected elements to change${editing ? ` (note ${num})` : ''}</div>${chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}${buttons}<div class="sub">${hint}</div>`;
+    const canClear = canClearSelection();
+    const clear = `<div class="xbtns"><button class="xb" data-x="sel-clear"${canClear ? '' : ' disabled'} title="${canClear ? 'Remove every selected element from this note. Drawings and other annotations stay. Undo restores the selection.' : 'Nothing selected to clear'}">Clear selection</button></div>`;
+    box.innerHTML = `<div class="stephead"><span class="stepn">1</span>Selected elements to change${editing ? ` (note ${num})` : ''}</div>${chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}${buttons}${clear}<div class="sub">${hint}</div>`;
   }
+
+  const PICK_HINT = 'Shift-click an element or Shift-drag to select an area.';
+  // Saved region and whole-page notes have no element list to clear.
+  const canClearSelection = () => !!S.pop && (P.els.length > 0 || (!!S.pop.region && !P.item));
+
+  // Empties the selection as one undo step. The note stays open; drawings stay; per-element
+  // annotations are parked and come back if the element is selected again.
+  function clearSelection() {
+    if (!canClearSelection()) return;
+    if (A.on) setAnnotate(false, true);
+    const tool = activeTool;
+    recordSelection();
+    P.marks = P.marks.filter((m) => !m.auto); // the area-selection outline goes with the selection
+    P.marksDirty = true;
+    P.cleared = true;
+    setTarget({ els: [] });
+    hideDr();
+    activeTool = tool;
+    syncToolPanels();
+    syncDrawUi();
+    renderAnn();
+    syncCursor();
+  }
+
+  // A cleared note must get a new selection (or Undo) before saving; it never silently becomes a
+  // whole-page note.
+  hooks.blockSave = () => (S.pop && P.cleared && !P.els.length && !S.pop.region ? `Nothing is selected. ${PICK_HINT} Or press Undo to restore the previous selection.` : '');
 
   hooks.onPopClose = () => {
     if (T.speech) T.speech.stop();
@@ -1402,9 +1770,11 @@
     const panel = q('.panel');
     if (panel) panel.classList.remove('composing');
     P = emptyPop();
+    clearUndo();
     activeTool = null;
     visibleMeasureIndex = null;
-    setTimeout(() => { renderAnn(); applyAllPreviews(); }, 0);
+    // S.pop is cleared only after this hook returns, so refresh Undo for the no-note state afterwards.
+    setTimeout(() => { renderAnn(); applyAllPreviews(); syncUndo(); syncCursor(); }, 0);
   };
 
   function syncChips() {
@@ -1416,7 +1786,7 @@
   }
 
   function updatePrerequisites() {
-    for (const b of qa('[data-x="move-here"], [data-x="match"], [data-x="hide"], [data-x="measure-new"], [data-x="align-go"], [data-x="edittext"]')) {
+    for (const b of qa('[data-x="move-here"], [data-x="match"], [data-x="hide"], [data-x="align-go"], [data-x="edittext"]')) {
       const reason = !P.el ? 'Select an element first.' : b.dataset.x === 'edittext' && P.el.children.length ? 'Select the text element itself; this element contains other elements.' : '';
       b.disabled = !!reason;
       if (!b.dataset.readyTitle) b.dataset.readyTitle = b.title;
@@ -1510,6 +1880,7 @@
 
   function styleInput(row, raw) {
     if (!P.el) return;
+    record(`style:${row.dataset.prop}`);
     const prop = row.dataset.prop;
     const from = row.dataset.from;
     const v = raw.trim();
@@ -1628,6 +1999,7 @@
       }
     }
     if (S.batch) S.batch.guides = (S.batch.guides || []).filter((g) => g.id !== id);
+    clearUndo();
     BL.saveBatch(); renderAnn(); updateToolbar(); renderGuideList(); buildAlignRows();
   }
 
@@ -1640,6 +2012,7 @@
     const el = P.el;
     const g = guidesHere().find((x) => x.id === gid);
     if (!el || !g) return;
+    record();
     const axis = g.axis;
     const same = Object.keys(P.align).filter((id) => (guidesHere().find((x) => x.id === id) || {}).axis === axis);
     const toggledOff = clear;
@@ -1779,7 +2152,8 @@
     g.setAttribute('transform', `translate(${-scrollX} ${-scrollY})`);
     const list = [];
     // "Outlines: off" hides other notes' drawings, never the marks being drawn or edited now.
-    if (S.prefs.marks !== 'badges') for (const it of itemsHere()) { if (S.pop?.item?.id === it.id) continue; (it.marks || []).forEach((m) => list.push(m)); }
+    // Saved notes show their selection with outlines and badges; their area-selection boxes are left off.
+    if (S.prefs.marks !== 'badges') for (const it of itemsHere()) { if (S.pop?.item?.id === it.id) continue; (it.marks || []).forEach((m) => { if (!m.auto) list.push(m); }); }
     (P.marks || []).forEach((m) => list.push(m));
     if (D.cur) list.push(D.cur);
     for (const s of list) g.appendChild(svgShape(s));
@@ -1844,16 +2218,15 @@
       const dr = q('.dr');
       dr.hidden = false;
       dr.classList.add('set');
-      dr.classList.remove('circle');
       Object.assign(dr.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
       dr.querySelector('.sz').textContent = `${rg.w}×${rg.h}`;
     }
   }
 
   const ONBOARD = `<b>How it works</b>
-    <div class="step"><i>1</i><span>Press <b>Add note</b>, or start from the page with <b>Select element</b> or <b>Circle an area</b>.</span></div>
+    <div class="step"><i>1</i><span>Press <b>Add note</b>, or start from the page with <b>Select element</b> or <b>Select area</b>.</span></div>
     <div class="step"><i>2</i><span>Say what should change. Try values live if you like.</span></div>
-    <div class="step"><i>3</i><span>When you have all your notes, press <b>Export prompt</b> and paste it into Claude Code.</span></div>`;
+    <div class="step"><i>3</i><span>When you have all your notes, press <b>Export prompt</b> and share it with a developer or AI assistant.</span></div>`;
 
   const MODE_NAME = { shopify: 'a Shopify theme', next: 'a Next.js app', react: 'a React app', html: 'plain HTML/CSS/JS' };
 
@@ -1869,6 +2242,7 @@
   }
 
   hooks.afterRender = () => {
+    applyPanelPos();
     updateToolbar();
     renderAnn();
     applyAllPreviews();
@@ -1877,12 +2251,14 @@
     const mode = q('.mode');
     if (mode) mode.title = `Blueline detected ${MODE_NAME[BL.modeOf(S.page)]} on this page`;
     const ex = q('[data-act="export"]');
-    if (ex) ex.title = 'Build one prompt from all your notes, ready to paste into Claude Code';
+    if (ex) ex.title = 'Build one change request from all your notes, ready to share with a developer or AI assistant';
     for (const li of qa('.list .item')) {
       const it = BL.findItem(li.dataset.id);
       const meta = li.querySelector('.meta');
       if (!it || !meta) continue;
       meta.textContent = metaText(it);
+      const note = li.querySelector('.note');
+      if (note && !it.note) { note.textContent = noteSummary(it) + (isReference(it) ? ' (reference only)' : ''); note.classList.add('auto-note'); }
     }
   };
   hooks.onSchedule = () => { renderAnn(); applyAllPreviews(); };
@@ -1896,17 +2272,18 @@
     D.tool = D.tool === tool ? null : tool;
     renderDrawn();
     syncDrawUi();
-    BL.cursorStyle(!!D.tool);
+    syncCursor();
     if (D.tool) showBar(D.tool === 'edit' ? 'Click an arrow. Drag either endpoint or its body. Choose a color or Delete selected arrow. Esc ends editing.' : D.tool === 'text' ? 'Click where the text should go. Esc stops drawing.' : 'Drag on the page to draw. Esc stops drawing.'); else hideBar();
   }
 
   function stopDrawing() {
     if (!D.tool && !D.cur) return;
     D.tool = null;
+    if (D.drag && P.marks[D.selected]) P.marks[D.selected] = D.drag.before; // Esc mid-drag puts the arrow back
     D.cur = null; D.selected = null; D.drag = null;
     renderDrawn();
     hideBar();
-    BL.cursorStyle(A.on);
+    syncCursor();
     syncDrawUi();
   }
 
@@ -1935,7 +2312,7 @@
       const c = D.cur;
       D.cur = null;
       const size = c.t === 'pen' ? c.pts.length : Math.hypot(c.b.x - c.a.x, c.b.y - c.a.y);
-      if (size > (c.t === 'pen' ? 3 : 6)) { P.marks.push(c); P.marksDirty = true; }
+      if (size > (c.t === 'pen' ? 3 : 6)) { record(); P.marks.push(c); P.marksDirty = true; }
       syncDrawUi();
       renderAnn();
     }
@@ -1955,19 +2332,26 @@
         const mark = P.marks[i];
         if (mark.t !== 'arrow' || mark.auto) continue;
         const part = arrowHit(mark, p);
-        if (part) { D.selected = i; D.color = mark.c; D.drag = { part, origin: p, before: JSON.parse(JSON.stringify(mark)) }; break; }
+        if (part) { D.selected = i; D.color = mark.c; D.drag = { part, origin: p, before: JSON.parse(JSON.stringify(mark)), snap: snapshot() }; break; }
       }
     } else if (e.type === 'pointermove' && D.drag) {
       const mark = P.marks[D.selected], d = D.drag;
       const dx = p.x - d.origin.x, dy = p.y - d.origin.y;
       for (const key of ['a', 'b']) if (d.part === key || d.part === 'body') mark[key] = { x: d.before[key].x + dx, y: d.before[key].y + dy };
     } else if (e.type === 'pointercancel' && D.drag) { P.marks[D.selected] = D.drag.before; D.drag = null; }
-    else if (e.type === 'pointerup' && D.drag) { P.marksDirty = true; D.drag = null; }
+    else if (e.type === 'pointerup' && D.drag) endArrowDrag();
     syncDrawUi(); renderDrawn();
+  }
+  // A finished arrow drag is one undo step, recorded only if the arrow actually moved.
+  function endArrowDrag() {
+    const d = D.drag;
+    D.drag = null;
+    if (!d) return;
+    if (JSON.stringify(P.marks[D.selected]) !== JSON.stringify(d.before)) { pushSnapshot(d.snap); P.marksDirty = true; }
   }
   function setDrawingColor(color) {
     D.color = color;
-    if (D.tool === 'edit' && P.marks[D.selected]?.t === 'arrow') { P.marks[D.selected].c = color; P.marksDirty = true; renderDrawn(); }
+    if (D.tool === 'edit' && P.marks[D.selected]?.t === 'arrow' && P.marks[D.selected].c !== color) { record('arrow-color'); P.marks[D.selected].c = color; P.marksDirty = true; renderDrawn(); }
     syncDrawUi();
   }
 
@@ -1982,7 +2366,7 @@
     const kill = () => { if (gone) return; gone = true; inp.remove(); };
     inp.addEventListener('keydown', (ev) => {
       ev.stopPropagation();
-      if (ev.key === 'Enter' && inp.value.trim()) { P.marks.push({ t: 'text', c: D.color, p, s: inp.value.trim() }); P.marksDirty = true; kill(); syncDrawUi(); renderAnn(); }
+      if (ev.key === 'Enter' && inp.value.trim()) { record(); P.marks.push({ t: 'text', c: D.color, p, s: inp.value.trim() }); P.marksDirty = true; kill(); syncDrawUi(); renderAnn(); }
       else if (ev.key === 'Escape') kill();
     });
     inp.addEventListener('blur', kill);
@@ -2051,8 +2435,10 @@
       if (it.kind === 'region') { const r = regionRect(it); ctx.setLineDash([8 * k, 5 * k]); ctx.strokeRect(r.left * k, r.top * k, r.width * k, r.height * k); ctx.setLineDash([]); }
       paintMarks(ctx, marks, k, Math.max(3, 3 * k));
       await chrome.storage.local.set({ [BL.shotKey(it.id) + ':markup']: cv.toDataURL('image/png') });
-      it.hasMarkup = true;
-      it.markupPath = undefined;
+      // Saving reloads S.batch from storage, so flag the current copy of the note, not the one passed in.
+      const fresh = BL.findItem(it.id) || it;
+      fresh.hasMarkup = true;
+      fresh.markupPath = undefined;
       await BL.saveBatch();
     } catch { /* capture failed; the note still saves */ }
   }
@@ -2158,6 +2544,7 @@
     const dst = await pickOne('Click where this should go: top edge = before, bottom edge = after, middle = inside. Esc cancels.', insertPreview);
     if (!dst) return;
     if (dst.el === el || el.contains(dst.el)) { toast('Pick a destination outside the element you\u2019re moving.'); return; }
+    record();
     P.move = { to: targetInfo(dst.el), toEl: dst.el, position: positionFor(dst) };
     renderStrips();
     renderAnn();
@@ -2170,7 +2557,16 @@
     const box = q('.tool-measure-list');
     if (!box) return;
     const add = q('[data-x="measure-new"]');
-    if (add) add.disabled = !P.el;
+    if (add) add.disabled = !canMeasure();
+    const pair = q('.measure-pair');
+    if (pair) {
+      pair.hidden = P.els.length < 3;
+      if (!pair.hidden) {
+        const cur = Math.max(0, P.els.indexOf(P.el));
+        const opts = (sel) => P.els.map((el, i) => `<option value="${i}"${i === sel ? ' selected' : ''}>${i + 1}: ${esc(elName(el))}</option>`).join('');
+        pair.innerHTML = `<span class="sub">Measure between</span><select class="xin m-from" aria-label="Measure from">${opts(cur)}</select><span class="sub">and</span><select class="xin m-to" aria-label="Measure to">${opts(cur === 0 ? 1 : 0)}</select><button type="button" class="xb" data-x="measure-pair" title="Measure the distance between the two chosen elements">Measure</button>`;
+      }
+    }
     box.innerHTML = P.measures.length ? P.measures.map((m, i) => `
       <div class="measure-row${(visibleMeasureIndex === i || (visibleMeasureIndex === null && i === P.measures.length - 1)) ? ' current' : ''}">
         <strong>${i + 1}. ${esc(m.label)}</strong>
@@ -2180,16 +2576,16 @@
           <button type="button" class="xb" data-x="measure-change" data-i="${i}" ${P.el ? '' : 'disabled'} title="Choose another second element without changing the original selected element">Change target</button>
           <button type="button" class="xb" data-x="rm-measure" data-i="${i}" title="Remove this measurement from the note">Remove</button>
         </div>
-      </div>`).join('') : '<div class="sub">No measurements yet. Choose Measure to an element to start.</div>';
+      </div>`).join('') : `<div class="sub">${P.els.length >= 3 ? 'No measurements yet. Choose two selected elements above.' : 'No measurements yet.'}</div>`;
   }
 
   function syncToolPanels() {
     if (!S.ui) return;
     for (const btn of qa('.tool-main')) {
-      const unavailable = btn.dataset.tool === 'measure' && !P.el;
+      const unavailable = btn.dataset.tool === 'measure' && !canMeasure();
       btn.disabled = !!unavailable;
       if (!btn.dataset.readyTitle) btn.dataset.readyTitle = btn.title;
-      btn.title = unavailable ? 'Select an element first to measure from it.' : btn.dataset.readyTitle;
+      btn.title = unavailable ? (isRegionPop() ? 'Measuring needs elements. This note marks an empty area.' : 'Open this note’s page to measure.') : btn.dataset.readyTitle;
       btn.setAttribute('aria-pressed', String(activeTool === btn.dataset.tool && !unavailable));
     }
     for (const p of qa('[data-tool-panel]')) p.hidden = p.dataset.toolPanel !== activeTool;
@@ -2237,7 +2633,7 @@
   function onClick(e) {
     if (e.target.classList && e.target.classList.contains('xmodal')) { e.target.hidden = true; return; }
     if (e.target.closest('.type')) { updateTypeHint(); return; }
-    if (e.target.closest('[data-act="side"]')) { S.prefs.pos = null; const p = q('.panel'); Object.assign(p.style, { left: '', top: '', right: '', bottom: '' }); BL.savePrefs(); return; }
+    if (e.target.closest('[data-act="side"]')) { sessionPos = null; applyPanelPos(); return; }
     const chip = e.target.closest('[data-prio],[data-bp]');
     if (chip) {
       if (chip.dataset.prio) P.priority = chip.dataset.prio;
@@ -2258,12 +2654,13 @@
     switch (x) {
       case 'add-note': if (!S.pop) BL.openPop(null, null, { page: true, els: [] }); q('.pop-note').focus(); break;
       case 'start-select': case 'sel-element': startSelect(false); break;
-      case 'start-circle': case 'sel-circle': startCircle(); break;
+      case 'start-area': case 'sel-area': startArea(); break;
       case 'sel-add': startSelect(true); break;
       case 'guides': { const gb = q('.x-guidebox'); gb.hidden = !gb.hidden; setOn('guides', !gb.hidden); break; }
       case 'overlay': toggleOverlayPanel(); break;
       case 'sheet': openSheet(); break;
       case 'previews': S.prefs.previews = S.prefs.previews === false; BL.savePrefs(); applyAllPreviews(); updateToolbar(); break;
+      case 'undo': undoAction(); break;
       case 'marks': S.prefs.marks = S.prefs.marks === 'badges' ? 'full' : 'badges'; BL.savePrefs(); updateToolbar(); renderAnn(); break;
       case 'bar-cancel': if (T.pick) endPick(null); else if (D.tool) stopDrawing(); else if (A.on) setAnnotate(false); break;
       case 'g-v': addGuide('x'); break;
@@ -2272,39 +2669,41 @@
       case 'g-eye': { const g = (S.batch?.guides || []).find((x2) => x2.id === b.dataset.id); if (g) { g.hidden = !g.hidden; BL.saveBatch(); renderAnn(); renderGuideList(); } break; }
       case 'g-del': removeGuide(b.dataset.id); break;
       case 'mk-open': { const it = BL.findItem(b.dataset.id); if (!it) break; if (S.pop) toast('Save or cancel the note you\u2019re editing first.'); else hooksFocus(it); break; }
+      case 'sel-clear': clearSelection(); break;
       case 'sel-rm': if (P.els.length > 1) setTarget({ els: P.els.filter((_, i) => i !== +b.dataset.i) }); else BL.closePop(); break;
       case 'dictate': toggleDictation(); break;
       case 'edittext': startEditText(); break;
       case 'hide': togglePopHide(); break;
       case 'match': startMatch(); break;
-      case 'measure-to': case 'measure-new': startMeasureTo(); break;
+      case 'measure-to': case 'measure-new': if (P.el) startMeasureTo(); else startMeasureFlow(); break;
+      case 'measure-pair': measureChosenPair(); break;
       case 'tool-draw': activateTool('draw'); break;
-      case 'tool-measure': activateTool('measure'); break;
+      case 'tool-measure': activateTool('measure'); if (activeTool === 'measure') startMeasureFlow(); break;
       case 'tool-align': activateTool('align'); break;
       case 'tool-elements': activateTool('elements'); break;
       case 'measure-show': visibleMeasureIndex = +b.dataset.i; renderMeasurePanel(); renderAnn(); break;
       case 'measure-change': changeMeasureTarget(+b.dataset.i); break;
-      case 'pop-color': dropper((hex) => { P.colors.push(hex); copyText(hex); renderStrips(); toast(`${hex} copied`); }); break;
+      case 'pop-color': dropper((hex) => { record(); P.colors.push(hex); copyText(hex); renderStrips(); toast(`${hex} copied`); }); break;
       case 'st-drop': { const row = b.closest('.st'); dropper((hex) => { row.querySelector('.sv').value = hex; styleInput(row, hex); }); break; }
       case 'st-dec': case 'st-inc': { const row = b.closest('.st'); const inp = row.querySelector('.sv'); styleInput(row, stepVal(row.dataset.prop, inp.value || row.dataset.from, x === 'st-inc' ? 1 : -1, e.shiftKey)); inp.value = P.tweaks[row.dataset.prop] ? P.tweaks[row.dataset.prop].to : row.dataset.from; break; }
-      case 'style-reset': resetStyles(); break;
+      case 'style-reset': record(); resetStyles(); break;
       case 'snap': snapTo(b.dataset.g, b.dataset.edge); break;
       case 'align-go': snapTo(b.dataset.g, b.closest('.strip').querySelector('.align-edge').value); break;
       case 'align-clear': snapTo(b.dataset.g, P.align[b.dataset.g], true); break;
       case 'edit-element': chooseElement(+b.dataset.i); break;
       case 'move-here': moveHere(); break;
       case 'draw-edit': startDrawing('edit'); break;
-      case 'draw-delete': if (D.tool === 'edit' && P.marks[D.selected]) { P.marks.splice(D.selected, 1); D.selected = null; P.marksDirty = true; syncDrawUi(); renderAnn(); } break;
-      case 'draw-undo': D.selected = null; P.marks.pop(); P.marksDirty = true; syncDrawUi(); renderAnn(); break;
-      case 'draw-clear': D.selected = null; P.marks = []; P.marksDirty = true; syncDrawUi(); renderAnn(); break;
-      case 'rm-move': P.move = null; renderStrips(); renderAnn(); break;
-      case 'rm-match': P.match = null; renderStrips(); break;
-      case 'match-apply': if (q('.match-all')?.checked) applyMatchToAll(); else applyMatchPreview(); break;
-      case 'rm-text': if (P.el && P.textEdit && !P.el.children.length) P.el.textContent = P.textEdit.before; P.textEdit = null; renderStrips(); break;
-      case 'rm-measure': P.measures.splice(+b.dataset.i, 1); visibleMeasureIndex = P.measures.length ? P.measures.length - 1 : null; renderMeasurePanel(); renderAnn(); break;
+      case 'draw-delete': if (D.tool === 'edit' && P.marks[D.selected]) { record(); P.marks.splice(D.selected, 1); D.selected = null; P.marksDirty = true; syncDrawUi(); renderAnn(); } break;
+      case 'draw-undo': if (!P.marks.length) break; record(); D.selected = null; P.marks.pop(); P.marksDirty = true; syncDrawUi(); renderAnn(); break;
+      case 'draw-clear': if (!P.marks.length) break; record(); D.selected = null; P.marks = []; P.marksDirty = true; syncDrawUi(); renderAnn(); break;
+      case 'rm-move': record(); P.move = null; renderStrips(); renderAnn(); break;
+      case 'rm-match': record(); P.match = null; renderStrips(); break;
+      case 'match-apply': record(); if (q('.match-all')?.checked) applyMatchToAll(); else applyMatchPreview(); break;
+      case 'rm-text': record(); if (P.el && P.textEdit && !P.el.children.length) P.el.textContent = P.textEdit.before; P.textEdit = null; renderStrips(); break;
+      case 'rm-measure': record(); P.measures.splice(+b.dataset.i, 1); visibleMeasureIndex = P.measures.length ? P.measures.length - 1 : null; renderMeasurePanel(); renderAnn(); break;
       case 'color-copy': copyText(P.colors[+b.dataset.i]); toast('Color copied'); break;
-      case 'color-remove': P.colors.splice(+b.dataset.i, 1); renderStrips(); break;
-      case 'rm-colors': P.colors = []; renderStrips(); break;
+      case 'color-remove': record(); P.colors.splice(+b.dataset.i, 1); renderStrips(); break;
+      case 'rm-colors': record(); P.colors = []; renderStrips(); break;
       case 'rm-variant': P.variant = null; renderStrips(); break;
       case 'var-product': pickProduct(b.dataset.handle); break;
       case 'var-variant': pickVariant(+b.dataset.i); break;
@@ -2399,6 +2798,7 @@
 
   function togglePopHide() {
     if (!P.el) { toast('Select an element first.'); return; }
+    record();
     P.hide = !P.hide;
     if (P.hide) setInline(P.el, 'display', 'none'); else restoreInline(P.el, 'display');
     updateHideButton();
@@ -2440,7 +2840,7 @@
     hideBar();
     const panel = q('.panel');
     if (panel) panel.style.visibility = '';
-    if (keep && after && after !== before) P.textEdit = { before, after };
+    if (keep && after && after !== before) { record(); P.textEdit = { before, after }; }
     else { el.textContent = P.textEdit ? P.textEdit.after : before; if (!P.textEdit) P.textEdit = null; }
     renderStrips();
   }
@@ -2458,6 +2858,7 @@
       if (x !== y) diffs.push({ prop: p, from: clip(x, 60), to: clip(y, 60) });
     }
     const info = targetInfo(r.el);
+    record();
     P.match = { label: info.label, selector: info.selector, src: info.src, diffs: diffs.slice(0, 12) };
     if (q('.match-all')?.checked) for (const el of P.els) visitElement(el, () => {
       const style = getComputedStyle(el);
@@ -2501,6 +2902,7 @@
     const picked = await pickOne('Click a different measurement target. Esc keeps the previous target.',
       (el) => { if (el && el !== source) drawMeasure(source.getBoundingClientRect(), el.getBoundingClientRect()); });
     if (!picked || !picked.el || picked.el === source) { renderAnn(); return; }
+    record();
     const m = measureRects(source.getBoundingClientRect(), picked.el.getBoundingClientRect());
     const info = targetInfo(picked.el);
     P.measures[index] = { label: info.label, selector: info.selector, ...m, summary: measureText(m) };
@@ -2510,19 +2912,56 @@
     renderAnn();
   }
 
-  async function startMeasureTo() {
+  const canMeasure = () => !!S.pop && !isRegionPop() && !(P.item && !P.els.length && !P.cleared);
+
+  // Clicking Measure starts right away, based on what is selected:
+  // none → pick the first element, then the second; one → pick the second;
+  // two → measure between them; three or more → choose the pair in the panel.
+  async function startMeasureFlow() {
+    if (!canMeasure()) return;
+    if (P.els.length >= 3) { renderMeasurePanel(); toast('Choose which two selected elements to measure between.'); return; }
+    if (P.els.length === 2) { measureBetween(P.el, P.els.find((e) => e !== P.el)); return; }
+    if (!P.els.length) {
+      const first = await pickOne('Measure: click the first element (1 of 2). Esc cancels.');
+      if (!first?.el || !S.pop) { renderAnn(); return; }
+      setTarget({ els: [first.el] });
+      activeTool = 'measure';
+      syncToolPanels();
+    }
+    await startMeasureTo(true);
+  }
+
+  async function startMeasureTo(second) {
     if (!P.el) return;
     const a = P.el;
-    const r = await pickOne('Measure: hover to preview the distance, click the element to record it. Esc cancels.', (el) => { if (el && el !== a) drawMeasure(a.getBoundingClientRect(), el.getBoundingClientRect()); });
-    if (!r || !r.el || r.el === a) { renderAnn(); return; }
-    const m = measureRects(a.getBoundingClientRect(), r.el.getBoundingClientRect());
-    const info = targetInfo(r.el);
+    const r = await pickOne(`Measure: ${second ? 'click the second element (2 of 2)' : 'click the element to measure to'}. Hover to preview the distance. Esc cancels.`, (el) => { if (el && el !== a) drawMeasure(a.getBoundingClientRect(), el.getBoundingClientRect()); });
+    if (!r || !r.el || r.el === a || !S.pop) { renderAnn(); return; }
+    measureBetween(a, r.el);
+  }
+
+  // Records a measurement on the "from" element (it becomes the instance being edited).
+  function measureBetween(a, b) {
+    if (!a || !b || a === b) return;
+    if (a !== P.el && P.els.includes(a)) chooseElement(P.els.indexOf(a));
+    if (a !== P.el) return;
+    const info = targetInfo(b);
+    activeTool = 'measure';
+    const existing = P.measures.findIndex((m) => m.selector === info.selector);
+    if (existing >= 0) {
+      visibleMeasureIndex = existing;
+      syncToolPanels();
+      renderAnn();
+      toast('Already measured. Showing it on the page.');
+      return;
+    }
+    record();
+    const m = measureRects(a.getBoundingClientRect(), b.getBoundingClientRect());
     P.measures.push({ label: info.label, selector: info.selector, ...m, summary: measureText(m) });
     visibleMeasureIndex = P.measures.length - 1;
-    activeTool = 'measure';
     renderStrips();
     syncToolPanels();
     renderAnn();
+    renderElementEditor();
     // The results are above the actions. Reveal them without moving the page.
     const pop = q('.pop');
     const strip = q('.tool-measure-list');
@@ -2530,6 +2969,13 @@
       const distance = strip.getBoundingClientRect().top - pop.getBoundingClientRect().top;
       pop.scrollTop = Math.max(0, pop.scrollTop + distance - 12);
     }
+  }
+
+  function measureChosenPair() {
+    const from = P.els[+q('.m-from')?.value];
+    const to = P.els[+q('.m-to')?.value];
+    if (!from || !to || from === to) { toast('Choose two different elements.'); return; }
+    measureBetween(from, to);
   }
 
   // ------------------------------------------------------------------ design overlay
@@ -2720,9 +3166,9 @@
       marks: P.marks.length ? P.marks.map((m) => JSON.parse(JSON.stringify(m))) : undefined,
       auto: P.auto ? true : undefined,
     };
-    let defaultNote = '';
     const marks = P.marks.slice();
     const marksDirty = P.marksDirty;
+    const history = undoStack;
     if (!region && P.el) {
       f.scope = scopeInfo();
       const tw = Object.values(P.tweaks);
@@ -2738,14 +3184,8 @@
       f.also = P.els.length > 1 ? P.els.slice(1).map(alsoInfo) : undefined;
       f.elementEdits = elementFields();
       for (const key of ['scope', 'tweaks', 'textEdit', 'hidden', 'match', 'move', 'align', 'measures']) f[key] = undefined;
-      if (P.move) defaultNote = `Move this ${posText[P.move.position]} ${P.move.to.label}`;
-      else if (P.textEdit) defaultNote = `Change the text to \u201c${P.textEdit.after}\u201d`;
-      else if (P.hide) defaultNote = 'Remove this element';
-      else if (al.length) defaultNote = `Align to guide ${al[0].guide}`;
-      else if (tw.some((t) => !t.snap)) defaultNote = `Use the previewed style values (${tw.filter((t) => !t.snap).map((t) => t.prop).join(', ')})`;
     }
-    if (!defaultNote && f.elementEdits?.some((e) => hasPreview(e) || e.move || e.match || e.align.length || e.measures.length)) defaultNote = 'Apply the recorded per-element corrections';
-    if (!defaultNote && marks.length) defaultNote = 'See the marks drawn on the page';
+    const hasContent = !!(changeBits(f).length || refBits(f).length);
     // Inspect the element as the source has it, without our live previews applied.
     const liveEdits = f.elementEdits || [];
     const around = (fn) => {
@@ -2754,11 +3194,17 @@
       apply(false); applyAllPreviews(true);
       try { return fn(); } finally { applyAllPreviews(); apply(true); }
     };
+    // A saved note whose first element changed (Shift-click) gets that element's details refreshed.
+    const it0 = ps.item;
+    if (it0 && !region && P.els[0] && it0.kind !== 'page' && BL.cssPath(P.els[0]) !== it0.el?.selector) {
+      try { const d = around(() => BL.describe(P.els[0], it0.type)); f.el = d.el; f.styling = d.styling; } catch { /* keep the old details */ }
+    }
 
     return {
-      fields: f, defaultNote, around,
+      fields: f, hasContent, around,
       commit: () => { P.committed = true; },
       onSaved: async (it) => {
+        rememberHistory(it.id, history);
         BL.savePrefs();
         applyItemPreview(it, S.prefs.previews !== false);
         if (marksDirty) {
@@ -2771,8 +3217,63 @@
     };
   };
 
-  hooks.onItemDeleted = (it) => { applyItemPreview(it, false); };
-  hooks.onClear = () => { applyAllPreviews(true); };
+  // ------------------------------------------------------------------ note content without written text
+  // Requested changes vs. reference-only content (measurements, sampled colors). Works on collected
+  // fields and on saved items, including per-instance elementEdits.
+
+  function editChanges(e) {
+    const out = [];
+    const css = (e.tweaks || []).filter((t) => !t.snap).map((t) => t.prop);
+    if (css.length) out.push(`CSS ${css.join(', ')}`);
+    if (e.textEdit) out.push(`text → “${clip(e.textEdit.after, 30)}”`);
+    if (e.hidden) out.push('remove the element');
+    if (e.match) out.push(`match the style of ${e.match.label}`);
+    if (e.move) out.push(`move ${posText[e.move.position]} ${e.move.to.label}`);
+    for (const a of e.align || []) out.push(`align ${a.edge} to guide ${a.guide}`);
+    return out;
+  }
+
+  function changeBits(it) {
+    const out = editChanges(it);
+    for (const e of it.elementEdits || []) out.push(...editChanges(e));
+    const drawn = (it.marks || []).filter((m) => !m.auto);
+    if (drawn.length) out.push(`drawn on the page: ${marksSummary(drawn)}`);
+    if (it.variant) out.push(`wire to variant “${it.variant.title}”`);
+    return out;
+  }
+
+  function refBits(it) {
+    const n = (it.measures || []).length + (it.elementEdits || []).reduce((s, e) => s + (e.measures || []).length, 0);
+    const out = [];
+    if (n) out.push(plural(n, 'reference measurement'));
+    if (it.colors?.length) out.push(plural(it.colors.length, 'sampled color'));
+    return out;
+  }
+
+  const isReference = (it) => !it.note && !changeBits(it).length;
+  hooks.isReference = isReference;
+
+  hooks.noteFallback = (it) => {
+    const ch = changeBits(it);
+    const rf = refBits(it);
+    if (ch.length) return `**Note:** none written. The requested change is given by the annotations below: ${ch.join('; ')}.${rf.length ? ` Context only, not changes: ${rf.join(', ')}.` : ''}`;
+    return `**Note:** none written. **Reference only** (${rf.join(', ') || 'annotations'}): these record the page as it is now. Don’t change anything for this item; use the values as context for the other items.`;
+  };
+
+  // Shown in the note list when no text was written.
+  const noteSummary = (it) => [...changeBits(it), ...refBits(it)].join(' · ') || 'No description';
+
+  hooks.popHasWork = () => {
+    if (!S.pop) return false;
+    if (P.item) return true;
+    rememberElement();
+    if (P.marks.some((m) => !m.auto) || P.colors.length) return true;
+    for (const r of P.edits.values()) if (Object.keys(r.tweaks).length || r.textEdit || r.hide || r.match || r.move || Object.keys(r.align).length || r.measures.length) return true;
+    return false;
+  };
+
+  hooks.onItemDeleted = (it) => { applyItemPreview(it, false); forgetHistory(it.id); };
+  hooks.onClear = () => { applyAllPreviews(true); histories.clear(); historyOrder = []; };
 
   hooks.focusRegion = (it) => {
     if (it.path !== here()) { BL.openPop(null, it); return; }
@@ -2828,10 +3329,12 @@
     if (items.some((i) => i.move)) key.push('**Move**: relocate the element to the destination shown. Keep its markup and styles, and adjust any layout that depended on its old spot.');
     if (items.some(showsScope)) key.push('**Scope** says how far a style change reaches: this one only, everything like it inside a container, or everywhere.');
     if (items.some((i) => (i.tweaks && i.tweaks.some((t) => !t.snap)) || i.textEdit)) key.push('**Previewed** values were tried live in the browser and approved by the author. Treat them as the target, using existing tokens, variables, or utility classes instead of hardcoding.');
-    if (items.some((i) => i.marks && i.marks.length)) key.push('**Drawn marks** (boxes, arrows, text) show where something belongs. Use the marked-up screenshot together with the text description.');
+    if (items.some((i) => refBits(i).length)) key.push('**Reference measurements** and sampled colors record the page as it is now. They are context, not change requests. Act on them only when the note or another annotation asks for a change. Items marked **(reference only)** need no edits.');
+    if (items.some((i) => !i.note)) key.push('Some items have **no written note**. Their requested change is fully described by their annotations (previewed values, moves, alignment, drawings).');
+    if (items.some((i) => (i.marks || []).some((m) => !m.auto))) key.push('**Drawn marks** (boxes, arrows, text) show where something belongs. Use the marked-up screenshot together with the text description.');
     if (items.some((i) => i.also && i.also.length)) key.push('**Multiple elements**: when a note lists "also applies to", make the same change to every listed element.');
     if (items.some((i) => i.priority === 'nice')) key.push('**Nice to have** items come last. Skip any that would put the must-fix items at risk.');
-    if (items.some((i) => i.figma)) key.push('Some items carry **Figma links**. If a Figma MCP is available, read those frames for exact values before editing.');
+    if (items.some((i) => i.figma)) key.push('Some items carry **Figma links**. If you can open those frames, use them for exact values before editing.');
     if (key.length) L.push('', '## Annotation key', ...key.map((k) => `- ${k}`));
     const gs = batch?.guides || [];
     if (gs.length) {
@@ -2885,10 +3388,11 @@
       const dir = a.axis === 'x' ? (a.offset >= 0 ? 'right of' : 'left of') : a.offset >= 0 ? 'below' : 'above';
       add(`Align its ${a.edge}${a.edge === 'center' || a.edge === 'middle' ? '' : ' edge'} to guide ${a.guide} (${a.axis === 'x' ? 'vertical at x' : 'horizontal at y'}=${a.guidePos}px). ${a.offset === 0 ? 'It is already on the guide; keep it there.' : `It is currently ${Math.abs(a.offset)}px ${dir} the guide. The author previewed the snap with a ${a.shift}px translate; implement it with real layout (alignment, margin, grid or flex), not a transform.`}`);
     }
-    for (const m of it.measures || []) add(`Measured to ${ref(m.label, m.selector)}: ${m.summary}`);
+    for (const m of it.measures || []) add(`Reference measurement to ${ref(m.label, m.selector)} (current layout, not a change by itself): ${m.summary}`);
     if (it.colors?.length) add(`Sampled colors: ${it.colors.map(code).join(', ')}`);
-    if (it.auto) add('Selected by circling an area on the page, so the target was matched automatically. Confirm it against the marked-up screenshot.');
-    if (it.marks?.length) { add(`Drawn on the page: ${marksSummary(it.marks)}. See the marked-up screenshot.`); for (const m of it.marks.filter((m) => m.t === 'arrow')) add(`Arrow ${m.c}: page coordinates (${rnd(m.a.x)}, ${rnd(m.a.y)}) → (${rnd(m.b.x)}, ${rnd(m.b.y)}).`); }
+    if (it.auto) add('Selected by dragging a rectangle over an area of the page, so the target was matched automatically. Confirm it against the marked-up screenshot.');
+    const drawn = (it.marks || []).filter((m) => !m.auto);
+    if (drawn.length) { add(`Drawn on the page: ${marksSummary(drawn)}. See the marked-up screenshot.`); for (const m of drawn.filter((m) => m.t === 'arrow')) add(`Arrow ${m.c}: page coordinates (${rnd(m.a.x)}, ${rnd(m.a.y)}) → (${rnd(m.b.x)}, ${rnd(m.b.y)}).`); }
     if (it.figma) add(`Figma: ${it.figma}`);
     if (it.variant) {
       const v = it.variant;
@@ -2902,7 +3406,7 @@
   BL.toolsApi = {
     elementFields, chooseElement, rememberElement, restoreElementRecord, visitElement, arrowHit, editArrowPointer, setDrawingColor, applyItemPreview, revertLive, removeGuide, styleInput, togglePopHide, buildAlignRows, emptyPop,
     similarSelector, similar, groupOptions, scopeInfo, tokenHint, spacingClasses, regionContext, measureRects, measureText, parseCSV, sheetFromRows, checkPrices,
-    normForVar, stepVal, normInput, priceReportText, scopeLines, marksSummary, snapTo, autoSelect, startSelect, startCircle, T, A, D, getP: () => P, setP: (p) => { P = p; }, setAnnotate, setTarget, makeDraggable,
+    normForVar, stepVal, normInput, priceReportText, scopeLines, marksSummary, snapTo, autoSelect, startSelect, startArea, T, A, D, getP: () => P, setP: (p) => { P = p; }, setAnnotate, setTarget, makeDraggable,
   };
 
   if (S.ui) hooks.onMount(S.ui.root);
