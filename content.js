@@ -1,5 +1,5 @@
-/* Blueline v0.5 — content script (core; the annotation tools live in tools.js)
- * Pick elements, note what should change, export an analysis prompt for Claude Code.
+/* Blueline v0.6 — content script (core; the annotation tools live in tools.js)
+ * Pick elements, note what should change, export a webpage change request for a developer or any AI coding assistant.
  * Modes: Shopify/Shogun, Next.js/React, plain HTML/CSS/JS (detected per page).
  * All UI lives in a shadow root so site CSS can't touch it.
  */
@@ -14,6 +14,7 @@
   const ARM_KEY = '__blueline_armed';
   const shotKey = (id) => `blueline:shot:${id}`;
   const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
+  const VERSION = (() => { try { return chrome.runtime.getManifest().version; } catch { return '?'; } })();
   const INK = '#2B4EFF';
   const TYPES = [
     { id: 'bug', label: 'Bug', ui: 'Broken', tip: 'Something is broken or behaves wrongly' },
@@ -663,7 +664,7 @@
       '**Finding source (React):** "Rendered at" is where the element\u2019s JSX lives, read from the dev build. Trust it over the selector. Components run outermost to innermost.',
     ],
     html: [
-      '**Finding source (static HTML/CSS/JS):** search the repo for the element\u2019s id, distinctive classes, or visible text. "Matched rules" lists the stylesheet rules that currently apply, last one wins. Edit those rules rather than stacking overrides.',
+      '**Finding source (static HTML/CSS/JS):** search the source for the element\u2019s id, distinctive classes, or visible text. "Matched rules" lists the stylesheet rules that currently apply, last one wins. Edit those rules rather than stacking overrides.',
     ],
   };
 
@@ -676,7 +677,12 @@
     const styling = [...new Set(items.flatMap((i) => i.styling || []))];
     const L = [];
 
-    L.push(`# QC batch: ${plural(items.length, 'change')} on ${plural(pages.size, 'page')}`);
+    L.push('# Webpage Change Request');
+    L.push(`${plural(items.length, 'item')} on ${plural(pages.size, 'page')}.`);
+    L.push('', '## Page');
+    try { L.push(`- Site: ${new URL(lead.url).origin}`); } catch { /* ignore */ }
+    L.push(`- ${pages.size === 1 ? 'Page' : 'Pages'}: ${[...pages].map((x) => code(x)).join(', ')}`);
+    if (lead.title) L.push(`- Title: ${lead.title}`);
     const stack = [];
     if (modes.includes('shopify')) stack.push(`Shopify theme${p.theme ? ` "${p.theme.name}" (${p.theme.role}, id ${p.theme.id})` : ''}${p.shop ? ` on ${p.shop}` : ''}`);
     if (modes.includes('next')) {
@@ -686,22 +692,20 @@
     if (modes.includes('react')) stack.push('React app');
     if (modes.includes('html')) stack.push('static HTML/CSS/JS');
     if (styling.length) stack.push(`styling looks like ${styling.join(' + ')}`);
-    L.push(`Detected from the running page: ${stack.join('; ')}.`);
-    try { L.push(`Previewed at: ${new URL(lead.url).origin}`); } catch { /* ignore */ }
-    if (items.some((i) => i.el?.react?.minified)) L.push('Warning: component names look minified. This was captured from a production build, so use the dev server for exact sources.');
+    L.push(`- Detected technology (from the live page, may be incomplete): ${stack.join('; ')}`);
+    if (items.some((i) => i.el?.react?.minified)) L.push('- Component names look minified (captured from a production build), so component sources may be inexact.');
 
-    L.push('', '## How to work');
-    L.push('You\u2019re in the project root. Before editing, confirm the stack from `package.json` and the folder layout (detection can be wrong), and read `CLAUDE.md` if there is one.');
-    L.push('1. Read the whole batch, then plan the changes grouped by file.');
-    L.push('2. Work in the suggested order: bugs, then polish, then copy, then features.');
-    L.push('3. Polish and copy items are visual or text only. Don\u2019t change logic or data for them.');
-    L.push('4. Before changing a shared component, check where else it\u2019s used. Prefer a prop, variant, or call-site class over editing the shared default, and say which you chose.');
-    L.push('5. Scope layout fixes to the breakpoint noted unless the note says otherwise.');
-    L.push('6. "Detected" lines come from automated checks. Fix them when they relate to the note, and mention the rest without fixing them.');
-    L.push('7. When done, run the project\u2019s lint and typecheck scripts if they exist.');
-    L.push('8. Report each item number with the files changed and a one-line summary. Call out anything skipped, not found, or interpreted.');
-    L.push('');
-    for (const m of modes) L.push(...GUIDE[m]);
+    L.push('', '## How to read this request');
+    L.push('1. Each numbered item is one request about the page and element(s) it names. Items marked **(reference only)** document the page and need no change.');
+    L.push('2. Find each element in the source using its selector, visible text, and any source hints. Confirm it is the right element before changing it.');
+    L.push('3. Suggested order: bugs, then polish, then copy, then features.');
+    L.push('4. Polish and copy items are visual or text only. Don\u2019t change logic or data for them.');
+    L.push('5. Before changing something shared (a component, template, or style rule), check where else it is used. Prefer a change scoped to the item, and note which you chose.');
+    L.push('6. Limit layout changes to the screen size noted unless the item says otherwise.');
+    L.push('7. "Detected" lines come from automated checks. Fix them when they relate to the item; otherwise just mention them.');
+    L.push('8. When reporting back, list each item number with what changed, and call out anything skipped, not found, or interpreted.');
+    L.push('', '## Finding the source', 'Hints based on the technology detected on the page:');
+    for (const m of modes) L.push(...GUIDE[m].map((g) => `- ${g}`));
 
     // ---- overview
     L.push('', '## Overview');
@@ -738,8 +742,8 @@
       const v = it.viewport || {};
       const rx = e.react;
       L.push('', '---', '');
-      L.push(`## ${i + 1}. ${typeLabel(it.type || 'polish')}${it.kind && it.kind !== 'element' ? ' · ' + it.kind : ''}${it.priority === 'nice' ? ' (nice to have)' : ''}: ${it.path}  (${it.bps && it.bps.length ? (it.bps.length === 3 ? 'all breakpoints' : it.bps.join(' + ')) : bp(v.w)}, ${v.w}×${v.h})`);
-      L.push(`**Note:** ${it.note}`);
+      L.push(`## ${i + 1}. ${typeLabel(it.type || 'polish')}${it.kind && it.kind !== 'element' ? ' · ' + it.kind : ''}${it.priority === 'nice' ? ' (nice to have)' : ''}${BL.hooks.isReference?.(it) ? ' (reference only)' : ''}: ${it.path}  (${it.bps && it.bps.length ? (it.bps.length === 3 ? 'all breakpoints' : it.bps.join(' + ')) : bp(v.w)}, ${v.w}×${v.h})`);
+      L.push(it.note ? `**Note:** ${it.note}` : BL.hooks.noteFallback ? BL.hooks.noteFallback(it) : '**Note:** none written. See the annotations below.');
       if ((it.kind === 'region' || it.kind === 'page') && BL.hooks.promptRegion) {
         L.push(...BL.hooks.promptRegion(it));
         if (BL.hooks.promptItem) L.push(...BL.hooks.promptItem(it, i, items));
@@ -1003,7 +1007,7 @@
     <div class="pins"></div>
     <section class="panel" aria-label="Blueline QC">
       <header class="bar">
-        <button class="brand" data-act="collapse" title="Show or hide the list"><span class="mark"></span>Blueline <span class="count"></span><span class="mode"></span></button>
+        <button class="brand" data-act="expand" title="Blueline"><span class="mark"></span>Blueline <span class="count"></span><span class="mode"></span></button>
         <div class="tools">
           <button class="icon" data-act="side" title="Move panel to the other side" aria-label="Move panel">⇆</button>
           <button class="icon" data-act="collapse" title="Minimize" aria-label="Minimize">–</button>
@@ -1043,7 +1047,7 @@
     </div>
     <div class="modal" hidden>
       <div class="sheet" role="dialog" aria-label="Export prompt">
-        <header class="sheet-head"><h2>Claude Code prompt</h2><button class="icon" data-act="modal-close" aria-label="Close">✕</button></header>
+        <header class="sheet-head"><h2>Webpage change request</h2><button class="icon" data-act="modal-close" aria-label="Close">✕</button></header>
         <label class="opt"><input type="checkbox" class="opt-shots"> Save screenshots to Downloads and add their paths</label>
         <textarea class="out" readonly spellcheck="false"></textarea>
         <footer class="sheet-foot">
@@ -1091,7 +1095,12 @@
       if (typeBtn) { setPopType(typeBtn.dataset.type); return; }
       const actEl = e.target.closest('[data-act]');
       const li = e.target.closest('.item');
+      // A minimized panel expands from a click anywhere on its title bar except the other header buttons.
+      if (S.prefs.collapsed && e.target.closest('.bar') && (!actEl || actEl.dataset.act === 'expand') && !e.target.closest('.tools button')) {
+        S.prefs.collapsed = false; savePrefs(); render(); return;
+      }
       switch (actEl?.dataset.act) {
+        case 'expand': return;
         case 'pick': setPicking(!S.picking); return;
         case 'side': S.prefs.side = S.prefs.side === 'left' ? 'right' : 'left'; savePrefs(); render(); return;
         case 'collapse': S.prefs.collapsed = !S.prefs.collapsed; savePrefs(); render(); return;
@@ -1123,7 +1132,8 @@
     root.addEventListener('keydown', (e) => {
       if (S.pop && e.target.classList?.contains('pop-note')) {
         if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); savePop(); }
-        else if (e.key === 'Escape') { e.preventDefault(); if (e.target.value.trim()) e.target.blur(); else closePop(); }
+        // Esc never throws away annotations: it only closes a note that has nothing in it yet.
+        else if (e.key === 'Escape') { e.preventDefault(); if (e.target.value.trim() || BL.hooks.popHasWork?.()) e.target.blur(); else closePop(); }
       } else if (e.key === 'Escape' && !S.ui.$('.modal').hidden) {
         closeModal();
       } else if (e.key === 'Enter' && e.target.classList?.contains('item')) {
@@ -1142,6 +1152,10 @@
     const panel = $('.panel');
     panel.classList.toggle('left', S.prefs.side === 'left');
     panel.classList.toggle('collapsed', !!S.prefs.collapsed);
+    const min = $('.tools [data-act="collapse"]');
+    min.title = S.prefs.collapsed ? 'Expand' : 'Minimize';
+    min.setAttribute('aria-label', min.title);
+    $('.brand').title = S.prefs.collapsed ? `Expand Blueline ${VERSION}` : `Blueline ${VERSION}`;
     $('.count').textContent = items.length || '';
     $('.mode').textContent = MODE_LABEL[modeOf(S.page)];
     $('.empty').hidden = items.length > 0;
@@ -1463,11 +1477,13 @@
     const ta = S.ui.$('.pop-note');
     const popState = S.pop;
     const extra = BL.hooks.collect ? BL.hooks.collect(popState) : { fields: {} };
-    let note = ta.value.trim();
-    if (!note && extra.defaultNote) note = extra.defaultNote;
-    if (!note) {
+    const blocked = BL.hooks.blockSave?.();
+    if (blocked) { toast(blocked); return; }
+    const note = ta.value.trim();
+    // Annotations (measurements, drawings, alignment, CSS, element actions) can stand on their own.
+    if (!note && !extra.hasContent) {
       ta.classList.add('need');
-      ta.placeholder = 'Add a note first';
+      ta.placeholder = 'Describe the change, or add an annotation first';
       ta.focus();
       return;
     }
@@ -1631,7 +1647,7 @@
       S.copyT = setTimeout(() => { cb.textContent = old; cb.classList.remove('done'); }, 2400);
     }
     S.ui.$('.status').textContent = 'Copied to clipboard ✓';
-    toast('Copied to clipboard. Paste it into Claude Code.');
+    toast('Copied to clipboard.');
   }
 
   async function saveMd() {
@@ -1644,7 +1660,7 @@
     const path = res?.paths?.[0]?.path;
     if (path) {
       S.ui.$('.status').textContent = `Saved ${path}`;
-      toast('Saved. Point Claude Code at prompt.md');
+      toast('Saved prompt.md');
     } else {
       toast(res?.error ? `Couldn\u2019t save: ${res.error}` : 'Couldn\u2019t save the file');
     }
@@ -1660,6 +1676,8 @@
       S.page = hook('page') || {};
       S.lastRenderPath = currentPath();
       await loadState();
+      S.prefs.collapsed = false; // turning Blueline on always opens it expanded
+      console.info(`Blueline ${VERSION} on`);
       mount();
       attach();
       render();
@@ -1675,7 +1693,17 @@
   }
 
   chrome.runtime.onMessage.addListener((msg) => {
-    if (msg?.type === 'blueline:set-active') setActive(msg.on);
+    if (msg?.type === 'blueline:set-active' && !S.retired) setActive(msg.on);
+  });
+
+  // After the extension is reloaded, Chrome leaves the old scripts running in open tabs and may inject
+  // the new ones next to them. The newest copy announces itself; any older copy shuts down completely,
+  // so stale code can never keep handling clicks on the page.
+  document.dispatchEvent(new CustomEvent('blueline:supersede'));
+  document.addEventListener('blueline:supersede', () => {
+    if (S.retired) return;
+    S.retired = true;
+    setActive(false);
   });
 
   Object.assign(BL, {
