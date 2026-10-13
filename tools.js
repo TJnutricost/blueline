@@ -59,7 +59,7 @@
   const isRegionPop = () => !!(S.pop && (S.pop.region || S.pop.item?.kind === 'region'));
   const setOn = (x, on) => { const b = q(`[data-x="${x}"]`); if (b) b.classList.toggle('on', !!on); };
   const textOf = (e, n = 24) => clip((e.innerText ?? e.textContent ?? '').replace(/\s+/g, ' ').trim(), n);
-  const pickable = (e) => (e.target instanceof Element && e.target !== document.documentElement && e.target !== document.body && !mine(e.target) ? e.target : null);
+  const pickable = (e) => (e.target instanceof Element && e.target !== document.documentElement && e.target !== document.body && !mine(e.target) ? pointTarget(e.clientX, e.clientY) || e.target : null);
 
   // Keep the existing tool functions focused on one active element. Records are
   // keyed by DOM instance while composing, and by the existing selector on disk.
@@ -1055,7 +1055,8 @@
     const add = mk('<button class="addnote" data-x="add-note" title="Open a new note. You can attach it to an element, or keep it as a general note"><span class="an-label">＋ Add note</span></button>');
     const startRow = mk(`<div class="startrow"><div class="sub">Or start straight from the page:</div><div class="sbtns">
       <button class="sbtn" data-x="start-select" title="Click an element on the page to attach a note to it (Alt+P)"><b>Select element</b><span>Click it on the page</span></button>
-      <button class="sbtn" data-x="start-area" title="Drag a rectangle over an element, several elements, or an empty spot. Blueline finds the elements inside it"><b>Select area</b><span>Drag a rectangle</span></button></div></div>`);
+      <button class="sbtn" data-x="start-area" title="Drag a rectangle over an element, several elements, or an empty spot. Blueline finds the elements inside it"><b>Select area</b><span>Drag a rectangle</span></button></div>
+      <div class="sub">Tip: Shift+click to select an element. Shift+drag to select an area.</div></div>`);
     body.insertBefore(add, body.firstChild);
     add.after(startRow);
     body.appendChild(root.querySelector('.x-tools'));
@@ -1254,7 +1255,7 @@
   function onEvt(e) {
     if (!S.active) return;
     if ((e.type === 'pointermove' || e.type === 'pointerdown') && e.shiftKey !== T.shiftHeld) { T.shiftHeld = e.shiftKey; syncCursor(); }
-    if (e.type === 'pointermove') { T.lastPt = { x: e.clientX, y: e.clientY }; shiftHover(BL.fromUI(e) ? null : pickable(e)); }
+    if (e.type === 'pointermove') { T.lastPt = { x: e.clientX, y: e.clientY }; shiftHover(BL.fromUI(e) || !(T.shiftHeld && shiftReady()) ? null : pickable(e)); }
     if (T.eatClick && !(T.pick || A.on || D.tool) && /^(click|mouseup|dblclick|auxclick)$/.test(e.type) && !BL.fromUI(e)) {
       if (e.type === 'click') T.eatClick = false;
       e.preventDefault();
@@ -1341,15 +1342,19 @@
     if (tool && S.pop && !activeTool) { activeTool = tool; syncToolPanels(); }
   }
 
+  // What a drag adds to the current selection: not what is already selected, and not a container of
+  // something already selected (its parts are what was picked; Shift+click selects a container on purpose).
+  const addFound = (els) => [...P.els, ...els.filter((x) => !P.els.includes(x) && !P.els.some((s) => x.contains(s)))];
+
   function shiftArea(vr) {
-    const found = autoSelect(vr);
-    if (S.pop && lockedTarget()) return;
     const adding = !!(S.pop && P.els.length && !isRegionPop());
-    if (adding && !found.els.some((x) => !P.els.includes(x))) { toast(found.els.length ? 'Everything in that area is already selected.' : 'No elements found in that area.'); return; }
+    const found = autoSelect(vr, adding ? P.els : []);
+    if (S.pop && lockedTarget()) return;
+    if (adding && addFound(found.els).length === P.els.length) { toast(found.els.length ? 'Everything in that area is already selected.' : 'No elements found in that area.'); return; }
     if (!S.pop) openForShift();
     const tool = activeTool;
     recordSelection();
-    if (P.item) setTarget({ els: [...P.els, ...found.els.filter((x) => !P.els.includes(x))], auto: true });
+    if (P.item) setTarget({ els: addFound(found.els), auto: true });
     else areaDone(vr, adding, found);
     if (tool && S.pop && !activeTool) { activeTool = tool; syncToolPanels(); }
   }
@@ -1401,8 +1406,18 @@
       if (T.pick) endPick(null);
       else if (D.tool) stopDrawing();
       else setAnnotate(false);
+      return;
+    }
+    // With nothing in progress, Esc clears the open note's selection (one undo step; the note, its text and
+    // annotations stay). Text fields, Blueline's own dialogs and an open page modal keep their Esc, and with
+    // nothing selected the page gets it as usual.
+    if (e.key === 'Escape' && canClearSelection() && !typingIn(e) && !uiDialogOpen() && !openModal() && !pageCover()) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      clearSelection();
     }
   }
+  const uiDialogOpen = () => !!S.ui && [...S.ui.root.querySelectorAll('.modal, .xmodal')].some((m) => !m.hidden);
 
   function onKeyUp(e) {
     if (e.type === 'keyup' && e.key !== 'Shift') return;
@@ -1425,8 +1440,7 @@
   }
   function shiftHoverAtPointer() {
     if (!T.lastPt) return;
-    const el = document.elementFromPoint(T.lastPt.x, T.lastPt.y);
-    shiftHover(el && !mine(el) && el !== document.documentElement && el !== document.body ? el : null);
+    shiftHover(pointTarget(T.lastPt.x, T.lastPt.y));
   }
 
   // The crosshair shows while a tool or a Shift selection is in progress, or while Shift is held and
@@ -1459,8 +1473,117 @@
 
   const isPlainWrapper = (e, cs) => !SELF_CONTAINED.test(e.tagName) && !hasBox(cs) && !ownText(e);
 
+  // ------------------------------------------------------------------ point selection
+  // Which element is the person pointing at? The browser's hit target is the topmost element that takes
+  // pointer events, which is often not what is visible there: a transparent cover link or tint layer,
+  // a container's ::before/::after, a text layer with pointer-events: none, an invisible slide.
+  // Prefer the most specific thing actually shown at the point; over empty space, the container there.
+  const MEDIA = /^(IMG|SVG|VIDEO|CANVAS|IFRAME|PICTURE|OBJECT|EMBED|INPUT|SELECT|TEXTAREA)$/i;
+  const MEDIA_SEL = 'img, svg, video, canvas, iframe, picture, object, embed, input, select, textarea';
+  const inRect = (r, x, y) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  const seen = (e) => !e.checkVisibility || e.checkVisibility({ opacityProperty: true, visibilityProperty: true });
+  // An SVG's shapes stand for the whole graphic.
+  const outerSvg = (e) => { let s = e instanceof SVGElement ? e.closest('svg') : null; while (s?.parentElement?.closest('svg')) s = s.parentElement.closest('svg'); return s || e; };
+
+  // Something of its own is visible at the point: an image or control, a styled button or link, or its own text.
+  function showsAt(e, x, y) {
+    const r = e.getBoundingClientRect();
+    if (!inRect(r, x, y)) return false;
+    if (MEDIA.test(e.tagName)) return true;
+    const cs = getComputedStyle(e);
+    if (/^(A|BUTTON|LABEL|SUMMARY)$/.test(e.tagName) && hasBox(cs) && e.textContent.trim()) return true;
+    return ownText(e) && inRect(visibleRect(e, r, cs), x, y);
+  }
+
+  // See-through and empty: no text, image or control inside, and at most a light tint (cover links, tint
+  // layers, empty positioning shells). Gradients, pictures and blur count as covering what is beneath:
+  // sticky headers often fade the content under them with an empty gradient layer.
+  function hollow(e) {
+    if (MEDIA.test(e.tagName) || e.textContent.trim() || e.querySelector(MEDIA_SEL)) return false;
+    const cs = getComputedStyle(e);
+    return cs.backgroundImage === 'none' && (!cs.backdropFilter || cs.backdropFilter === 'none') && (BL.rgba(cs.backgroundColor)?.a ?? 0) <= 0.6;
+  }
+
+  // An open modal is a selection boundary: what is behind it can't be picked, even through a see-through
+  // backdrop. A native <dialog> opened with showModal() says so itself. Otherwise a backdrop is a layer
+  // fixed to the viewport and covering nearly all of it (unlike a hero tint or card link, which are local).
+  const openModal = () => { try { return document.querySelector(':modal'); } catch { return null; } };
+  function coversPage(e) {
+    const r = e.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth || innerWidth;
+    const vh = document.documentElement.clientHeight || innerHeight;
+    const w = Math.min(r.right, vw) - Math.max(r.left, 0);
+    const h = Math.min(r.bottom, vh) - Math.max(r.top, 0);
+    if (w <= 0 || h <= 0 || w * h < 0.8 * vw * vh) return false;
+    for (let p = e; p && p !== document.body; p = p.parentElement) if (getComputedStyle(p).position === 'fixed') return true;
+    return false;
+  }
+  // The page-covering layer currently on top, if any (checked at the viewport corners).
+  function pageCover() {
+    const vw = document.documentElement.clientWidth || innerWidth;
+    const vh = document.documentElement.clientHeight || innerHeight;
+    for (const [x, y] of [[4, 4], [vw - 4, 4], [4, vh - 4], [vw - 4, vh - 4]]) {
+      const top = (document.elementsFromPoint?.(x, y) || []).find((e) => !mine(e));
+      if (top && top !== document.documentElement && top !== document.body && coversPage(top)) return top;
+    }
+    return null;
+  }
+  // Drawn behind the page-covering layer at its own visible centre?
+  function behindCover(e, cover, r) {
+    if (cover.contains(e)) return false;
+    const st = (document.elementsFromPoint?.((r.left + r.right) / 2, (r.top + r.bottom) / 2) || []).filter((s) => !mine(s));
+    const i = st.indexOf(cover);
+    return i >= 0 && !st.slice(0, i).some((s) => s === e || s.contains(e) || e.contains(s));
+  }
+
+  function pointTarget(x, y) {
+    const all = document.elementsFromPoint ? document.elementsFromPoint(x, y) : [];
+    if (all[0] && mine(all[0])) return null; // over Blueline's own window
+    const modal = openModal();
+    const stack = [];
+    for (const e of all) {
+      if (mine(e) || e === document.documentElement || e === document.body || !seen(e)) continue;
+      if (modal && !modal.contains(e)) continue;
+      const o = outerSvg(e);
+      if (!stack.includes(o)) stack.push(o);
+    }
+    if (!stack.length) return modal;
+    // Walk down the paint order. Skip what shows nothing here; stop at the first thing that shows content.
+    // A container over empty space only gives way to its own children (drawn over by its ::before/::after).
+    let hit = null;
+    let box = null;
+    for (const e of stack) {
+      if (box && !box.contains(e)) break;
+      if (showsAt(e, x, y)) { hit = e; break; }
+      if (!box && hollow(e) && coversPage(e)) return e; // a modal backdrop: stop here
+      if (!box && !hollow(e) && inRect(e.getBoundingClientRect(), x, y)) box = e;
+    }
+    if (hit && ownText(hit)) return hit;
+    // Text that ignores the pointer (pointer-events: none) never appears in the stack; look for it near
+    // what was found, drawn over it (inside it, or later in the page), and actually visible.
+    const base = hit || box || stack.find((e) => inRect(e.getBoundingClientRect(), x, y)) || stack[0];
+    let root = base;
+    for (let p = base.parentElement, n = 0; p && p !== document.body && n < 3; p = p.parentElement, n++) if (inRect(p.getBoundingClientRect(), x, y)) root = p;
+    let found = null;
+    let budget = 400;
+    const walk = (e) => {
+      for (const k of e.children) {
+        if (--budget < 0) return;
+        if (mine(k) || k instanceof SVGElement || /^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT)$/.test(k.tagName)) continue;
+        const r = k.getBoundingClientRect();
+        if (!r.width && !r.height) { if (getComputedStyle(k).display === 'contents') walk(k); continue; }
+        if (!inRect(r, x, y) || !seen(k) || (modal && !modal.contains(k) && !k.contains(modal))) continue;
+        if (!stack.includes(k) && getComputedStyle(k).pointerEvents === 'none' && ownText(k) && showsAt(k, x, y) &&
+          (base.contains(k) || (!k.contains(base) && base.compareDocumentPosition(k) & Node.DOCUMENT_POSITION_FOLLOWING))) found = k;
+        walk(k);
+      }
+    };
+    walk(root);
+    return found || base;
+  }
+
   // Which element(s) did the area selection mean? Elements inside it, else the one under its middle, else an empty area.
-  function autoSelect(vr) {
+  function autoSelect(vr, keep = []) {
     const area = (r) => Math.max(0, r.width) * Math.max(0, r.height);
     const B = { left: vr.left, top: vr.top, right: vr.right ?? vr.left + vr.width, bottom: vr.bottom ?? vr.top + vr.height, width: vr.width, height: vr.height };
     const aB = Math.max(1, area(B));
@@ -1468,10 +1591,13 @@
     const cy = (B.top + B.bottom) / 2;
     const stack = (document.elementsFromPoint ? document.elementsFromPoint(cx, cy) : []).filter((e) => !mine(e) && e !== document.documentElement && e !== document.body);
     const containsB = (r) => r.left <= B.left + 2 && r.right >= B.right - 2 && r.top <= B.top + 2 && r.bottom >= B.bottom - 2;
-    const root = stack.find((e) => containsB(e.getBoundingClientRect())) || document.querySelector('main') || document.body;
+    const modal = openModal();
+    const cover = modal ? null : pageCover();
+    const root = modal || stack.find((e) => containsB(e.getBoundingClientRect())) || document.querySelector('main') || document.body;
     const overlap = (r) => { const iw = Math.min(r.right, B.right) - Math.max(r.left, B.left); const ih = Math.min(r.bottom, B.bottom) - Math.max(r.top, B.top); return iw > 0 && ih > 0 ? iw * ih : 0; };
     const pool = [root, ...[...root.querySelectorAll('*')].slice(0, 2500)];
-    const cands = [];
+    const cands = []; // mostly inside the rectangle
+    const crossed = []; // content the rectangle clearly crosses: text, images, controls
     for (const e of pool) {
       if (e === root || mine(e) || /^(SCRIPT|STYLE|LINK|META|BR|NOSCRIPT|TEMPLATE|HEAD|TITLE|PATH|DEFS|G|USE|TSPAN)$/i.test(e.tagName)) continue;
       const raw = e.getBoundingClientRect();
@@ -1482,22 +1608,28 @@
       const r = visibleRect(e, raw, cs);
       const aE = area(r);
       const inter = overlap(r);
-      if (aE < 16 || !inter) continue;
-      if (inter / aE >= 0.6 && aE >= Math.max(64, 0.01 * aB)) cands.push({ e, cs });
+      if (aE < 64 || aE < 0.01 * aB || !inter) continue;
+      // Crossed: a good part of it, or a third of both its width and height (a band through a paragraph).
+      const across = inter / aE >= 0.3 || ((Math.min(r.right, B.right) - Math.max(r.left, B.left)) / r.width >= 0.3 && (Math.min(r.bottom, B.bottom) - Math.max(r.top, B.top)) / r.height >= 0.3);
+      if (cover && across && behindCover(e, cover, r)) continue;
+      if (inter / aE >= 0.6) cands.push({ e, cs });
+      else if (across && (MEDIA.test(e.tagName) || ownText(e))) crossed.push({ e, cs });
     }
-    const set = new Set(cands.map((c) => c.e));
-    const outermost = (list) => list.filter((c) => { for (let p = c.e.parentElement; p; p = p.parentElement) if (set.has(p)) return !list.some((o) => o.e === p); return true; });
-    // A plain layout wrapper (no box, no text of its own) stands for its children: select them instead.
+    const found = [...cands, ...crossed];
+    const outermost = (list) => { const s = new Set(list.map((c) => c.e)); return list.filter((c) => { for (let p = c.e.parentElement; p; p = p.parentElement) if (s.has(p)) return false; return true; }); };
+    // A plain layout wrapper (no box, no text of its own) stands for what is inside it: select that instead.
+    // So does any container of something already selected (keep) when adding to a selection.
     const expand = (list) => list.flatMap((c) => {
-      if (!isPlainWrapper(c.e, c.cs)) return [c];
-      const kids = outermost(cands.filter((x) => x.e !== c.e && c.e.contains(x.e)));
-      return kids.length >= 2 ? expand(kids) : [c];
+      if (!isPlainWrapper(c.e, c.cs) && !keep.some((k) => k !== c.e && c.e.contains(k))) return [c];
+      const kids = outermost(found.filter((x) => x.e !== c.e && c.e.contains(x.e)));
+      return kids.length && kids.length <= 8 ? expand(kids) : [c];
     });
-    const top = outermost(cands);
+    const top = outermost(found);
     const picked = expand(top);
-    const chosen = picked.length <= 8 ? picked : top;
-    if (chosen.length && chosen.length <= 8) return { els: chosen.map((c) => c.e), how: 'inside' };
+    const chosen = [picked, top, outermost(cands)].find((l) => l.length && l.length <= 8);
+    if (chosen) return { els: chosen.map((c) => c.e), how: 'inside' };
     for (let e = stack[0]; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+      if (modal && !modal.contains(e)) break;
       const r = e.getBoundingClientRect();
       if (area(r) > 10 * aB) break;
       if (overlap(r) / aB >= 0.5) return { els: [e], how: 'center' };
@@ -1546,12 +1678,12 @@
     finishSelect();
   }
 
-  function areaDone(vr, add, found = autoSelect(vr)) {
+  function areaDone(vr, add, found = autoSelect(vr, add && S.pop && !isRegionPop() ? P.els : [])) {
     if (S.pop?.item) { toast('Finish or cancel this note first.'); return; }
     if (!S.pop) BL.openPop(null, null, { page: true, els: [] });
     P.marks = P.marks.filter((m) => !m.auto);
     if (found.els.length) {
-      const els = add && P.els.length ? [...P.els, ...found.els.filter((x) => !P.els.includes(x))] : found.els;
+      const els = add && P.els.length ? addFound(found.els) : found.els;
       setTarget({ els, auto: true });
     } else regionSelected(vr);
     P.marks.push({ t: 'box', c: D.color, auto: true, a: { x: vr.left + scrollX, y: vr.top + scrollY }, b: { x: vr.right + scrollX, y: vr.bottom + scrollY } });
@@ -2154,7 +2286,9 @@
     // "Outlines: off" hides other notes' drawings, never the marks being drawn or edited now.
     // Saved notes show their selection with outlines and badges; their area-selection boxes are left off.
     if (S.prefs.marks !== 'badges') for (const it of itemsHere()) { if (S.pop?.item?.id === it.id) continue; (it.marks || []).forEach((m) => { if (!m.auto) list.push(m); }); }
-    (P.marks || []).forEach((m) => list.push(m));
+    // The dragged area's box marks an empty-area note on the page. When the drag selected elements, their
+    // outlines already show the selection, so the box is kept for the marked-up screenshot but not drawn here.
+    (P.marks || []).forEach((m) => { if (!m.auto || !P.els.length) list.push(m); });
     if (D.cur) list.push(D.cur);
     for (const s of list) g.appendChild(svgShape(s));
     const selected = D.tool === 'edit' ? P.marks[D.selected] : null;
@@ -3406,7 +3540,7 @@
   BL.toolsApi = {
     elementFields, chooseElement, rememberElement, restoreElementRecord, visitElement, arrowHit, editArrowPointer, setDrawingColor, applyItemPreview, revertLive, removeGuide, styleInput, togglePopHide, buildAlignRows, emptyPop,
     similarSelector, similar, groupOptions, scopeInfo, tokenHint, spacingClasses, regionContext, measureRects, measureText, parseCSV, sheetFromRows, checkPrices,
-    normForVar, stepVal, normInput, priceReportText, scopeLines, marksSummary, snapTo, autoSelect, startSelect, startArea, T, A, D, getP: () => P, setP: (p) => { P = p; }, setAnnotate, setTarget, makeDraggable,
+    normForVar, stepVal, normInput, priceReportText, scopeLines, marksSummary, snapTo, autoSelect, pointTarget, startSelect, startArea, T, A, D, getP: () => P, setP: (p) => { P = p; }, setAnnotate, setTarget, makeDraggable,
   };
 
   if (S.ui) hooks.onMount(S.ui.root);

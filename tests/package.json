@@ -1,0 +1,13 @@
+{
+  "name": "blueline-tests",
+  "private": true,
+  "type": "module",
+  "description": "Headless Chrome regression tests for the Blueline extension (no dependencies)",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node run.mjs",
+    "sweep": "node sweep.mjs"
+  }
+}

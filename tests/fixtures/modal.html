@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Blueline modal fixtures</title>
+<style>
+  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #222; }
+  .page p { margin: 0 0 12px; padding: 0 40px; font-size: 22px; }
+  .hero { position: relative; height: 220px; background: #335; color: #fff; padding: 30px 40px; box-sizing: border-box; }
+  .hero h2 { position: relative; z-index: 1; margin: 0; }
+  .hero .tint { position: absolute; inset: 0; z-index: 2; background: rgba(0, 0, 0, .3); }
+  /* M1: native <dialog> opened with showModal() */
+  dialog#m1 { padding: 24px; border: 0; border-radius: 8px; }
+  dialog#m1::backdrop { background: rgba(0, 0, 0, .35); }
+  /* M2: custom popup: see-through backdrop element + separate panel (typical newsletter popup) */
+  #m2-bd { position: fixed; inset: 0; z-index: 100; background: rgba(0, 0, 0, .4); }
+  #m2 { position: fixed; z-index: 101; left: 50%; top: 40%; transform: translate(-50%, -50%); background: #fff; padding: 24px; border-radius: 8px; width: 360px; }
+  /* M3: framework style: transparent full-screen wrapper holding the dialog, backdrop as a sibling */
+  #m3-bd { position: fixed; inset: 0; z-index: 200; background: rgba(0, 0, 0, .5); }
+  #m3 { position: fixed; inset: 0; z-index: 201; }
+  #m3 .dlg { margin: 120px auto; width: 360px; background: #fff; padding: 24px; border-radius: 8px; }
+  /* M4: fully transparent click-catcher over the page */
+  #m4-bd { position: fixed; inset: 0; z-index: 300; background: transparent; }
+  #m4 { position: fixed; z-index: 301; right: 40px; top: 60px; background: #fff; border: 1px solid #ccc; padding: 16px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="hero" id="hero"><h2 id="hero-h">Hero under a tint layer</h2><div class="tint" id="hero-tint"></div></div>
+  <p id="pg-1">Page paragraph one, behind any open modal.</p>
+  <p id="pg-2">Page paragraph two, also behind the modal.</p>
+  <p id="pg-3">Page paragraph three, near the bottom.</p>
+  <p id="pg-4">Page paragraph four.</p>
+  <p id="pg-5">Page paragraph five.</p>
+</div>
+
+<dialog id="m1"><h3 id="m1-h">Native dialog title</h3><p id="m1-p">Native dialog body text.</p></dialog>
+
+<div id="m2-bd" hidden></div>
+<div id="m2" role="dialog" aria-modal="true" hidden><h3 id="m2-h">Join our newsletter</h3><p id="m2-p">Get 10% off your first order.</p></div>
+
+<div id="m3-bd" hidden></div>
+<div id="m3" hidden><div class="dlg" id="m3-dlg" role="dialog" aria-modal="true"><h3 id="m3-h">Framework modal title</h3><p id="m3-p">Framework modal body.</p></div></div>
+
+<div id="m4-bd" hidden></div>
+<div id="m4" hidden><p id="m4-p" style="margin:0">Dropdown menu item</p></div>
+
+<script>
+  window.openModal = (n) => {
+    if (n === 1) document.getElementById('m1').showModal();
+    else for (const id of [`m${n}`, `m${n}-bd`]) document.getElementById(id).hidden = false;
+  };
+  window.closeModals = () => {
+    const d = document.getElementById('m1'); if (d.open) d.close();
+    for (const id of ['m2', 'm2-bd', 'm3', 'm3-bd', 'm4', 'm4-bd']) document.getElementById(id).hidden = true;
+  };
+</script>
+</body>
+</html>

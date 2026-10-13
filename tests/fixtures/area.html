@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Blueline area-selection fixtures</title>
+<style>
+  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #222; }
+  section { margin: 0 0 40px; padding: 20px 40px; }
+  /* Shopify Horizon-style group block: a boxed panel, a full-size invisible flex wrapper, text-block divs. */
+  .group-block { position: relative; width: 640px; height: 300px; background: #fff8e6; }
+  .group-block-content { position: relative; height: 100%; width: 100%; }
+  .layout-panel-flex { display: flex; gap: 12px; height: 100%; }
+  .layout-panel-flex--column { flex-flow: column nowrap; justify-content: center; align-items: flex-start; padding: 24px; box-sizing: border-box; }
+  .text-block { width: 100%; }
+  .text-block h3 { margin: 0; font-size: 28px; }
+  .text-block p { margin: 0; }
+  /* Nested headings in plain wrappers */
+  .hd h2 { margin: 0 0 4px; } .hd h4 { margin: 0; font-weight: 500; color: #555; }
+  /* Product card */
+  .card { width: 260px; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }
+  .card img { width: 100%; height: 160px; object-fit: cover; display: block; }
+  .card .info { padding: 12px; }
+  .card h3 { margin: 0 0 6px; font-size: 16px; } .card .price { font-weight: 600; }
+  /* Buttons in a plain row */
+  .btns { display: flex; gap: 16px; }
+  .btn { background: #e5239d; color: #fff; padding: 10px 18px; border-radius: 6px; text-decoration: none; }
+  /* Boxed empty area */
+  .panel { background: #eef; height: 220px; position: relative; }
+  .panel .corner { position: absolute; left: 16px; top: 12px; margin: 0; }
+  /* A long list */
+  .list { columns: 4; }
+  .list li { margin: 2px 0; }
+</style>
+</head>
+<body>
+<section id="s-horizon">
+  <div class="group-block" id="r1-group">
+    <div class="group-block-content layout-panel-flex layout-panel-flex--column" id="r1-content">
+      <div class="text-block h3" id="r1-tb1"><h3 id="r1-h">1. BUY KOREAN BROS</h3></div>
+      <div class="text-block" id="r1-tb2"><p id="r1-p">Available online and in retail locations across the country, including your favorite local grocery store and big-box retailers.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="s-horizon-fit">
+  <div class="group-block" id="r2-group" style="height: auto; background: none">
+    <div class="group-block-content layout-panel-flex layout-panel-flex--column" id="r2-content" style="padding: 12px 24px">
+      <div class="text-block h3" id="r2-tb1"><h3 id="r2-h">1. BUY KOREAN BROS</h3></div>
+      <div class="text-block" id="r2-tb2"><p id="r2-p">Available online and in retail locations across the country, including your favorite local grocery store and big-box retailers.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="s-tight">
+  <div class="group-block" id="r3-group" style="height: auto; width: 520px; background: #eef6ff; padding: 10px 14px; box-sizing: border-box">
+    <div class="text-block h3" id="r3-tb1"><h3 id="r3-h">2. FIND A STORE</h3></div>
+    <div class="text-block" id="r3-tb2"><p id="r3-p">Use the store locator to find a retailer near you.</p></div>
+    <div class="text-block" id="r3-tb3"><p id="r3-note" style="font-size: 12px; color: #666">Prices may vary by location.</p></div>
+  </div>
+</section>
+
+<section id="s-headings"><div id="hd-w1"><div class="hd" id="hd-w2"><h2 id="hd-h2">Section heading</h2><h4 id="hd-h4">A subtitle that sits under the heading</h4></div></div></section>
+
+<section id="s-card"><div class="card" id="cd"><img id="cd-img" alt="" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect width='10' height='10' fill='%23ccd'/></svg>"><div class="info" id="cd-info"><h3 id="cd-h">Vitamin C 1000mg</h3><div class="price" id="cd-price">$19.95</div></div></div></section>
+
+<section id="s-btns"><div class="btns" id="bt-row"><a class="btn" id="bt-1" href="#one">Shop now</a><a class="btn" id="bt-2" href="#two">Learn more</a></div></section>
+
+<section id="s-panel"><div class="panel" id="pn"><p class="corner" id="pn-p">Corner note</p></div></section>
+
+<section id="s-list"><ul class="list" id="ls"></ul></section>
+<script>
+  const ul = document.getElementById('ls');
+  for (let i = 1; i <= 24; i++) { const li = document.createElement('li'); li.id = 'li-' + i; li.textContent = 'List item number ' + i; ul.appendChild(li); }
+</script>
+</body>
+</html>
