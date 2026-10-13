@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Blueline nested-selection fixtures</title>
+<style>
+  body { margin: 0; font: 16px/1.4 system-ui, sans-serif; color: #222; }
+  header.sticky { position: sticky; top: 0; z-index: 50; background: #fff; height: 56px; display: flex; align-items: center; gap: 24px; padding: 0 20px; border-bottom: 1px solid #ddd; }
+  section { position: relative; margin: 0 0 40px; }
+  .hero { height: 340px; color: #fff; overflow: hidden; }
+  .hero .media { position: absolute; inset: 0; }
+  .hero .media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .hero .content { position: relative; z-index: 1; padding: 40px; max-width: 520px; }
+  .hero h2 { margin: 0 0 12px; font-size: 36px; }
+  .btn { display: inline-block; background: #e5239d; color: #fff; padding: 12px 22px; border-radius: 6px; text-decoration: none; }
+  .disclaimer { font-size: 12px; margin-top: 18px; }
+  /* A: whole hero clickable through a transparent cover link on top */
+  #a .cover { position: absolute; inset: 0; z-index: 2; }
+  /* A2: text layer ignores the pointer (common in banners and slideshows) */
+  #a2 .content { pointer-events: none; }
+  #a2 .content .btn { pointer-events: auto; }
+  /* A3: tint drawn by a pseudo-element above the content */
+  #a3::after { content: ''; position: absolute; inset: 0; z-index: 3; background: rgba(0, 0, 0, .25); }
+  /* A4: separate tint layer element above the content */
+  #a4 .tint { position: absolute; inset: 0; z-index: 3; background: rgba(0, 0, 0, .3); }
+  /* B: plain nesting */
+  .w { padding: 10px; }
+  /* D: product cards with a stretched title link (link ::after covers the card) */
+  .grid { display: grid; grid-template-columns: repeat(3, 220px); gap: 24px; padding: 20px; }
+  .card { position: relative; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }
+  .card img { width: 100%; height: 140px; object-fit: cover; display: block; }
+  .card .info { padding: 12px; }
+  .card h3 { margin: 0 0 6px; font-size: 16px; }
+  .card h3 a { color: inherit; text-decoration: none; }
+  .card h3 a::after { content: ''; position: absolute; inset: 0; z-index: 1; }
+  .card .price { font-weight: 600; }
+  /* E/L: rows with empty space */
+  .row { display: flex; gap: 120px; padding: 30px 20px; }
+  .boxed { background: #f3f3f7; padding: 40px; }
+  /* K: fade slideshow, inactive slide transparent */
+  .slides { position: relative; height: 200px; }
+  .slide { position: absolute; inset: 0; background: #224; color: #fff; padding: 30px; }
+  .slide .txt { pointer-events: none; }
+  .slide.off { opacity: 0; }
+  .icon-btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border: 1px solid #999; border-radius: 6px; background: #fff; }
+  .spacer { height: 900px; }
+</style>
+</head>
+<body>
+<header class="sticky" id="hdr"><span class="logo">Logo</span><nav><a href="#" id="nav1">Shop</a></nav></header>
+
+<section class="hero" id="a">
+  <div class="media"><img id="a-img" alt="" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect width='10' height='10' fill='%23335'/></svg>"></div>
+  <div class="content">
+    <h2 id="a-h">Hero headline</h2>
+    <a class="btn" id="a-cta" href="#cta">Shop now</a>
+    <p class="disclaimer" id="a-disc">*Offer valid while supplies last.</p>
+  </div>
+  <a class="cover" id="a-cover" href="#hero" aria-label="Hero link"></a>
+</section>
+
+<section class="hero" id="a2">
+  <div class="media"><img id="a2-img" alt="" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect width='10' height='10' fill='%23533'/></svg>"></div>
+  <div class="content">
+    <h2 id="a2-h">Pointer-events none headline</h2>
+    <a class="btn" id="a2-cta" href="#cta2">Learn more</a>
+    <p class="disclaimer" id="a2-disc">*Terms apply. See store for details.</p>
+  </div>
+</section>
+
+<section class="hero" id="a3">
+  <div class="media"><img id="a3-img" alt="" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect width='10' height='10' fill='%23353'/></svg>"></div>
+  <div class="content">
+    <h2 id="a3-h">Tinted by a pseudo-element</h2>
+    <p class="disclaimer" id="a3-disc">*Pseudo tint disclaimer.</p>
+  </div>
+</section>
+
+<section class="hero" id="a4">
+  <div class="media"><img id="a4-img" alt="" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect width='10' height='10' fill='%23355'/></svg>"></div>
+  <div class="content">
+    <h2 id="a4-h">Tinted by a layer element</h2>
+    <p class="disclaimer" id="a4-disc">*Tint layer disclaimer.</p>
+  </div>
+  <div class="tint" id="a4-tint"></div>
+</section>
+
+<section id="b"><div class="w" id="b-w1"><div class="w" id="b-w2"><div class="w" id="b-w3"><p id="b-p">Deeply nested paragraph text.</p></div></div></div></section>
+
+<section id="c" class="boxed"><div id="c-wrap"><button class="icon-btn" id="c-btn"><svg id="c-svg" width="16" height="16" viewBox="0 0 16 16"><path id="c-path" d="M2 2h12v12H2z" fill="#e5239d"/></svg><span id="c-label">Add to cart</span></button></div></section>
+
+<section id="d" class="grid">
+  <div class="card" id="d1"><img id="d1-img" alt="" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect width='10' height='10' fill='%23ccd'/></svg>"><div class="info" id="d1-info"><h3 id="d1-h"><a id="d1-a" href="#p1">Vitamin C 1000mg</a></h3><div class="price" id="d1-price">$19.95</div></div></div>
+  <div class="card" id="d2"><img id="d2-img" alt="" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect width='10' height='10' fill='%23dcc'/></svg>"><div class="info" id="d2-info"><h3 id="d2-h"><a id="d2-a" href="#p2">Magnesium Glycinate</a></h3><div class="price" id="d2-price">$24.95</div></div></div>
+  <div class="card" id="d3"><img id="d3-img" alt="" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect width='10' height='10' fill='%23cdc'/></svg>"><div class="info" id="d3-info"><h3 id="d3-h"><a id="d3-a" href="#p3">Creatine Monohydrate</a></h3><div class="price" id="d3-price">$29.95</div></div></div>
+</section>
+
+<section id="e" class="boxed"><div class="row" id="e-row"><span id="e-s1">Left item</span><span id="e-s2">Right item</span></div></section>
+
+<section id="k"><div class="slides" id="k-slides">
+  <div class="slide" id="k-s1"><p class="txt" id="k-t1">Active slide text</p></div>
+  <div class="slide off" id="k-s2"><p class="txt" id="k-t2">Hidden slide text</p></div>
+</div></section>
+
+<section id="i"><a href="#clicked" id="i-link" onclick="window.__pageClicks = (window.__pageClicks || 0) + 1">A normal page link</a></section>
+
+<div class="spacer"></div>
+<section id="g"><p id="g-p">Text far down the page, reached after scrolling.</p></section>
+<div class="spacer"></div>
+</body>
+</html>
