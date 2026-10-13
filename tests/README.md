@@ -6,15 +6,17 @@ Headless Chrome regression tests for element selection and the annotation tools.
 
 ```bash
 cd tests
-npm install   # once: installs puppeteer-core only (uses your installed Chrome, downloads no browser)
 npm test
 ```
+
+No `npm install` step is needed. The suite has no npm dependencies: it drives your installed Chrome through a small DevTools-protocol client (`cdp.mjs`) built on Node's built-in WebSocket.
 
 `npm test` exits non-zero if any check fails. To test another copy of the extension, for example `main` checked out elsewhere, run `node run.mjs <extension-dir>`.
 
 ## Requirements
 
-- Node.js 18 or newer.
+- Node.js 22 or newer (for the built-in WebSocket).
+- No npm dependencies.
 - Google Chrome or Chromium. The runner looks in the usual macOS, Linux and Windows locations. Set `CHROME_PATH` if yours is elsewhere.
 - No network access. All fixtures are local files in `fixtures/`.
 
