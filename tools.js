@@ -19,13 +19,15 @@
   const A = { on: false, mode: 'select', keep: false, drag: null };
   const D = { tool: null, color: GUIDE, cur: null, selected: null, drag: null };
   const emptyPop = () => ({
-    priority: 'must', bps: new Set(), scope: 'one', groupIdx: 0, scopeTouched: false, tweaks: {}, textEdit: null, hide: false,
+    bps: new Set(), scope: 'one', groupIdx: 0, scopeTouched: false, tweaks: {}, textEdit: null, hide: false,
     figma: '', variant: null, match: null, move: null, align: {}, alignInfo: {}, snap: { x: 0, y: 0 }, measures: [], colors: [],
     marks: [], marksDirty: false, edits: new Map(), els: [], el: null, item: null, committed: false, auto: false,
-    parked: new Map(), cleared: false,
+    parked: new Map(), cleared: false, missing: [], missingEdited: false, alignEl: null, alignUi: { mode: 'guides', method: 'edges', memo: {}, ref: null, h: '', v: '' },
+    cssRule: null, cssAdded: [],
   });
   let P = emptyPop();
   const touched = new WeakMap(); // el -> { prop: { v, p } } inline styles we overwrote for previews
+  const pageStyle = new WeakMap(); // el -> its style attribute before our first preview
   let mountedRoot = null;
   let attached = false;
   let varIdx = null;
@@ -63,7 +65,8 @@
 
   // Keep the existing tool functions focused on one active element. Records are
   // keyed by DOM instance while composing, and by the existing selector on disk.
-  const EDIT_KEYS = ['tweaks', 'textEdit', 'hide', 'match', 'move', 'align', 'alignInfo', 'snap', 'measures', 'scope', 'scopeTouched', 'groupIdx'];
+  // cssRule (the rule chosen in Edit CSS) and cssAdded (added property rows without a value yet) are per instance, not saved.
+  const EDIT_KEYS = ['tweaks', 'textEdit', 'hide', 'match', 'move', 'align', 'alignInfo', 'snap', 'alignEl', 'measures', 'scope', 'scopeTouched', 'groupIdx', 'cssRule', 'cssAdded'];
   function rememberElement() {
     if (!P.el) return;
     const record = {};
@@ -93,18 +96,26 @@
     const record = P.edits.get(el) || emptyPop();
     for (const key of EDIT_KEYS) P[key] = record[key];
     visibleMeasureIndex = P.measures.length ? P.measures.length - 1 : null;
-    activeTool = P.measures.length ? 'measure' : Object.keys(P.align).length ? 'align' : P.move || P.match || P.textEdit || P.hide ? 'elements' : activeTool;
+    activeTool = Object.keys(P.align).length ? 'align' : P.measures.length || P.move || P.match || P.textEdit || P.hide ? null : activeTool;
     loadCompose();
-    q('[data-d="props"]').open = !!Object.keys(P.tweaks).length;
   }
   function elementFields() {
     rememberElement();
-    return P.els.map((el) => visitElement(el, () => ({
-      el: alsoInfo(el), scope: scopeInfo(), tweaks: Object.values(P.tweaks).map((t) => ({ ...t })),
+    return P.els.map((el) => visitElement(el, () => (missingRuleEntries(cssModel(el)), {
+      el: alsoInfo(el), scope: scopeInfo(), tweaks: Object.values(P.tweaks).map(savedTweak),
       textEdit: P.textEdit, hidden: P.hide, match: P.match,
       move: P.move ? { to: P.move.to, position: P.move.position } : null,
-      align: alignFields(), measures: P.measures.map(({ label, selector, summary }) => ({ label, selector, summary })),
+      align: alignFields(), alignEl: P.alignEl?.x || P.alignEl?.y ? JSON.parse(JSON.stringify(P.alignEl)) : null,
+      measures: P.measures.map(({ label, selector, summary }) => ({ label, selector, summary })),
     })));
+  }
+  // A change as saved. A rule that isn't on the page now is kept as it was, flagged notFound (the export says so).
+  function savedTweak(t) {
+    const out = { ...t, rule: t.rule ? { ...t.rule } : undefined };
+    if (!out.rule) { delete out.rule; return out; }
+    if (out.rule.key === 'element' || !P.el) return out;
+    if (cssModel(P.el).byKey.has(out.rule.key)) delete out.rule.notFound; else out.rule.notFound = true;
+    return out;
   }
   function restoreElementRecord(el, data) {
     const record = emptyPop();
@@ -121,20 +132,113 @@
       const g = guidesHere().find((x) => x.id === a.guideId || x.name === a.guide);
       if (g) { record.align[g.id] = a.edge; record.alignInfo[g.id] = { offset: a.offset, shift: a.shift || 0, axis: a.axis }; record.snap[a.axis] = a.shift || 0; }
     }
+    record.alignEl = data.alignEl ? JSON.parse(JSON.stringify(data.alignEl)) : null;
+    for (const axis of ['x', 'y']) if (record.alignEl?.[axis]) record.snap[axis] = record.alignEl[axis].shift || 0;
     P.edits.set(el, record);
   }
+  // Saved instances of a note whose element isn't on the page right now. They are kept exactly as saved and
+  // written back on Update; only removing them on purpose deletes them. The first record is the note's own
+  // element (item.el); older notes are turned into records the same way they are restored.
+  function missingRecords(item, used) {
+    const copy = (x) => JSON.parse(JSON.stringify(x));
+    if (item.elementEdits) return item.elementEdits.map((rec, i) => ({ rec: copy(rec), primary: i === 0 })).filter((m, i) => !used.has(item.elementEdits[i]));
+    const scope = item.scope || { mode: 'one', count: 1, selector: item.el?.selector, similar: 1, chosen: false };
+    const base = { scope, tweaks: item.tweaks || [], hidden: !!item.hidden, textEdit: null, match: null, move: null, align: [], measures: [] };
+    const out = [];
+    const { label, selector, text, size } = item.el || {};
+    if (selector && !BL.query(selector)) out.push({ primary: true, rec: copy({ ...base, el: { label, selector, text, size }, textEdit: item.textEdit || null, match: item.match || null, move: item.move || null, align: item.align || [], measures: item.measures || [] }) });
+    for (const a of item.also || []) if (!BL.query(a.selector)) out.push({ primary: false, rec: copy({ ...base, el: a }) });
+    return out;
+  }
+
+  // Plain-language element type for the Selected element card.
+  const KIND = {
+    A: 'Link', BUTTON: 'Button', IMG: 'Image', SVG: 'Graphic', PICTURE: 'Picture', VIDEO: 'Video', P: 'Paragraph', SPAN: 'Text', LI: 'List item',
+    UL: 'List', OL: 'List', LABEL: 'Label', INPUT: 'Input', SELECT: 'Dropdown', TEXTAREA: 'Text box', FORM: 'Form', NAV: 'Navigation',
+    HEADER: 'Header', FOOTER: 'Footer', MAIN: 'Main content', SECTION: 'Section', ARTICLE: 'Article', ASIDE: 'Sidebar', FIGURE: 'Figure',
+    TABLE: 'Table', TD: 'Table cell', TH: 'Table heading', BLOCKQUOTE: 'Quote', DIV: 'Container',
+  };
+  function elKind(el) {
+    const tag = el.tagName.toUpperCase();
+    if (/^H[1-6]$/.test(tag)) return `Heading ${tag[1]}`;
+    const role = el.getAttribute('role');
+    if (role === 'button' || role === 'link') return role === 'button' ? 'Button' : 'Link';
+    return KIND[tag] || el.tagName.toLowerCase();
+  }
+  const elText = (el) => clip((el.getAttribute('aria-label') || el.getAttribute('alt') || textOf(el, 60) || el.getAttribute('placeholder') || el.getAttribute('title') || '').replace(/\s+/g, ' ').trim(), 48);
+  function editSummary(r) {
+    return [Object.keys(r.tweaks).filter((k) => !r.tweaks[k].snap).length ? `${Object.keys(r.tweaks).filter((k) => !r.tweaks[k].snap).length} CSS values` : '', r.hide ? 'hidden' : '', r.textEdit ? 'text' : '', r.move ? 'move' : '', r.match ? 'match style' : '', Object.keys(r.align).length || r.alignEl?.x || r.alignEl?.y ? 'alignment' : '', r.measures.length ? 'measurements' : ''].filter(Boolean);
+  }
+
+  // Step 2: which element the tools act on. With several selected, one instance is edited at a time and
+  // every CSS value stays with the instance it was made on.
   function renderElementEditor() {
     let box = q('.element-editor');
     if (!box) { box = mk('<div class="element-editor"></div>'); q('.tool-ribbon').before(box); }
     rememberElement();
-    const open = box.querySelector('details')?.open || false;
-    const descriptions = P.els.map((el, i) => {
-      const r = P.edits.get(el) || emptyPop();
-      const changes = [Object.keys(r.tweaks).length ? `${Object.keys(r.tweaks).length} CSS values` : '', r.hide ? 'hidden' : '', r.textEdit ? 'text' : '', r.move ? 'move' : '', r.match ? 'match style' : '', Object.keys(r.align).length ? 'alignment' : '', r.measures.length ? 'measurements' : ''].filter(Boolean);
-      return `<div class="strip"><button class="xb" data-x="edit-element" data-i="${i}" title="Open all edits for this specific instance">${el === P.el ? '● Editing' : 'Selected'} ${i + 1}: ${esc(elName(el))}</button><span class="sub">${esc(changes.join(', ') || 'No edits')}</span></div>`;
-    });
-    box.innerHTML = `<label class="sub">Editing one specific instance <select class="xin element-choice" aria-label="Element to edit">${P.els.map((el, i) => `<option value="${i}"${el === P.el ? ' selected' : ''}>${i + 1}: ${esc(BL.label(el))} · ${esc(textOf(el, 24))}</option>`).join('')}</select></label><details class="xd"${open ? ' open' : ''}><summary>Selected elements &amp; edits (${P.els.length})</summary>${descriptions.join('')}</details><div class="sub">Tools affect the instance above. Scope controls how broadly its CSS correction should be implemented.</div>`;
-    box.hidden = !P.els.length;
+    box.hidden = !P.el || isRegionPop();
+    if (box.hidden) { box.innerHTML = ''; renderChanges(); return; }
+    const multi = P.els.length > 1;
+    const idx = P.els.indexOf(P.el);
+    const text = elText(P.el);
+    const lbl = BL.label(P.el);
+    // Classes the label leaves out (it prefers an id, and shows at most two classes).
+    const extra = [...P.el.classList].filter((c) => BL.isStableClass(c) && !lbl.split(/(?=[.#[])/).includes(`.${c}`));
+    box.innerHTML = `<div class="se-h"><span class="tb-h">Selected element</span>${multi ? `<span class="se-of">Editing ${idx + 1} of ${P.els.length}</span>` : ''}</div>
+      <div class="se-name"><b>${esc(elKind(P.el))}</b>${text ? ` <span>“${esc(text)}”</span>` : ''}</div>
+      <code class="se-sel" title="${esc(BL.cssPath(P.el))}">${esc(lbl)}</code>${extra.length ? `<span class="sub se-cls mono" title="Classes on this element">class ${esc(extra.map((c) => '.' + c).join(' '))}</span>` : ''}
+      ${multi ? `<label class="sub se-pick" title="Edits apply to the element you choose here only">Change element <select class="xin element-choice" aria-label="Element to edit">${P.els.map((el, i) => `<option value="${i}"${el === P.el ? ' selected' : ''}>${i + 1}: ${esc(BL.label(el))} · ${esc(textOf(el, 24))}</option>`).join('')}</select></label>` : ''}`;
+    renderChanges();
+  }
+
+  // What has been changed on the instance being edited: CSS values (original → updated), hide, alignment,
+  // and the move / match / text strips. A presentation of the edit record, not a separate store.
+  const showVal = (prop, v) => {
+    if (/color/.test(prop)) { const c = BL.rgba(String(v)); if (c && c.a >= 1) return BL.hex(c).toUpperCase(); }
+    return String(v);
+  };
+  // The Describe placeholder says whether anything has been recorded yet (a change or a reference measurement from
+  // the Toolbox, Edit CSS, Align, Annotate or Measure). It follows adds, ✕, Undo and element changes, and never
+  // touches what has been typed. Saving still requires a description when nothing is recorded.
+  const PH_NONE = 'No changes detected. Describe what you\u2019d like changed.';
+  const PH_SOME = 'Optional: Add any additional details about your changes.';
+  function hasRecordedChanges() {
+    rememberElement();
+    const edit = (r) => (r.tweaks ? Object.values(r.tweaks) : []).length || r.textEdit || r.hide || r.hidden || r.match || r.move || Object.keys(r.align || {}).length || r.alignEl?.x || r.alignEl?.y || (r.measures || []).length;
+    return !!(P.marks.some((m) => !m.auto) || P.colors.length || P.variant || [...P.edits.values()].some(edit) || P.missing.some((m) => (m.rec.tweaks || []).length || m.rec.textEdit || m.rec.hidden || m.rec.match || m.rec.move || (m.rec.align || []).length || m.rec.alignEl?.x || m.rec.alignEl?.y || (m.rec.measures || []).length));
+  }
+  function syncPlaceholder() {
+    const ta = q('.pop-note');
+    if (!ta || !S.pop) return;
+    const want = hasRecordedChanges() ? PH_SOME : PH_NONE;
+    if (ta.placeholder !== want) ta.placeholder = want;
+  }
+
+  function renderChanges() {
+    syncPlaceholder();
+    const box = q('.tb-changes');
+    if (!box) return;
+    const css = q('.css-changes');
+    const has = !!P.el && !isRegionPop();
+    const rows = [];
+    if (has) {
+      for (const t of Object.values(P.tweaks).filter((x) => !x.snap)) {
+        const where = t.rule ? (t.rule.key === 'element' ? 'this element' : t.rule.matched || t.rule.selector) : '';
+        const was = t.declared === false ? 'added' : showVal(t.prop, t.from);
+        rows.push(`<div class="chg" data-prop="${esc(t.prop)}"${where ? ` data-rule="${esc(where)}"` : ''}><span><code>${esc(t.prop)}</code>: <span class="chg-from">${esc(was)}</span> → <b class="chg-to">${esc(showVal(t.prop, t.to))}</b>${t.token ? ` <span class="sub">≈ ${esc(t.token.replace(/`/g, ''))}</span>` : ''}</span>${where ? `<em class="chg-rule" title="${esc(t.rule.key === 'element' ? 'Set on this element only' : `In ${t.rule.selector || where} (${t.rule.source || ''}${t.rule.context ? `, ${t.rule.context}` : ''})`)}">${esc(where)}</em>` : ''}<button class="icon" data-x="css-rm" data-prop="${esc(t.prop)}" title="${t.declared === false ? `Remove ${esc(t.prop)}` : `Put ${esc(t.prop)} back to ${esc(t.from)}`}" aria-label="Undo ${esc(t.prop)} change">✕</button></div>`);
+      }
+      if (P.hide) rows.push('<div class="chg"><span>Hidden (preview)</span><button class="icon" data-x="hide" title="Show it again" aria-label="Show the element again">✕</button></div>');
+      for (const a of alignFields()) rows.push(`<div class="chg"><span>Aligned ${esc(a.edge)} to guide ${esc(a.guide)} (${rnd(a.shift)}px)</span><button class="icon" data-x="align-clear" data-g="${esc(a.guideId)}" title="Undo this alignment" aria-label="Undo alignment">✕</button></div>`);
+      for (const axis of ['x', 'y']) {
+        const a = P.alignEl?.[axis];
+        if (a) rows.push(`<div class="chg"><span>${esc(alignWord(a))} <code>${esc(a.ref.label)}</code> (${rnd(a.shift)}px)</span><button class="icon" data-x="alel-rm" data-axis="${axis}" title="Remove this alignment (from every element aligned with it)" aria-label="Remove alignment">✕</button></div>`);
+      }
+    }
+    css.innerHTML = rows.join('');
+    const strips = q('.x-strips');
+    const any = rows.length || !!strips?.children.length;
+    q('.tb-changes-n').textContent = any ? '' : has ? 'No changes yet. Use the Toolbox, Edit CSS or Align.' : '';
+    box.hidden = !has && !strips?.children.length;
   }
 
   // ------------------------------------------------------------------ inline previews (all targets of a note)
@@ -142,17 +246,57 @@
   function setInline(el, prop, value) {
     let rec = touched.get(el);
     if (!rec) { rec = {}; touched.set(el, rec); }
-    if (!(prop in rec)) rec[prop] = { v: el.style.getPropertyValue(prop), p: el.style.getPropertyPriority(prop) };
+    // The page's own style attribute as it was before this round of previews (taken while nothing is previewed).
+    if (!Object.keys(rec).length) pageStyle.set(el, el.getAttribute('style') || '');
+    if (!(prop in rec)) {
+      // With a related shorthand or longhand already previewed (margin / margin-top), the element's style now holds
+      // our value for this property too, so its original comes from the page's own attribute instead.
+      const related = Object.keys(rec).some((k) => k.startsWith(`${prop}-`) || prop.startsWith(`${k}-`));
+      const src = related ? pageDecl(el) : el.style;
+      rec[prop] = { v: src.getPropertyValue(prop), p: src.getPropertyPriority(prop) };
+    }
     el.style.setProperty(prop, value, 'important');
   }
+  const pageDecl = (el) => { const s = document.createElement('div').style; s.cssText = pageStyle.get(el) || ''; return s; };
 
   function restoreInline(el, prop) {
     const rec = touched.get(el);
     if (!rec || !(prop in rec)) return;
     const { v, p } = rec[prop];
     if (v) el.style.setProperty(prop, v, p); else el.style.removeProperty(prop);
-    if (!(el.getAttribute('style') || '').trim()) el.removeAttribute('style');
     delete rec[prop];
+    // Removing a shorthand also removed the page's own longhands of it (its margin-top under margin): put those back,
+    // unless a preview of that longhand is still recorded (it is restored on its own).
+    const page = pageDecl(el);
+    for (let i = 0; i < page.length; i++) {
+      const k = page[i];
+      if (k.startsWith(`${prop}-`) && !(k in rec) && !el.style.getPropertyValue(k)) el.style.setProperty(k, page.getPropertyValue(k), page.getPropertyPriority(k));
+    }
+    if (!(el.getAttribute('style') || '').trim()) el.removeAttribute('style');
+  }
+
+  // The page's own style attribute, without our previews: as written before we first touched the element, with the
+  // properties we overwrote put back from what we recorded.
+  function pageInline(el) {
+    const rec = touched.get(el);
+    if (!rec || !Object.keys(rec).length) return el.getAttribute('style') || '';
+    if (pageStyle.has(el)) return pageStyle.get(el);
+    const probe = document.createElement('div').style;
+    probe.cssText = el.style.cssText;
+    for (const [prop, { v, p }] of Object.entries(rec)) { probe.removeProperty(prop); if (v) probe.setProperty(prop, v, p); }
+    return probe.cssText;
+  }
+
+  // Previews in a stable order: a shorthand before its longhands (margin before margin-top), so a longhand edit
+  // is never overwritten by its shorthand.
+  const cssOrder = (list) => [...list].sort((a, b) => a.prop.split('-').length - b.prop.split('-').length);
+
+  // Applies one instance's CSS previews and then Hide, which always wins over a display value (the two stay
+  // independent: showing the element again brings the display edit back).
+  function paintCss(el, r) {
+    if (!el || !r) return;
+    for (const t of cssOrder(Object.values(r.tweaks || {}))) setInline(el, t.prop, t.to);
+    if (r.hide) setInline(el, 'display', 'none');
   }
 
   function targetsOf(it) {
@@ -169,18 +313,27 @@
     const live = on && appliesHere(it);
     const els = targetsOf(it);
     for (const el of els) {
-      for (const t of it.tweaks || []) { if (live) setInline(el, t.prop, t.to); else restoreInline(el, t.prop); }
+      for (const t of cssOrder(it.tweaks || [])) { if (live) setInline(el, t.prop, t.to); else restoreInline(el, t.prop); }
       if (it.hidden) { if (live) setInline(el, 'display', 'none'); else restoreInline(el, 'display'); }
     }
-    if (it.textEdit && els[0] && !els[0].children.length) {
+    // A text change belongs to the note's own element only, never to whichever element is found first.
+    const own = it.el?.selector ? BL.query(it.el.selector) : null;
+    if (it.textEdit && own && !own.children.length) {
       const want = live ? it.textEdit.after : it.textEdit.before;
-      if (els[0].textContent.trim() !== want) els[0].textContent = want;
+      if (own.textContent.trim() !== want) own.textContent = want;
     }
   }
 
+  // Saved notes' previews are refreshed regularly. The note being edited is left out (its saved values are out of
+  // date while it is open), and its live CSS, hide and alignment previews are put back on top, so another note on
+  // the same element can't overwrite what is being edited.
   function applyAllPreviews(forceOff) {
     const on = !forceOff && S.prefs.previews !== false;
-    for (const it of S.batch?.items || []) if (hasPreview(it)) applyItemPreview(it, on);
+    const open = S.pop ? P.item?.id : null;
+    for (const it of S.batch?.items || []) if (hasPreview(it) && (forceOff || it.id !== open)) applyItemPreview(it, on);
+    if (!S.pop || forceOff) return;
+    rememberElement();
+    for (const [el, r] of P.edits) paintCss(el, r);
   }
 
   function revertLive() {
@@ -206,6 +359,7 @@
       ...r,
       tweaks: JSON.parse(JSON.stringify(r.tweaks || {})), align: { ...r.align }, alignInfo: JSON.parse(JSON.stringify(r.alignInfo || {})), snap: { ...r.snap },
       measures: (r.measures || []).map((m) => ({ ...m })), textEdit: r.textEdit ? { ...r.textEdit } : null, move: r.move ? { ...r.move } : null,
+      alignEl: r.alignEl ? JSON.parse(JSON.stringify(r.alignEl)) : null,
     };
   }
 
@@ -232,7 +386,7 @@
   function recordSelection() {
     if (!S.pop) return;
     const s = snapshot();
-    s.sel = { els: [...P.els], region: S.pop.region || null, page: !!S.pop.page, auto: P.auto };
+    s.sel = { els: [...P.els], region: S.pop.region || null, page: !!S.pop.page, auto: P.auto, missing: P.missing.slice(), cleared: P.cleared };
     pushSnapshot(s);
   }
   function pushSnapshot(s) { undoKey = null; undoStack.push(s); if (undoStack.length > UNDO_MAX) undoStack.shift(); syncUndo(); }
@@ -276,8 +430,7 @@
   }
 
   function applyRecord(el, r) {
-    for (const t of Object.values(r.tweaks || {})) setInline(el, t.prop, t.to);
-    if (r.hide) setInline(el, 'display', 'none');
+    paintCss(el, r);
     if (r.textEdit && !el.children.length) el.textContent = r.textEdit.after;
   }
 
@@ -293,6 +446,7 @@
       if (s.sel.region) setTarget({ region: s.sel.region, auto: s.sel.auto });
       else { setTarget({ els: s.sel.els, auto: s.sel.auto }); if (!s.sel.els.length) { S.pop.page = true; renderSel(); } }
       activeTool = tool;
+      if (s.sel.missing) { P.missing = s.sel.missing.slice(); P.cleared = !!s.sel.cleared; }
     }
     revertLive();
     const keep = new Map([...P.edits].map(([el, r]) => [el, { scope: r.scope, scopeTouched: r.scopeTouched, groupIdx: r.groupIdx }]));
@@ -305,6 +459,7 @@
     const cur = P.edits.get(P.el) || emptyPop();
     for (const key of EDIT_KEYS) P[key] = cur[key];
     visibleMeasureIndex = P.measures.length ? Math.min(s.visibleMeasureIndex ?? P.measures.length - 1, P.measures.length - 1) : null;
+    syncAlignUi();
     loadCompose();
     syncUndo();
     toast(msg);
@@ -346,9 +501,10 @@
     return res;
   }
 
-  function similar(el, mode, groupIdx = 0) {
+  // `ruleSel` (the CSS rule the changes were made in) replaces the guessed similar-element selector when given.
+  function similar(el, mode, groupIdx = 0, ruleSel = null) {
     if (mode === 'one') return { sel: BL.cssPath(el), els: [el], root: null };
-    const sel = similarSelector(el);
+    const sel = ruleSel || similarSelector(el);
     let root = document;
     if (mode === 'group') {
       const o = groupOptions(el)[groupIdx] || groupOptions(el)[0];
@@ -361,11 +517,27 @@
     return { sel, els, root: mode === 'group' ? root : null };
   }
 
+  // The rule the instance's CSS changes were made in (the one with most changes, the latest on a tie). It sets the
+  // scope's selector only when reliable: on the page now, not under an unchecked condition, not a utility class.
+  function scopeRule() {
+    const by = new Map();
+    for (const t of Object.values(P.tweaks)) if (!t.snap && t.rule && t.rule.key !== 'element') by.set(t.rule.key, { rule: t.rule, n: (by.get(t.rule.key)?.n || 0) + 1 });
+    let best = null;
+    for (const v of by.values()) if (!best || v.n >= best.n) best = v;
+    if (!best || !P.el) return null;
+    const live = cssModel(P.el).byKey.get(best.rule.key);
+    return { rule: best.rule, reliable: !!live && !live.uncertain && !live.utility };
+  }
+
+  // Scope stays per instance. The preview is always this element only; the scope records how far the real
+  // change should reach, and with a reliable rule it names that rule's selector instead of a guessed one.
   function scopeInfo() {
     const el = P.el;
-    const all = similar(el, 'all');
-    const cur = P.scope === 'all' ? all : P.scope === 'group' ? similar(el, 'group', P.groupIdx) : { sel: all.sel, els: [el], root: null };
-    return {
+    const sr = scopeRule();
+    const ruleSel = sr?.reliable ? sr.rule.matched || sr.rule.selector : null;
+    const all = similar(el, 'all', 0, ruleSel);
+    const cur = P.scope === 'all' ? all : P.scope === 'group' ? similar(el, 'group', P.groupIdx, ruleSel) : { sel: all.sel, els: [el], root: null };
+    const out = {
       mode: P.scope,
       count: P.scope === 'one' ? 1 : cur.els.length,
       selector: cur.sel,
@@ -373,7 +545,12 @@
       labels: cur.els.filter((e) => e !== el).slice(0, 3).map((e) => { const t = textOf(e); return BL.label(e) + (t ? ` "${t}"` : ''); }),
       similar: all.els.length,
       chosen: P.scopeTouched || P.scope !== 'one',
+      basis: ruleSel ? 'rule' : 'similar',
+      preview: 'element',
     };
+    if (sr) out.rule = { selector: sr.rule.matched || sr.rule.selector, source: sr.rule.source, context: sr.rule.context, reliable: sr.reliable };
+    if (!out.rule) delete out.rule;
+    return out;
   }
 
   // ------------------------------------------------------------------ token hints
@@ -644,6 +821,9 @@
 
     .panel { width: 340px; max-height: min(80vh, 680px, calc(100vh - var(--bl-bottom, 16px) - 8px)); }
     .panel.composing { max-height: min(86vh, 740px, calc(100vh - var(--bl-bottom, 16px) - 8px)); }
+    /* While a note is open the panel keeps one height, so switching tools never resizes or moves it. */
+    .panel.composing:not(.collapsed) { height: min(86vh, 740px, calc(100vh - var(--bl-bottom, 16px) - 8px)); }
+    .pop-spacer { flex: none; height: 0; }
     .panel.composing .body, .panel.composing .foot { display: none; }
     .panel.collapsed .pop { display: none !important; }
     .bar { cursor: grab; user-select: none; }
@@ -689,6 +869,8 @@
     .measure-row.current { border-color: #2B4EFF; }
     .measure-row strong { font-size: 11.5px; }
     .measure-row .sub { overflow-wrap: anywhere; }
+    .measure-pick { display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left; background: none; border: 0; padding: 0; cursor: pointer; font: inherit; color: inherit; }
+    .measure-pick:focus-visible { outline: 2px solid ${INK}; outline-offset: 2px; border-radius: 4px; }
     .measure-actions { display: flex; gap: 5px; flex-wrap: wrap; }
     .measure-pair { flex-wrap: wrap; gap: 5px; }
     .measure-pair .xin { width: auto; max-width: 120px; }
@@ -728,8 +910,26 @@
     .sub { font-size: 11.5px; color: #6B7183; font-weight: 400; }
     .xin { width: 100%; border: 1px solid #D9DCE4; border-radius: 6px; padding: 4px 6px; font-size: 12px; background: #fff; color: #1E2230; }
     .xin:focus { outline: none; border-color: ${INK}; box-shadow: 0 0 0 3px rgba(43,78,255,.15); }
-    .st { display: grid; grid-template-columns: 74px 22px 1fr 22px auto; gap: 3px; align-items: center; margin-top: 4px; }
-    .st label { font-size: 11px; color: #6B7183; }
+    .st { display: grid; grid-template-columns: 96px 22px 1fr 22px auto; gap: 3px; align-items: center; margin-top: 4px; }
+    .st label { font-size: 11px; color: #6B7183; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .st .st-note { grid-column: 1 / 6; font-size: 10.5px; color: #6B7183; }
+    .st .badge { font-size: 10px; padding: 0 4px; border-radius: 4px; background: #EEF2FF; color: #1A33C7; margin-left: 3px; font-family: system-ui, sans-serif; }
+    .st.added label { color: #1A33C7; }
+    .st .xin:disabled { background: #F4F5F8; color: #6B7183; }
+    .css-rule { width: 100%; margin-top: 3px; }
+    .css-rule-info { margin-top: 3px; overflow-wrap: anywhere; }
+    .css-utils { margin-top: 4px; }
+    .css-utils-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+    .css-utils-list .chip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+    .css-props-h { margin-top: 8px; }
+    .css-add { margin-top: 6px; }
+    .css-add-box { margin-top: 4px; }
+    .css-add-res { display: flex; flex-direction: column; max-height: 180px; overflow: auto; margin-top: 3px; border: 1px solid #E3E6EE; border-radius: 6px; }
+    .css-add-res:empty { display: none; }
+    .css-add-opt { text-align: left; padding: 4px 8px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; border: 0; background: none; color: #1F2433; cursor: pointer; }
+    .css-add-opt:hover, .css-add-opt:focus-visible, .css-add-opt.first { background: #F5F7FF; }
+    .css-add-opt .sub { font-family: system-ui, sans-serif; }
+    .chg .chg-rule { font-style: normal; font-size: 10.5px; color: #6B7183; margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
     .st .xin.ch { background: #FFFBEA; border-color: #F0C95A; }
     .st .nb { width: 22px; height: 24px; border: 1px solid #D9DCE4; border-radius: 5px; font-size: 13px; line-height: 1; color: #4A5063; }
     .st .nb:hover { background: #F5F7FF; }
@@ -777,6 +977,13 @@
     .hl2.ink .hl-tag { background: ${INK}; }
     .x-bar { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #1E2230; color: #fff; padding: 7px 8px 7px 14px; border-radius: 9px; display: flex; gap: 10px; align-items: center; font-size: 12.5px; pointer-events: none; box-shadow: 0 8px 24px rgba(30,34,48,.3); z-index: 3; max-width: min(560px, 60vw); }
     .x-bar button { pointer-events: auto; flex: none; }
+    /* Compact toolbar shown in place of the panel while picking elements to measure or align to. */
+    .x-mini { position: fixed; right: 16px; bottom: 16px; display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 12px; background: #fff; color: #1E2230; border: 1px solid #D9DCE4; border-left: 3px solid ${INK}; border-radius: 9px; box-shadow: 0 8px 24px rgba(30,34,48,.22); font-size: 12px; pointer-events: auto; z-index: 3; max-width: min(340px, calc(100vw - 32px)); }
+    .x-mini[hidden] { display: none; }
+    .x-mini .mini-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+    .x-mini .mini-h { font-weight: 700; font-size: 11.5px; color: #1A33C7; }
+    .x-mini .mini-step { color: #1E2230; }
+    .x-mini .xb { flex: none; }
     .x-bar .ghost { color: #fff; border: 1px solid rgba(255,255,255,.3); padding: 3px 9px; }
     .x-bar .ghost:hover { background: rgba(255,255,255,.12); }
     .xtxt { position: fixed; z-index: 4; font-size: 15px; font-weight: 700; border: 1px solid ${INK}; border-radius: 4px; padding: 2px 5px; pointer-events: auto; background: #fff; }
@@ -790,7 +997,50 @@
     .sh-out { font: 12px/1.5 ui-monospace, Menlo, monospace; background: #FAFBFC; border: 1px solid #E2E5EC; border-radius: 8px; padding: 8px; white-space: pre-wrap; max-height: 260px; overflow: auto; }
     .stephead { display: flex; align-items: center; gap: 7px; font-weight: 650; font-size: 12.5px; color: #1E2230; margin-top: 2px; }
     .stepn { width: 18px; height: 18px; border-radius: 50%; background: #1E2230; color: #fff; font-size: 11px; line-height: 18px; text-align: center; flex: none; }
-    .x-typehint { font-size: 11.5px; color: #6B7183; margin-top: -4px; }
+    .tb-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+    .tb-actions .tool-action { padding: 7px 8px; }
+    .tool-action:disabled { opacity: .4; cursor: not-allowed; }
+    .tool-action[aria-expanded="true"] { color: #1A33C7; background: #EEF1FF; border-color: #2B4EFF; }
+    .tb-measure { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid #ECEEF4; padding-top: 7px; }
+    .tb-measure[hidden], .match-all-row[hidden] { display: none; }
+    .kbd-hint { align-self: center; font-size: 10.5px; color: #8A90A2; }
+    .tb-h { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #6B7183; }
+    .element-editor { display: flex; flex-direction: column; gap: 3px; padding: 8px 9px; border: 1px solid #C9D2FF; border-left: 3px solid ${INK}; border-radius: 8px; background: #F7F8FF; }
+    .se-h { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .se-of { font-size: 11px; font-weight: 650; color: #1A33C7; }
+    .se-name { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .se-name span { color: #4A5063; }
+    .se-sel, .se-cls { color: #1A33C7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .se-cls { color: #6B7183; font-size: 11px; }
+    .se-pick { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+    .se-pick .xin { flex: 1; min-width: 0; }
+    .tb-changes { display: flex; flex-direction: column; gap: 4px; border-top: 1px solid #ECEEF4; padding-top: 7px; }
+    .css-changes { display: flex; flex-direction: column; gap: 3px; }
+    .chg { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 11.5px; padding: 2px 2px 2px 7px; border-radius: 5px; background: #FFFBEA; border: 1px solid #F3E2A5; overflow-wrap: anywhere; }
+    .chg code { font-size: 11px; }
+    .chg-from { color: #6B7183; }
+    .chg .icon { width: 22px; height: 22px; line-height: 22px; flex: none; }
+    .sampled-colors:not(:empty)::before { content: "Sampled colors (reference)"; display: block; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #6B7183; margin-bottom: 3px; }
+    .bp-row { flex-wrap: wrap; }
+    .selb.cur { background: rgba(43,78,255,.18); box-shadow: 0 0 0 2px rgba(43,78,255,.35); }
+    .tchip.cur { box-shadow: inset 0 0 0 1.5px ${INK}; }
+    .tchip.missing { background: #F2F3F7; color: #6B7183; }
+    .sel-sum { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .sel-list { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; padding: 2px 0; }
+    .sel-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .sel-row .tchip { max-width: 100%; }
+    .sel-row .xb { padding: 2px 7px; font-size: 11px; }
+    .sel-tag { font-size: 10.5px; font-weight: 700; color: #1A33C7; }
+    .al-mode .chips, .al-element .chips { flex-wrap: nowrap; }
+    .al-axes { display: flex; flex-direction: column; gap: 7px; }
+    .al-axes[hidden] { display: none; }
+    .al-status.need { color: #B45309; }
+    .al-element { display: flex; flex-direction: column; gap: 7px; }
+    .al-element .xlabel { min-width: 70px; }
+    .al-ref { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .al-ref.set { color: #15803D; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
+    .refb { position: fixed; border: 2px dashed #16A34A; background: rgba(22,163,74,.07); border-radius: 3px; pointer-events: none; }
+    .refb .hl-tag { background: #16A34A; }
     .startrow { display: flex; flex-direction: column; gap: 5px; }
     .sbtns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
     .sbtn { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 8px 10px; border: 1px solid #D9DCE4; border-radius: 8px; text-align: left; background: #fff; }
@@ -821,6 +1071,7 @@
       <div class="hl2" hidden><span class="hl-tag"></span></div>
     </div>
     <div class="x-bar" hidden><span class="x-msg"></span><button class="ghost" data-x="bar-cancel">Esc</button></div>
+    <div class="x-mini" hidden role="status" aria-live="polite"><div class="mini-txt"><span class="mini-h">Blueline · <span class="mini-tool"></span></span><span class="mini-step"></span></div><button class="xb" data-x="bar-cancel" title="Cancel (Esc)">Cancel</button></div>
     <div class="xov" hidden>
       <div class="xov-h"><b>Design overlay</b><button class="icon" data-x="ov-close" aria-label="Close">✕</button></div>
       <div class="xrow"><label class="xb xb-file">Choose image… <input type="file" accept="image/*" data-x="ov-file" hidden></label><span class="sub">or paste one</span></div>
@@ -861,12 +1112,10 @@
 
   const TOP_HTML = `
     <div class="xrow"><button class="xb" data-x="dictate" title="Speak your note instead of typing it">Speak your note</button></div>
-    <details class="xd" data-d="meta"><summary>Priority &amp; screen size <span class="sub meta-sum"></span></summary>
-      <div class="xrow" style="margin-top:5px"><span class="xlabel">Priority</span><div class="chips">
-        <button class="chip" data-prio="must" aria-pressed="true" title="Needs to be fixed">Must fix</button><button class="chip" data-prio="nice" aria-pressed="false" title="Only if there is time. Done last">Nice to have</button></div></div>
-      <div class="xrow" style="margin-top:5px"><span class="xlabel" title="Which screen sizes this change should apply to">Screen size</span><div class="chips">
-        <button class="chip" data-bp="mobile" aria-pressed="false" title="Phones, under 750px wide">Mobile</button><button class="chip" data-bp="tablet" aria-pressed="false" title="750 to 989px wide">Tablet</button>
-        <button class="chip" data-bp="desktop" aria-pressed="false" title="990px and wider">Desktop</button><button class="chip" data-bp="all" aria-pressed="false" title="All screen sizes">All</button></div></div></details>
+    <div class="xrow bp-row"><span class="xlabel" title="Which screen sizes this change is for. Choosing one doesn\u2019t resize the page.">Screen size</span><div class="chips" role="group" aria-label="Screen size">
+      <button class="chip" data-bp="desktop" aria-pressed="false" title="990px and wider">Desktop</button><button class="chip" data-bp="tablet" aria-pressed="false" title="750 to 989px wide">Tablet</button>
+      <button class="chip" data-bp="mobile" aria-pressed="false" title="Phones, under 750px wide">Mobile</button><button class="chip" data-bp="all" aria-pressed="false" title="All screen sizes">All</button></div></div>
+    <div class="sub bp-note">Records the screen size the change is for. It doesn\u2019t resize the page.</div>
   `;
 
   // Icons use the same stroke weight and dimensions across all tool CTAs.
@@ -881,6 +1130,8 @@
     edit: icon('<path d="m4 20 5-1L20 8l-4-4L5 15l-1 5Z"/><path d="M4 5h7"/>'),
     hide: icon('<path d="M3 3l18 18M10 10a3 3 0 0 0 4 4"/><path d="M8 5a10 10 0 0 1 4-1c5 0 9 5 10 8-.4 1-1.4 2.6-3 4M6 7C4 8.5 2.7 10.5 2 12c1 3 5 8 10 8a10 10 0 0 0 4-.8"/>'),
     sample: icon('<path d="m13 5 6 6m-2-8 4 4-11 11-4 1 1-4L18 4"/><path d="M3 21h6"/>'),
+    css: icon('<path d="M8 4H6a2 2 0 0 0-2 2v4l-2 2 2 2v4a2 2 0 0 0 2 2h2M16 4h2a2 2 0 0 1 2 2v4l2 2-2 2v4a2 2 0 0 1-2 2h-2"/>'),
+    more: icon('<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>'),
   };
 
   const hdIcon = (inner) => `<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -889,14 +1140,15 @@
   const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
   const UNDO_KEY = IS_MAC ? '⌘Z' : 'Ctrl+Z';
 
+  // Step 2. The ribbon's internal ids are unchanged (tool-elements = Toolbox, tool-draw = Annotate); "Annotate"
+  // as an internal name still means selection mode (setAnnotate, hooks.toggleAnnotate). Measure is a Toolbox action.
   const MORE_HTML = `
-    <div class="x-strips"></div>
-    <div class="stephead"><span class="stepn">3</span>Annotation tools</div>
-    <div class="tool-ribbon" role="toolbar" aria-label="Annotation tools">
-      <button type="button" class="tool-main" data-x="tool-draw" data-tool="draw" aria-pressed="false" title="Draw arrows, shapes, freehand marks, or text on the page">${TOOL_ICON.draw}<span>Draw</span></button>
-      <button type="button" class="tool-main" data-x="tool-measure" data-tool="measure" aria-pressed="false" title="Measure the space between two elements. Starts right away: pick elements on the page, or measure between the two you selected">${TOOL_ICON.measure}<span>Measure</span></button>
-      <button type="button" class="tool-main" data-x="tool-align" data-tool="align" aria-pressed="false" title="Add guide lines and align your selected element with them">${TOOL_ICON.align}<span>Align</span></button>
-      <button type="button" class="tool-main" data-x="tool-elements" data-tool="elements" aria-pressed="false" title="Move, copy styling, edit text, hide, or sample a color">${TOOL_ICON.elements}<span>Elements</span></button>
+    <div class="stephead"><span class="stepn">2</span>Edit</div>
+    <div class="tool-ribbon" role="toolbar" aria-label="Editing tools">
+      <button type="button" class="tool-main" data-x="tool-elements" data-tool="elements" aria-pressed="false" title="Edit text, move, measure, match style, hide, or sample a color">${TOOL_ICON.elements}<span>Toolbox</span></button>
+      <button type="button" class="tool-main" data-x="tool-css" data-tool="css" aria-pressed="false" title="Preview CSS values (size, spacing, color and more) on the selected element">${TOOL_ICON.css}<span>Edit CSS</span></button>
+      <button type="button" class="tool-main" data-x="tool-draw" data-tool="draw" aria-pressed="false" title="Draw arrows, shapes, freehand marks, or text on the page">${TOOL_ICON.draw}<span>Annotate</span></button>
+      <button type="button" class="tool-main" data-x="tool-align" data-tool="align" aria-pressed="false" title="Align your selected elements to guide lines or to another element">${TOOL_ICON.align}<span>Align</span></button>
     </div>
 
     <div class="tool-panel" data-tool-panel="draw" hidden>
@@ -917,51 +1169,94 @@
       <div class="sub">Choose a shape, then draw on the page. Esc stops drawing. Color applies to new marks.</div>
     </div>
 
-    <div class="tool-panel" data-tool-panel="measure" hidden>
-      <div class="measure-pair xrow" hidden></div>
-      <div class="tool-measure-list"></div>
-      <button type="button" class="xb tool-wide" data-x="measure-new" title="Click another element on the page to measure to">+ Measure to another element</button>
-      <div class="sub">Measurements stay visible on the page while this note is open, and are included in the exported prompt.</div>
-    </div>
-
-    <div class="tool-panel" data-tool-panel="align" hidden>
-      <div class="xrow"><button class="xb" data-x="g-v" title="Add a vertical guide line you can drag into place">+ Vertical guide</button><button class="xb" data-x="g-h" title="Add a horizontal guide line you can drag into place">+ Horizontal guide</button></div>
-      <div class="align-rows"></div>
-      <div class="sub">Drag guides on the page, then align your selected element's edge or center to one.</div>
-    </div>
-
-    <div class="tool-panel" data-tool-panel="elements" hidden>
-      <div class="tool-grid">
-        <button type="button" class="tool-action" data-x="move-here" title="Pick a new position for the selected element">${TOOL_ICON.move}<span>Move</span></button>
-        <button type="button" class="tool-action" data-x="match" title="Pick another element to preview its styling on this one">${TOOL_ICON.match}<span>Match style</span></button>
-        <label class="sub"><input type="checkbox" class="match-all"> Apply match style to all selected</label>
-        <button type="button" class="tool-action" data-x="edittext" title="Edit this element's text directly on the page">${TOOL_ICON.edit}<span>Edit text</span></button>
-        <button type="button" class="tool-action" data-x="hide" title="Temporarily hide the selected element to preview the layout">${TOOL_ICON.hide}<span class="hide-label">Hide</span></button>
-        <button type="button" class="tool-action" data-x="pop-color" title="Sample a color from the webpage and copy its hex value">${TOOL_ICON.sample}<span>Sample color</span></button>
+    <div class="tool-panel" data-tool-panel="css" hidden>
+      <div class="sub css-guidance" hidden>Select an element above to edit its CSS.</div>
+      <div class="css-editor">
+        <div class="sub css-selected"></div>
+        <div class="tb-h">CSS rule</div>
+        <select class="xin css-rule" aria-label="CSS rule to edit"></select>
+        <div class="sub css-rule-info"></div>
+        <details class="xd css-utils" hidden><summary>Utility classes <span class="sub css-utils-n"></span></summary><div class="css-utils-list"></div></details>
+        <div class="tb-h css-props-h">Existing properties</div>
+        <div class="style-rows"></div>
+        <div class="sub css-empty" hidden></div>
+        <div class="css-add">
+          <button class="xb" data-x="css-add" title="Search for a CSS property to add to this rule">+ Add CSS property</button>
+          <div class="css-add-box" hidden>
+            <input class="xin css-add-q" placeholder="Search properties, or type --custom-name" spellcheck="false" autocomplete="off" aria-label="Search CSS properties">
+            <div class="css-add-res" role="listbox" aria-label="CSS properties"></div>
+          </div>
+        </div>
+        <div class="sub">Changes preview on this element only, and are listed below and included in the prompt. <span class="style-sum"></span></div>
+        <div class="xrow" style="margin-top:6px"><button class="xb" data-x="style-reset" title="Undo all previewed CSS values on this element. Alignment and other edits stay">Reset all</button></div>
       </div>
     </div>
 
-    <details class="xd xe" data-d="props"><summary>CSS property adjustments <span class="sub style-sum"></span></summary>
-      <div class="sub" style="margin-top:3px">Preview CSS values on the selected element. Your changes are included automatically in the prompt.</div>
-      <div class="style-rows"></div>
-      <div class="xrow" style="margin-top:6px"><button class="xb" data-x="style-reset" title="Undo all previewed CSS changes to this element">Reset all</button></div></details>
+    <div class="tool-panel" data-tool-panel="align" hidden>
+      <div class="xrow al-mode"><span class="xlabel">Align to</span><div class="chips" role="group" aria-label="Align to">
+        <button class="chip" data-al-mode="guides" aria-pressed="true" title="Align to guide lines you place on the page">Guides</button><button class="chip" data-al-mode="element" aria-pressed="false" title="Align to another element on the page. You click it next">Element</button></div></div>
+      <div class="al-guides">
+        <div class="xrow"><button class="xb" data-x="g-v" title="Add a vertical guide line you can drag into place">+ Vertical guide</button><button class="xb" data-x="g-h" title="Add a horizontal guide line you can drag into place">+ Horizontal guide</button></div>
+        <div class="align-rows"></div>
+        <div class="sub">Drag guides on the page, then align your selected element's edge or center to one. A vertical guide sets the horizontal position, a horizontal guide the vertical one.</div>
+      </div>
+      <div class="al-element" hidden>
+        <div class="xrow"><span class="xlabel">Reference</span><span class="al-ref sub">None chosen</span><button class="xb" data-x="al-pick" title="Click an element on the page to align to. It stays where it is">Choose</button></div>
+        <div class="xrow al-method"><span class="xlabel">Method</span><div class="chips" role="group" aria-label="Alignment method">
+          <button class="chip" data-al-method="edges" aria-pressed="true" title="Line up edges or centers with the reference. The elements may overlap">Align edges</button><button class="chip" data-al-method="next" aria-pressed="false" title="Place the selection outside the reference, touching it">Place next to</button></div></div>
+        <div class="al-axes" data-al-for="edges">
+          <div class="xrow"><span class="xlabel">Horizontal</span><div class="chips" role="group" aria-label="Horizontal alignment">
+            <button class="chip" data-al-h="" aria-pressed="true">None</button><button class="chip" data-al-h="left" aria-pressed="false">Left</button><button class="chip" data-al-h="center" aria-pressed="false">Center</button><button class="chip" data-al-h="right" aria-pressed="false">Right</button></div></div>
+          <div class="xrow"><span class="xlabel">Vertical</span><div class="chips" role="group" aria-label="Vertical alignment">
+            <button class="chip" data-al-v="" aria-pressed="true">None</button><button class="chip" data-al-v="top" aria-pressed="false">Top</button><button class="chip" data-al-v="middle" aria-pressed="false">Middle</button><button class="chip" data-al-v="bottom" aria-pressed="false">Bottom</button></div></div>
+        </div>
+        <div class="al-axes" data-al-for="next" hidden>
+          <div class="xrow"><span class="xlabel">Horizontal</span><div class="chips" role="group" aria-label="Horizontal placement">
+            <button class="chip" data-al-h="" aria-pressed="true">None</button><button class="chip" data-al-h="left-of" aria-pressed="false">Left of</button><button class="chip" data-al-h="center" aria-pressed="false" title="Center it horizontally on the reference">Center</button><button class="chip" data-al-h="right-of" aria-pressed="false">Right of</button></div></div>
+          <div class="xrow"><span class="xlabel">Vertical</span><div class="chips" role="group" aria-label="Vertical placement">
+            <button class="chip" data-al-v="" aria-pressed="true">None</button><button class="chip" data-al-v="above" aria-pressed="false">Above</button><button class="chip" data-al-v="middle" aria-pressed="false" title="Center it vertically on the reference">Middle</button><button class="chip" data-al-v="below" aria-pressed="false">Below</button></div></div>
+        </div>
+        <div class="xrow"><button class="xb" data-x="al-clear" hidden title="Remove the element alignment from all selected elements">Remove alignment</button></div>
+        <div class="sub al-status"></div>
+      </div>
+    </div>
+
+    <div class="tool-panel" data-tool-panel="elements" hidden>
+      <div class="sub element-guidance"></div>
+      <div class="tb-actions" role="group" aria-label="Element actions">
+        <button type="button" class="tool-action" data-x="edittext" title="Edit this element's text directly on the page">${TOOL_ICON.edit}<span>Edit text</span></button>
+        <button type="button" class="tool-action" data-x="move-here" title="Pick a new position for the selected element">${TOOL_ICON.move}<span>Move</span></button>
+        <button type="button" class="tool-action" data-x="tb-measure" title="Measure the space between two elements: pick them on the page, or measure between the two you selected">${TOOL_ICON.measure}<span>Measure</span></button>
+        <button type="button" class="tool-action" data-x="match" title="Pick another element to preview its styling on this one">${TOOL_ICON.match}<span>Match style</span></button>
+        <button type="button" class="tool-action" data-x="hide" title="Temporarily hide the selected element to preview the layout">${TOOL_ICON.hide}<span class="hide-label">Hide</span></button>
+        <button type="button" class="tool-action" data-x="pop-color" title="Sample a color from the webpage and copy its hex value">${TOOL_ICON.sample}<span>Sample color</span></button>
+      </div>
+      <label class="sub match-all-row"><input type="checkbox" class="match-all"> Apply match style to all selected</label>
+      <div class="tb-measure" hidden>
+        <div class="tb-h">Measurements</div>
+        <div class="measure-pair xrow" hidden></div>
+        <div class="tool-measure-list"></div>
+        <button type="button" class="xb tool-wide" data-x="measure-new" title="Click another element on the page to measure to">+ Measure to another element</button>
+        <div class="sub">Measurements are included in the exported prompt as reference. Hide only takes them off the page.</div>
+      </div>
+      <div class="sampled-colors"></div>
+    </div>
+    <div class="tb-changes" hidden><div class="tb-h">Changes</div><div class="css-changes"></div><div class="x-strips"></div><div class="sub tb-changes-n"></div></div>
     <details class="xd xe1" data-d="scope"><summary>Apply CSS changes to <span class="sub scope-sum"></span></summary>
       <label class="radio"><input type="radio" name="scope" value="one" checked> Just this one</label>
       <label class="radio"><input type="radio" name="scope" value="group"> All like it inside <select class="xin grp-sel" style="width:auto;max-width:170px"></select></label>
       <label class="radio"><input type="radio" name="scope" value="all"> Everywhere on the site <span class="sub all-count"></span></label>
       <div class="sub scope-info"></div></details>
+  `;
+
+  const LINK_HTML = `
     <details class="xd" data-d="link"><summary>Figma link &amp; product variant</summary>
       <input class="xin figma-in" placeholder="Figma frame link (optional)" style="margin-top:4px">
       <div class="shop-only" hidden><input class="xin var-q" placeholder="Find a product or variant (read-only)" style="margin-top:6px"><div class="var-res"></div></div></details>
   `;
 
-  const PROPS = [
-    ['font-size', 'Font size'], ['font-weight', 'Weight'], ['line-height', 'Line height'], ['letter-spacing', 'Tracking'],
-    ['color', 'Text color', true], ['background-color', 'Background', true], ['border-radius', 'Radius'],
-    ['padding', 'Padding'], ['margin', 'Margin'], ['gap', 'Gap'], ['width', 'Width'], ['max-width', 'Max width'], ['opacity', 'Opacity'],
-  ];
   const MATCH_PROPS = ['font-family', 'font-size', 'font-weight', 'line-height', 'letter-spacing', 'text-transform', 'text-align', 'color', 'background-color', 'border', 'border-radius', 'padding', 'margin', 'box-shadow', 'opacity', 'gap'];
-  const UNITLESS = new Set(['font-weight', 'opacity', 'line-height']);
+  const UNITLESS = new Set(['font-weight', 'opacity', 'line-height', 'z-index', 'order', 'flex-grow', 'flex-shrink', 'flex', 'zoom', 'orphans', 'widows', 'tab-size', 'fill-opacity', 'stroke-opacity', 'aspect-ratio', 'scale', 'columns', 'column-count']);
   const posText = { before: 'before', after: 'after', 'inside-start': 'inside, as the first child of', 'inside-end': 'inside, as the last child of' };
 
   // ------------------------------------------------------------------ dragging boxes
@@ -1050,8 +1345,9 @@
     root.querySelector('.x-tools').innerHTML = TOOLS_HTML;
     root.querySelector('.x-top').innerHTML = TOP_HTML;
     root.querySelector('.x-more').innerHTML = MORE_HTML;
+    root.querySelector('.x-link').innerHTML = LINK_HTML;
     const body = root.querySelector('.body');
-    root.querySelector('.x-step2').innerHTML = '<div class="stephead"><span class="stepn">2</span>Corrections</div>';
+    root.querySelector('.x-step2').innerHTML = '<div class="stephead"><span class="stepn">3</span>Describe</div>';
     const add = mk('<button class="addnote" data-x="add-note" title="Open a new note. You can attach it to an element, or keep it as a general note"><span class="an-label">＋ Add note</span></button>');
     const startRow = mk(`<div class="startrow"><div class="sub">Or start straight from the page:</div><div class="sbtns">
       <button class="sbtn" data-x="start-select" title="Click an element on the page to attach a note to it (Alt+P)"><b>Select element</b><span>Click it on the page</span></button>
@@ -1075,6 +1371,7 @@
     root.addEventListener('input', onInput);
     root.addEventListener('change', onChange);
     root.addEventListener('keydown', onUIKey);
+    root.querySelector('.pop-foot').before(mk('<div class="pop-spacer" aria-hidden="true"></div>'));
     root.addEventListener('mouseover', (e) => { const li = e.target.closest('.item'); const id = li ? li.dataset.id : null; if (id !== T.hot) { T.hot = id; renderMarks(); } });
     root.addEventListener('mouseleave', () => { if (T.hot) { T.hot = null; renderMarks(); } });
     attachGlobal();
@@ -1194,24 +1491,39 @@
   function cancelTools() { if (T.pick) endPick(null); }
   hooks.cancelTools = cancelTools;
 
-  function pickOne(msg, live) {
+  // While picking, the panel is hidden so the page is free to click. With `mini` ({ tool, step }) a small
+  // Blueline toolbar takes the panel's corner instead, so it is clear Blueline is still open and how to cancel.
+  function pickOne(msg, live, mini) {
     cancelTools();
     stopDrawing();
     setAnnotate(false, true);
     return new Promise((resolve) => {
       T.pick = { resolve, live };
-      showBar(msg);
-      syncCursor();
       const panel = q('.panel');
+      if (mini) showMini(mini, panel); else showBar(msg);
+      syncCursor();
       if (panel) panel.style.visibility = 'hidden';
     });
   }
+
+  function showMini(mini, panel) {
+    const m = q('.x-mini');
+    if (!m) return;
+    m.querySelector('.mini-tool').textContent = mini.tool;
+    m.querySelector('.mini-step').textContent = mini.step;
+    const r = panel?.getBoundingClientRect();
+    const W = document.documentElement.clientWidth || innerWidth;
+    if (r && r.width) Object.assign(m.style, { right: `${Math.max(4, Math.round(W - r.right))}px`, bottom: `${Math.max(4, Math.round(innerHeight - r.bottom))}px` });
+    m.hidden = false;
+  }
+  const hideMini = () => { const m = q('.x-mini'); if (m) m.hidden = true; };
 
   function endPick(val) {
     const p = T.pick;
     if (!p) return;
     T.pick = null;
     hideBar();
+    hideMini();
     drawHl2(null);
     clearMeas();
     syncCursor();
@@ -1255,7 +1567,7 @@
   function onEvt(e) {
     if (!S.active) return;
     if ((e.type === 'pointermove' || e.type === 'pointerdown') && e.shiftKey !== T.shiftHeld) { T.shiftHeld = e.shiftKey; syncCursor(); }
-    if (e.type === 'pointermove') { T.lastPt = { x: e.clientX, y: e.clientY }; shiftHover(BL.fromUI(e) || !(T.shiftHeld && shiftReady()) ? null : pickable(e)); }
+    if (e.type === 'pointermove') { T.lastPt = { x: e.clientX, y: e.clientY }; shiftHover(BL.fromUI(e) || !(T.shiftHeld && shiftReady()) ? null : pickable(e), true); }
     if (T.eatClick && !(T.pick || A.on || D.tool) && /^(click|mouseup|dblclick|auxclick)$/.test(e.type) && !BL.fromUI(e)) {
       if (e.type === 'click') T.eatClick = false;
       e.preventDefault();
@@ -1429,13 +1741,17 @@
   // While Shift is held and a Shift selection is available, preview the element under the pointer
   // with the Select element hover outline and label. Hidden during a drag, while typing, while another
   // tool owns the pointer, and as soon as Shift is released.
-  const typingFocus = () => {
+  // A focused text field means Shift is for capital letters, so the Shift key alone shows nothing. Moving the
+  // pointer with Shift held is deliberate, so a field on the page that kept focus (an autofocused search box)
+  // doesn't stop the outline; typing in Blueline's own note still does.
+  const typingFocus = (moved) => {
     let a = document.activeElement;
+    if (moved && !mine(a)) return false;
     while (a?.shadowRoot?.activeElement) a = a.shadowRoot.activeElement;
     return !!a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
   };
-  function shiftHover(el) {
-    const show = !!el && T.shiftHeld && shiftReady() && !T.shiftSel?.moved && !typingFocus();
+  function shiftHover(el, moved = false) {
+    const show = !!el && T.shiftHeld && shiftReady() && !T.shiftSel?.moved && !typingFocus(moved);
     if (show) { drawHl2(el, true); T.shiftHover = true; } else if (T.shiftHover) { T.shiftHover = false; if (!(A.on || T.pick)) drawHl2(null); }
   }
   function shiftHoverAtPointer() {
@@ -1730,6 +2046,7 @@
 
   hooks.onPopOpen = (el, item) => {
     P = emptyPop();
+    ruleModels.clear();
     clearUndo();
     // A copy, so Cancel leaves the saved note's history as it was.
     if (item && histories.has(item.id)) undoStack = histories.get(item.id).slice();
@@ -1737,7 +2054,6 @@
     P.item = item || null;
     const sp = S.pop;
     if (item) {
-      P.priority = item.priority || 'must';
       P.bps = new Set(item.bps || []);
       P.scope = item.scope?.mode || 'one';
       P.scopeTouched = !!item.scope?.chosen;
@@ -1751,7 +2067,8 @@
       P.measures = (item.measures || []).slice();
       P.colors = (item.colors || []).slice();
       P.marks = (item.marks || []).map((m) => JSON.parse(JSON.stringify(m)));
-      P.els = item.kind === 'region' || item.kind === 'page' ? [] : targetsOf(item);
+      // A note's elements are looked up only on its own page, and each element only once.
+      P.els = item.kind === 'region' || item.kind === 'page' || item.path !== here() ? [] : [...new Set(targetsOf(item))];
       P.el = P.els[0] || null;
       const gs = guidesHere();
       for (const a of item.align || []) { const g = gs.find((x) => x.name === a.guide); if (g) { P.align[g.id] = a.edge; P.alignInfo[g.id] = { offset: a.offset, shift: a.shift || 0, axis: a.axis }; P.snap[a.axis] = a.shift || 0; } }
@@ -1764,22 +2081,36 @@
     if (sp?.move) P.move = { to: targetInfo(sp.move.toEl), toEl: sp.move.toEl, position: sp.move.position };
     else if (item?.move) P.move = { to: item.move.to, toEl: BL.query(item.move.to.selector), position: item.move.position };
     if (item && P.els.length) {
+      const used = new Set();
+      const primary = BL.query(item.el?.selector);
       for (const target of P.els) {
-        const data = item.elementEdits?.find((e) => e.el.selector === BL.cssPath(target));
-        if (data) restoreElementRecord(target, data);
-        else if (!item.elementEdits) restoreElementRecord(target, { ...item, textEdit: target === P.els[0] ? item.textEdit : null, move: target === P.els[0] ? item.move : null, align: target === P.els[0] ? item.align : [], match: target === P.els[0] ? item.match : null, measures: target === P.els[0] ? item.measures : [] });
+        // Each saved instance is matched to its own element, once: by its current path, or by the selector it
+        // was saved with when the page has changed since (the path can grow when similar elements appear).
+        const pick = (test) => item.elementEdits?.find((e) => !used.has(e) && test(e));
+        const data = pick((e) => e.el.selector === BL.cssPath(target)) || pick((e) => BL.query(e.el?.selector) === target);
+        if (data) { used.add(data); restoreElementRecord(target, data); }
+        // Older notes kept one set of edits for all their elements; text, move, alignment, match and
+        // measurements belonged to the note's own (first) element.
+        else if (!item.elementEdits) restoreElementRecord(target, { ...item, textEdit: target === primary ? item.textEdit : null, move: target === primary ? item.move : null, align: target === primary ? item.align : [], match: target === primary ? item.match : null, measures: target === primary ? item.measures : [] });
       }
+      P.missing = missingRecords(item, used);
       const current = P.edits.get(P.el) || emptyPop();
       for (const key of EDIT_KEYS) P[key] = current[key];
-    }
+    } else if (item && item.path === here() && item.kind !== 'region' && item.kind !== 'page') P.missing = missingRecords(item, new Set());
     S.pop.els = P.els;
     setTimeout(syncCursor, 0);
     q('.panel').classList.add('composing');
-    q('.pop-note').placeholder = sp?.move && !item ? 'Anything to add? (optional)' : 'Describe what should change. Optional if your annotations say it all.';
+    q('.pop-note').placeholder = PH_NONE;
     for (const d of qa('.pop details')) d.open = false;
-    if (Object.keys(P.tweaks).length) q('[data-d="props"]').open = true;
+    T.selOpen = false;
+    T.measureOpen = false;
+    q('.pop-spacer').style.height = '0px';
+    restoreAlignUi();
+    q('.pop').scrollTop = 0;
     if (P.scope !== 'one') q('[data-d="scope"]').open = true;
-    activeTool = P.measures.length ? 'measure' : Object.keys(P.align).length ? 'align' : P.marks.some((m) => !m.auto) ? 'draw' : null;
+    rememberElement();
+    const anyEdit = (test) => [...P.edits.values()].some(test);
+    activeTool = anyEdit((r) => Object.keys(r.align).length || r.alignEl?.x || r.alignEl?.y) ? 'align' : anyEdit((r) => Object.values(r.tweaks).some((t) => !t.snap)) ? 'css' : P.marks.some((m) => !m.auto) ? 'draw' : null;
     visibleMeasureIndex = P.measures.length ? P.measures.length - 1 : null;
     BL.hideHL();
     loadCompose();
@@ -1790,9 +2121,6 @@
       setTimeout(() => undo('Undone. Update the note to keep this, or Cancel.'), 0);
     }
   };
-
-  const TYPE_TIPS = { bug: 'Something is broken or behaves wrongly.', polish: 'Spacing, size, color or alignment needs adjusting.', copy: 'Wording, labels or messages need changing.', feature: 'Something new that does not exist yet.' };
-  function updateTypeHint() { const h = q('.x-typehint'); if (h) h.textContent = TYPE_TIPS[S.popType] || ''; }
 
   function loadCompose() {
     const pop = q('.pop');
@@ -1807,10 +2135,10 @@
     q('.var-res').textContent = '';
     q('.var-q').value = '';
     q('.pop-el').textContent = P.el ? BL.label(P.el) : '';
-    updateTypeHint();
     renderSel();
     renderElementEditor();
     syncChips();
+    closeAddProp();
     buildStyleRows();
     buildAlignRows();
     updateScope();
@@ -1839,13 +2167,25 @@
     const chips = [];
     if (rg) chips.push(`<span class="tchip${P.auto ? ' auto' : ''}" title="An empty area you selected">▭ Empty area ${rg.w}×${rg.h} in ${esc(rg.ctx.container.label)}</span>`);
     else if (P.item?.kind === 'page') chips.push('<span class="tchip">Whole page (general note)</span>');
-    else if (!P.els.length && P.item && !P.cleared) chips.push(`<span class="tchip">${esc(P.item.el.label)}</span>`);
-    else P.els.forEach((e, i) => chips.push(`<span class="tchip${P.auto ? ' auto' : ''}" title="${esc(BL.cssPath(e))}">${esc(elName(e))}${editing ? '' : `<button data-x="sel-rm" data-i="${i}" aria-label="Remove ${esc(elName(e))} from this note" title="Remove from this note">✕</button>`}</span>`));
+    else if (!P.els.length && P.item && !P.cleared && !P.missing.length) chips.push(`<span class="tchip">${esc(P.item.el.label)}</span>`);
+    else P.els.forEach((e, i) => chips.push(`<span class="tchip${P.auto ? ' auto' : ''}${P.els.length > 1 && e === P.el ? ' cur' : ''}"${P.els.length > 1 && e === P.el ? ' aria-current="true"' : ''} title="${esc(BL.cssPath(e))}">${esc(elName(e))}<button data-x="sel-rm" data-i="${i}" aria-label="Remove ${esc(elName(e))} from this note" title="Remove from this note">✕</button></span>`));
+    if (!rg && P.item?.kind !== 'page') P.missing.forEach((m, i) => chips.push(`<span class="tchip missing" title="${esc(m.rec.el?.selector || '')}. Its saved edits are kept until you remove it.">Element not found: ${esc(m.rec.el?.label || 'element')}<button data-x="sel-rm-missing" data-i="${i}" aria-label="Remove ${esc(m.rec.el?.label || 'element')} (not on this page) from this note" title="Remove from this note. Its saved edits are discarded">✕</button></span>`));
     const none = !chips.length;
+    // Several elements: a count and a collapsed list (chips with their remove buttons, edits, and Edit).
+    const many = !rg && P.item?.kind !== 'page' && P.els.length + P.missing.length > 1;
+    let list = '';
+    if (many) {
+      rememberElement();
+      const rows = P.els.map((e, i) => `<div class="sel-row">${chips[i]}${e === P.el ? '<span class="sel-tag">Editing</span>' : `<button class="xb" data-x="edit-element" data-i="${i}" title="Edit this element">Edit</button>`}<span class="sub">${esc(editSummary(P.edits.get(e) || emptyPop()).join(', '))}</span></div>`);
+      const gone = chips.slice(P.els.length).map((c) => `<div class="sel-row">${c}</div>`);
+      const n = P.els.length + P.missing.length;
+      list = `<div class="sel-sum"><span class="tb-h">Selected elements (${n})</span><button class="xb" data-x="sel-showall" aria-expanded="${!!T.selOpen}">${T.selOpen ? 'Hide list' : `Show all ${n} elements`}</button></div><div class="sel-list"${T.selOpen ? '' : ' hidden'}>${[...rows, ...gone].join('')}</div>`;
+    }
     const num = editing ? S.batch.items.indexOf(P.item) + 1 : 0;
     let hint = '';
     if (A.on) hint = A.keep ? 'Click each element you want to add, then press Done.' : A.mode === 'area' ? 'Drag a rectangle over what you mean.' : 'Click an element on the page (or drag around it).';
     else if (none) hint = `${PICK_HINT}${P.cleared || editing ? '' : ' Or skip this to save a general note about the whole page.'}`;
+    else if (editing && !P.els.length && P.missing.length) hint = 'Not on the page right now. Its saved edits are kept.';
     else if (editing && !P.els.length && P.item.kind !== 'region' && P.item.kind !== 'page') hint = `This note is on ${esc(P.item.path)}. Open that page to edit its target.`;
     else if (editing) hint = 'Shift-click elements on the page to add or remove them from this note.';
     else if (P.auto && rg) hint = 'No element was inside your selection, so this marks an empty area. That works for "add something here".';
@@ -1854,10 +2194,10 @@
     const buttons = editing ? '' : `<div class="xbtns">
       <button class="xb${A.on && A.mode === 'select' && !A.keep ? ' on' : ''}" data-x="sel-element" title="Click an element on the page to attach this note to it">Select element</button>
       <button class="xb${A.on && A.mode === 'area' ? ' on' : ''}" data-x="sel-area" title="Drag a rectangle over an element, several elements, or an empty spot. Blueline finds the elements inside it">Select area</button>
-      ${P.els.length && !rg ? `<button class="xb${A.on && A.keep ? ' on' : ''}" data-x="sel-add" title="Include more elements in this same note">+ Add another element</button>` : ''}</div>`;
+      ${P.els.length && !rg ? `<button class="xb${A.on && A.keep ? ' on' : ''}" data-x="sel-add" title="Include more elements in this same note">+ Add another element</button><span class="kbd-hint" title="Shift+click elements on the page to add or remove them">Shift+click</span>` : ''}</div>`;
     const canClear = canClearSelection();
     const clear = `<div class="xbtns"><button class="xb" data-x="sel-clear"${canClear ? '' : ' disabled'} title="${canClear ? 'Remove every selected element from this note. Drawings and other annotations stay. Undo restores the selection.' : 'Nothing selected to clear'}">Clear selection</button></div>`;
-    box.innerHTML = `<div class="stephead"><span class="stepn">1</span>Selected elements to change${editing ? ` (note ${num})` : ''}</div>${chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}${buttons}${clear}<div class="sub">${hint}</div>`;
+    box.innerHTML = `<div class="stephead"><span class="stepn">1</span>Select${editing ? ` (note ${num})` : ''}</div>${many ? list : chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}${buttons}${clear}<div class="sub">${hint}</div>`;
   }
 
   const PICK_HINT = 'Shift-click an element or Shift-drag to select an area.';
@@ -1883,9 +2223,40 @@
     syncCursor();
   }
 
+  // The ✕ on a chip: takes that one element out of the note, with its edits (they are discarded, not parked, so
+  // selecting it again starts clean). Every other element and edit stays. One undo step restores it all. The
+  // element being edited stays the same unless it was the one removed. The last element leaves the note
+  // with nothing selected (like Clear selection), never closing the note.
+  function removeSelected(i) {
+    const el = P.els[i];
+    if (!S.pop || !el || isRegionPop()) return;
+    const rest = P.els.filter((_, k) => k !== i);
+    const current = P.el;
+    if (!rest.length && !P.missing.length) { clearSelection(); P.parked.delete(el); return; }
+    const tool = activeTool;
+    recordSelection();
+    setTarget({ els: rest, auto: P.auto });
+    P.parked.delete(el);
+    if (!rest.length) P.cleared = true;
+    else if (current !== el && rest.includes(current)) chooseElement(rest.indexOf(current));
+    if (tool && S.pop && !activeTool && P.el) { activeTool = tool; syncToolPanels(); }
+    BL.hideHL();
+    renderAnn();
+  }
+
+  // The ✕ on a saved element that isn't on this page: the only way its saved edits are discarded (on Update).
+  function removeMissing(i) {
+    if (!S.pop || !P.missing[i]) return;
+    recordSelection();
+    P.missing = P.missing.filter((_, k) => k !== i);
+    P.missingEdited = true;
+    if (!P.els.length && !P.missing.length) P.cleared = true;
+    loadCompose();
+  }
+
   // A cleared note must get a new selection (or Undo) before saving; it never silently becomes a
   // whole-page note.
-  hooks.blockSave = () => (S.pop && P.cleared && !P.els.length && !S.pop.region ? `Nothing is selected. ${PICK_HINT} Or press Undo to restore the previous selection.` : '');
+  hooks.blockSave = () => (S.pop && P.cleared && !P.els.length && !P.missing.length && !S.pop.region ? `Nothing is selected. ${PICK_HINT} Or press Undo to restore the previous selection.` : '');
 
   hooks.onPopClose = () => {
     if (T.speech) T.speech.stop();
@@ -1902,6 +2273,7 @@
     const panel = q('.panel');
     if (panel) panel.classList.remove('composing');
     P = emptyPop();
+    ruleModels.clear();
     clearUndo();
     activeTool = null;
     visibleMeasureIndex = null;
@@ -1910,23 +2282,24 @@
   };
 
   function syncChips() {
-    for (const c of qa('[data-prio]')) c.setAttribute('aria-pressed', String(c.dataset.prio === P.priority));
     const all = ['mobile', 'tablet', 'desktop'].every((b) => P.bps.has(b));
     for (const c of qa('[data-bp]')) c.setAttribute('aria-pressed', String(c.dataset.bp === 'all' ? all : P.bps.has(c.dataset.bp)));
-    const sum = q('.meta-sum');
-    if (sum) sum.textContent = `${P.priority === 'nice' ? 'Nice to have' : 'Must fix'} · ${all ? 'all screen sizes' : ['mobile', 'tablet', 'desktop'].filter((b) => P.bps.has(b)).join(' + ') || 'any size'}`;
   }
 
   function updatePrerequisites() {
     for (const b of qa('[data-x="move-here"], [data-x="match"], [data-x="hide"], [data-x="align-go"], [data-x="edittext"]')) {
-      const reason = !P.el ? 'Select an element first.' : b.dataset.x === 'edittext' && P.el.children.length ? 'Select the text element itself; this element contains other elements.' : '';
+      const reason = !P.el || isRegionPop() ? 'Select an element first.' : b.dataset.x === 'edittext' && P.el.children.length ? 'Select the text element itself; this element contains other elements.' : '';
       b.disabled = !!reason;
       if (!b.dataset.readyTitle) b.dataset.readyTitle = b.title;
       b.title = reason || b.dataset.readyTitle;
     }
-    let hint = q('.element-guidance');
-    if (!hint) { hint = mk('<div class="sub element-guidance"></div>'); q('[data-tool-panel="elements"]').prepend(hint); }
-    hint.textContent = P.el ? `Actions apply to ${BL.label(P.el)} (instance ${P.els.indexOf(P.el) + 1}). Match style asks you to pick a reference element next.` : 'Select an element above to enable element actions. Sample color is available without a selection.';
+    const hint = q('.element-guidance');
+    hint.textContent = P.el && !isRegionPop() ? '' : 'Select an element above to edit it. Sample color works without a selection.';
+    hint.hidden = !hint.textContent;
+    const noEl = !P.el || isRegionPop();
+    q('.css-guidance').hidden = !noEl;
+    q('.css-editor').hidden = noEl;
+    q('.match-all-row').hidden = P.els.length < 2;
   }
 
   function updateHideButton() {
@@ -1941,7 +2314,9 @@
     const el = P.el;
     if (!el || isRegionPop()) { T.simEls = null; if (sm) sm.textContent = ''; return; }
     const opts = groupOptions(el);
-    const all = similar(el, 'all');
+    const sr = scopeRule();
+    const ruleSel = sr?.reliable ? sr.rule.matched || sr.rule.selector : null;
+    const all = similar(el, 'all', 0, ruleSel);
     const sel = q('.grp-sel');
     sel.innerHTML = opts.map((o, i) => `<option value="${i}">${esc(o.label)} (${o.count})</option>`).join('');
     P.groupIdx = Math.min(P.groupIdx, Math.max(0, opts.length - 1));
@@ -1957,83 +2332,376 @@
     if (P.scope === 'one') {
       T.simEls = null;
       sm.textContent = '';
-      info.textContent = all.els.length > 1 ? `${all.els.length - 1} similar element${all.els.length === 2 ? '' : 's'} on this page stay unchanged.` : 'Nothing else on this page looks like it.';
+      info.textContent = ruleSel
+        ? (all.els.length > 1 ? `The rule ${ruleSel} also matches ${plural(all.els.length - 1, 'other element')} here; the export asks for this element only, leaving that rule as it is.` : `The rule ${ruleSel} matches only this element on this page.`)
+        : all.els.length > 1 ? `${all.els.length - 1} similar element${all.els.length === 2 ? '' : 's'} on this page stay unchanged.` : 'Nothing else on this page looks like it.';
       sum.textContent = '';
       return;
     }
-    const s = P.scope === 'group' ? similar(el, 'group', P.groupIdx) : all;
+    const s = P.scope === 'group' ? similar(el, 'group', P.groupIdx, ruleSel) : all;
     T.simEls = s.els.filter((e) => e !== el);
     renderSim();
-    info.textContent = `${matches(s.els.length)} for ${s.sel}${s.root ? ` inside ${BL.label(s.root)}` : ''}. Highlighted in orange.${s.els.length > 150 ? ' That is a lot. Is the selector too broad?' : ''}`;
+    info.textContent = `${ruleSel ? `The change goes to the rule ${s.sel}: ` : ''}${matches(s.els.length)} for ${s.sel}${s.root ? ` inside ${BL.label(s.root)}` : ''}. Highlighted in orange. The preview shows on this element only.${s.els.length > 150 ? ' That is a lot. Is the selector too broad?' : ''}${sr && !sr.reliable ? ` (The changes were made in ${sr.rule.matched || sr.rule.selector}, which ${sr.rule.utility ? 'is a utility class' : 'isn\u2019t on the page now or has a condition that can\u2019t be checked'}, so a similar-element selector is used.)` : ''}`;
     sum.textContent = `${P.scope === 'group' ? 'group' : 'everywhere'} · ${s.els.length}`;
   }
 
-  // ------------------------------------------------------------------ element properties
+  // ------------------------------------------------------------------ element properties (Edit CSS)
+  // The editor shows the declarations of one CSS rule that matches the element being edited, as written in the
+  // stylesheet. Every change is still previewed inline on that one element; the rule is recorded with the change
+  // (tweak.rule) so the export can say where it belongs. One value per property per element: editing the same
+  // property under another rule moves the change to that rule.
 
   const normInput = (prop, v) => {
-    if (!/^-?\d*\.?\d+$/.test(v)) return v;
+    if (prop.startsWith('--') || !/^-?\d*\.?\d+$/.test(v)) return v;
     if (prop === 'line-height') return +v >= 4 ? `${v}px` : v;
     return UNITLESS.has(prop) ? v : `${v}px`;
   };
 
   function stepVal(prop, v, dir, shift) {
-    const step = prop === 'opacity' ? 0.05 : prop === 'font-weight' ? 100 : prop === 'line-height' && !/[a-z%]/i.test(v) && parseFloat(v) < 4 ? 0.1 : 1;
-    return v.replace(/-?\d*\.?\d+/g, (n) => String(rnd2(+n + dir * step * (shift ? 10 : 1))));
+    // Colors, variables and calc() aren't nudged: changing a digit inside them would change a different thing.
+    if (/var\(|calc\(|env\(|#[0-9a-f]{3,8}\b|\b(rgb|hsl|oklch|oklab|lab|lch|color)\(/i.test(v)) return v;
+    const step = prop === 'opacity' ? 0.05 : prop === 'font-weight' ? 100 : prop === 'line-height' && !/[a-z%]/i.test(v) && parseFloat(v) < 4 ? 0.1 : /em$|rem$/.test(v.trim()) ? 0.125 : 1;
+    return v.replace(/-?\d*\.?\d+/g, (n) => String(Math.round((+n + dir * step * (shift ? 10 : 1)) * 1000) / 1000));
   }
 
   const toHex = (v) => { const c = BL.rgba(v); return c ? BL.hex(c) : '#000000'; };
   const tweakCount = () => Object.values(P.tweaks).filter((t) => !t.snap).length;
+  const isColorProp = (prop) => /color$/.test(prop) || /^(background|fill|stroke)$/.test(prop);
+  const RESERVED = { translate: 'Alignment previews use translate. Use Align to move the element.' };
+  const tweakKey = (t) => t?.rule?.key || 'element';
+
+  // Rules matching an element, worked out once per element while a note is open (cleared on open and close).
+  const ruleModels = new Map();
+  function cssModel(el) {
+    if (ruleModels.has(el)) return ruleModels.get(el);
+    let res;
+    try { res = BL.cssRulesFor(el, { inlineText: pageInline(el) }); } catch { res = { rules: [], inline: null, blocked: 0, blockedSources: [], tailwind: false }; }
+    const seen = new Map();
+    const total = new Map();
+    const base = (r) => [r.matched, r.source.href || r.source.label, r.context].join('|');
+    res.rules.forEach((r) => total.set(base(r), (total.get(base(r)) || 0) + 1));
+    const rules = res.rules.map((r) => {
+      const b = base(r);
+      const n = seen.get(b) || 0;
+      seen.set(b, n + 1);
+      return { ...r, key: `${b}|${n}`, label: `${r.matched} · ${r.source.label}${r.context ? ` · ${r.context}` : ''}${total.get(b) > 1 ? ` (#${n + 1})` : ''}${r.uncertain ? ' · condition not checked' : ''}` };
+    });
+    // Most relevant first: rules aimed at the element itself (no ancestor in the selector), then rules without a
+    // condition, then rules with more declarations, then later rules. A ranking for the list only, not the cascade.
+    const direct = (r) => (/[\s>+~]/.test(r.matched.replace(/\([^)]*\)/g, '()')) ? 0 : 1);
+    const strength = (a, b) => direct(b) - direct(a) || (a.context ? 1 : 0) - (b.context ? 1 : 0) || b.decls.length - a.decls.length || b.order - a.order;
+    const inlineDecls = res.inline?.decls || [];
+    const element = { ...(res.inline || {}), kind: inlineDecls.length ? 'inline' : 'element', decls: inlineDecls, key: 'element', matched: 'This element only', source: { kind: 'inline', label: 'style attribute', file: 'style attribute' }, context: '', label: inlineDecls.length ? 'This element only (its style attribute)' : 'This element only (no rule)' };
+    const model = {
+      classRules: rules.filter((r) => r.kind === 'class' && !r.utility).sort(strength),
+      otherRules: rules.filter((r) => r.kind !== 'class' && !r.utility).sort(strength),
+      utilities: rules.filter((r) => r.utility),
+      element, blocked: res.blocked, blockedSources: res.blockedSources, count: rules.length,
+    };
+    model.byKey = new Map([...rules, element].map((r) => [r.key, r]));
+    ruleModels.set(el, model);
+    return model;
+  }
+
+  // What a change records about its rule. The element itself is recorded separately (its selector and classes).
+  function ruleInfo(r) {
+    if (r.key === 'element') return { key: 'element', kind: r.kind, source: 'style attribute' };
+    const info = { key: r.key, kind: r.kind, selector: r.selector, matched: r.matched, source: r.source.label, file: r.source.file, href: r.source.href, context: r.context || undefined, media: r.media || undefined, layer: r.layer || undefined, uncertain: r.uncertain || undefined, utility: r.utility || undefined, path: r.path, decls: (r.decls || []).slice(0, 40).map((d) => ({ prop: d.prop, value: d.value, ...(d.important ? { important: true } : {}) })) };
+    for (const k of Object.keys(info)) if (info[k] === undefined) delete info[k];
+    return info;
+  }
+
+  // A saved rule whose key is gone (the page's stylesheets changed) is linked again by what identifies it, never by
+  // its position alone. Candidates have the same selector, source and condition.
+  //  - Exactly one candidate: it is the rule, even if its values changed since. The saved values stay as saved.
+  //  - Several (the same selector declared more than once): a candidate is ruled out when a property the saved rule
+  //    declared (`declared`) is no longer declared there. Of the rest, the one whose declared property names equal
+  //    the rule's saved list (`decls`), else the only one that still declares the changed properties, else the only
+  //    one whose values still match. Anything still tied stays unresolved: the stylesheet position is not used to
+  //    pick between rules that look alike.
+  // Unresolved: the change stays "not found" with its selector, source, property, values, !important and scope,
+  // previewed on its own element, attached to no other rule.
+  function relinkRule(model, tweaks) {
+    const saved = tweaks[0].rule;
+    const same = [...model.byKey.values()].filter((r) => r.key !== 'element' && r.matched === saved.matched && r.source.label === saved.source && (r.context || '') === (saved.context || ''));
+    if (same.length <= 1) return same[0] || null;
+    const declared = (r, prop) => (r.decls || []).find((d) => d.prop === prop);
+    const live = same.filter((r) => tweaks.every((t) => t.declared !== true || declared(r, t.prop)));
+    const only = (list) => (list.length === 1 ? list[0] : null);
+    const names = (list) => [...new Set(list.map((d) => d.prop))].sort().join();
+    const byList = saved.decls?.length ? live.filter((r) => names(r.decls || []) === names(saved.decls)) : [];
+    const byProps = tweaks.some((t) => t.declared === true) ? live.filter((r) => tweaks.every((t) => t.declared !== true || declared(r, t.prop))) : [];
+    const byValue = live.filter((r) => tweaks.some((t) => t.declared === true) && tweaks.every((t) => t.declared !== true || declared(r, t.prop)?.value === t.from));
+    return only(byList) || only(byProps) || only(byValue) || null;
+  }
+
+  // Saved changes whose rule isn't on the page now: kept as they are and shown under their own entry.
+  function missingRuleEntries(model) {
+    const out = new Map();
+    for (const t of Object.values(P.tweaks)) {
+      if (!t.snap && t.rule && t.rule.key !== 'element' && !model.byKey.has(t.rule.key)) {
+        const group = Object.values(P.tweaks).filter((x) => !x.snap && x.rule?.key === t.rule.key);
+        const pick = relinkRule(model, group);
+        if (pick) for (const x of group) x.rule = ruleInfo(pick);
+      }
+      if (t.snap || !t.rule || t.rule.key === 'element' || model.byKey.has(t.rule.key) || out.has(t.rule.key)) continue;
+      out.set(t.rule.key, { key: t.rule.key, missing: true, kind: t.rule.kind, matched: t.rule.matched || t.rule.selector, selector: t.rule.selector, source: { label: t.rule.source || '' }, context: t.rule.context || '', decls: [], label: `${t.rule.matched || t.rule.selector} · ${t.rule.source || ''}${t.rule.context ? ` · ${t.rule.context}` : ''} · not found on this page` });
+    }
+    return [...out.values()];
+  }
+
+  // The rule the editor shows: the one chosen for this instance, else the rule of its latest change, else the
+  // strongest class rule (by specificity and source order only, no cascade claim), else another rule, else the element.
+  function currentRule(model, missing) {
+    const find = (key) => model.byKey.get(key) || missing.find((m) => m.key === key) || null;
+    if (P.cssRule && find(P.cssRule)) return find(P.cssRule);
+    const last = Object.values(P.tweaks).filter((t) => !t.snap).pop();
+    if (last) return find(tweakKey(last)) || model.element;
+    return model.classRules.find((r) => !r.uncertain) || model.otherRules.find((r) => !r.uncertain) || model.element;
+  }
 
   function buildStyleRows() {
     const box = q('.style-rows');
     box.textContent = '';
     q('.style-sum').textContent = tweakCount() ? `${tweakCount()} changed` : '';
-    if (!P.el || isRegionPop()) return;
+    const sel = q('.css-rule');
+    const info = q('.css-rule-info');
+    const empty = q('.css-empty');
+    const utils = q('.css-utils');
+    if (!P.el || isRegionPop()) { sel.innerHTML = ''; info.textContent = ''; empty.hidden = true; utils.hidden = true; return; }
+    const model = cssModel(P.el);
+    const missing = missingRuleEntries(model);
+    const rule = currentRule(model, missing);
+    const text = elText(P.el);
+    q('.css-selected').textContent = `Selected: ${P.el.tagName.toLowerCase()}${text ? ` · ${text}` : ''}`;
+
+    // Picker: class rules first, then other rules, then this element; utility classes sit in a collapsed group.
+    const opt = (r) => `<option value="${esc(r.key)}"${r.key === rule.key ? ' selected' : ''}>${esc(r.label)}</option>`;
+    const groups = [];
+    if (model.classRules.length) groups.push(`<optgroup label="Class rules">${model.classRules.map(opt).join('')}</optgroup>`);
+    if (model.otherRules.length) groups.push(`<optgroup label="Other rules">${model.otherRules.map(opt).join('')}</optgroup>`);
+    if (rule.utility) groups.push(`<optgroup label="Utility class">${opt(rule)}</optgroup>`);
+    if (missing.length) groups.push(`<optgroup label="Saved, not on this page">${missing.map(opt).join('')}</optgroup>`);
+    groups.push(`<optgroup label="No rule">${opt(model.element)}</optgroup>`);
+    sel.innerHTML = groups.join('');
+    sel.value = rule.key;
+    utils.hidden = !model.utilities.length;
+    q('.css-utils-n').textContent = model.utilities.length ? `(${model.utilities.length})` : '';
+    q('.css-utils-list').innerHTML = model.utilities.map((r) => `<button class="chip" data-x="css-rule-pick" data-key="${esc(r.key)}" aria-pressed="${r.key === rule.key}" title="${esc(`${r.label}: ${r.decls.map((d) => `${d.prop}: ${d.value}`).join('; ')}`)}">${esc(r.matched)}</button>`).join('');
+    if (rule.utility) utils.open = true;
+
+    const where = rule.key === 'element' ? 'Changes for this element only, not tied to a stylesheet rule.'
+      : rule.missing ? 'This rule isn’t on the page now (the page or its stylesheets changed). Its saved changes are kept and still previewed on this element.'
+        : `${rule.selector !== rule.matched ? `Selector ${rule.selector} · ` : ''}${rule.source.label}${rule.context ? ` · ${rule.context}` : ''}. Matches this element${model.count > 1 ? `; ${model.count} rules do. Which one wins for each property isn’t checked` : ''}.${rule.uncertain ? ' Its condition can’t be checked here, so it may not apply right now.' : ''}`;
+    const blocked = model.blocked ? ` ${plural(model.blocked, 'stylesheet')} from another site couldn’t be read, so ${model.blocked === 1 ? 'its' : 'their'} rules aren’t listed.` : '';
+    info.textContent = where + blocked;
+
+    // Rows: the rule's own declarations, then properties added to it.
+    const rows = [];
+    const declared = new Set();
+    for (const d of rule.decls) {
+      declared.add(d.prop);
+      rows.push({ prop: d.prop, from: d.value, important: d.important, added: false });
+    }
+    for (const t of Object.values(P.tweaks)) {
+      if (t.snap || declared.has(t.prop) || tweakKey(t) !== rule.key) continue;
+      declared.add(t.prop);
+      rows.push({ prop: t.prop, from: t.declared === false ? '' : t.from, added: t.declared === false, legacy: !t.rule && t.via !== 'match', match: t.via === 'match' });
+    }
+    for (const a of P.cssAdded) if (a.key === rule.key && !declared.has(a.prop)) { declared.add(a.prop); rows.push({ prop: a.prop, from: '', added: true }); }
+    q('.css-props-h').hidden = !rows.length;
+    const nothing = !model.count && !model.element.decls.length;
+    empty.hidden = rows.length > 0;
+    empty.textContent = nothing
+      ? 'No stylesheet rule matches this element directly. Its look may be inherited from a parent or come from a stylesheet that can’t be read. Use + Add CSS property to set a value on this element only.'
+      : rule.key === 'element' ? 'No properties on this element yet. Use + Add CSS property.' : 'This rule has no properties to show. Use + Add CSS property.';
     const cs = getComputedStyle(P.el);
-    for (const [prop, label, isColor] of PROPS) {
-      const from = P.tweaks[prop]?.from ?? cs.getPropertyValue(prop).trim();
-      const cur = P.tweaks[prop]?.to ?? from;
-      const row = mk(`<div class="st" data-prop="${prop}" data-from="${esc(from)}"><label>${label}</label><button class="nb" data-x="st-dec" aria-label="Decrease ${label}">−</button><input class="xin sv" value="${esc(cur)}" spellcheck="false"><button class="nb" data-x="st-inc" aria-label="Increase ${label}">+</button>${isColor ? '<span class="xc"><input type="color" class="sw"><button class="xb" data-x="st-drop" title="Sample a color from the screen" aria-label="Eyedropper">◉</button></span>' : '<span></span>'}<div class="tok" hidden></div></div>`);
+    for (const r of rows) {
+      const t = P.tweaks[r.prop];
+      const mine = t && !t.snap && tweakKey(t) === rule.key;
+      const reserved = RESERVED[r.prop];
+      const cur = mine ? t.to : r.from;
+      const computed = cs.getPropertyValue(r.prop).trim();
+      const note = [r.important ? '!important' : '', r.added ? `added to this ${rule.key === 'element' ? 'element' : 'rule'}${computed ? ` · now ${clip(computed, 40)}` : ''}` : '', r.legacy ? 'saved before rules were recorded' : '', r.match ? 'from Match style (computed values)' : '', t && !t.snap && !mine ? `changed under ${tweakKey(t) === 'element' ? 'this element' : t.rule.matched || t.rule.selector}; editing here moves it` : '', reserved || ''].filter(Boolean).join(' · ');
+      const row = mk(`<div class="st${r.added ? ' added' : ''}" data-prop="${esc(r.prop)}" data-from="${esc(r.from)}" data-base="${esc(computed)}" data-key="${esc(rule.key)}"${r.added ? ' data-added="1"' : ''}><label title="${esc(r.prop)}">${esc(r.prop)}</label><button class="nb" data-x="st-dec" aria-label="Decrease ${esc(r.prop)}"${reserved ? ' disabled' : ''}>−</button><input class="xin sv" value="${esc(cur)}" placeholder="${esc(r.added ? computed || 'value' : '')}" spellcheck="false" aria-label="${esc(r.prop)}"${reserved ? ' disabled' : ''}><button class="nb" data-x="st-inc" aria-label="Increase ${esc(r.prop)}"${reserved ? ' disabled' : ''}>+</button><span class="xc">${isColorProp(r.prop) && !reserved ? '<input type="color" class="sw" aria-label="Pick a color"><button class="xb" data-x="st-drop" title="Sample a color from the screen" aria-label="Eyedropper">◉</button>' : ''}${r.added ? `<button class="icon" data-x="css-row-rm" title="Remove ${esc(r.prop)} from this rule" aria-label="Remove added property ${esc(r.prop)}">✕</button>` : ''}</span><div class="tok" hidden></div>${note ? `<div class="st-note">${esc(note)}</div>` : ''}</div>`);
       box.appendChild(row);
       refreshRow(row);
     }
   }
 
+  // The row's own change: the instance's change for this property, if it was made under this row's rule.
+  const rowTweak = (row) => { const t = P.tweaks[row.dataset.prop]; return t && !t.snap && tweakKey(t) === row.dataset.key ? t : null; };
+
   function refreshRow(row) {
-    const t = P.tweaks[row.dataset.prop];
+    const t = rowTweak(row);
     const input = row.querySelector('.sv');
     input.classList.toggle('ch', !!t);
     const tok = row.querySelector('.tok');
     tok.hidden = !(t && t.token);
     tok.textContent = t && t.token ? `≈ ${t.token}` : '';
     const sw = row.querySelector('.sw');
-    if (sw) sw.value = toHex(input.value || row.dataset.from);
+    if (sw) sw.value = toHex(input.value || row.dataset.from || row.dataset.base);
   }
 
   function styleInput(row, raw) {
-    if (!P.el) return;
-    record(`style:${row.dataset.prop}`);
+    if (!P.el || RESERVED[row.dataset.prop]) return;
     const prop = row.dataset.prop;
+    const key = row.dataset.key;
+    const added = row.dataset.added === '1';
     const from = row.dataset.from;
     const v = raw.trim();
-    if (!v || v === from) { restoreInline(P.el, prop); delete P.tweaks[prop]; }
-    else {
+    const t = P.tweaks[prop];
+    const own = t && !t.snap && tweakKey(t) === key;
+    // Nothing changes (e.g. + on a var() value): no undo step.
+    if (own ? normInput(prop, v) === t.to : !v || (!added && v === from)) { refreshRow(row); return; }
+    record(`style:${P.els.indexOf(P.el)}:${key}:${prop}`);
+    if (!v || (!added && v === from)) {
+      if (own) { delete P.tweaks[prop]; restoreInline(P.el, prop); }
+    } else {
+      const model = cssModel(P.el);
+      const rule = model.byKey.get(key) || missingRuleEntries(model).find((m) => m.key === key) || model.element;
       const val = normInput(prop, v);
-      setInline(P.el, prop, val);
-      P.tweaks[prop] = { prop, from, to: val, token: tokenHint(prop, val, BL.stylingOf(P.el).includes('tailwind')) };
+      const tok = tokenHint(prop, val, BL.stylingOf(P.el).includes('tailwind'));
+      if (own) Object.assign(t, { to: val, token: tok });
+      else {
+        // Edited under another rule before: the change moves here (one value per property on this element).
+        if (t && !t.snap) toast(`${prop} now belongs to ${rule.key === 'element' ? 'this element' : rule.matched}.`);
+        const computed = t && !t.snap ? t.computed ?? row.dataset.base : getComputedStyle(P.el).getPropertyValue(prop).trim();
+        P.tweaks[prop] = { prop, from: added ? '' : from, to: val, token: tok, rule: rule.missing ? { ...(t?.rule || {}) } : ruleInfo(rule), declared: !added, computed, ...(rule.decls?.find((d) => d.prop === prop)?.important ? { important: true } : {}) };
+      }
+      if (added) P.cssAdded = P.cssAdded.filter((a) => !(a.key === key && a.prop === prop));
     }
+    restoreInline(P.el, prop);
+    paintCss(P.el, P);
     refreshRow(row);
+    realign();
     renderElementEditor();
+    updateScope();
     q('.style-sum').textContent = tweakCount() ? `${tweakCount()} changed` : '';
     renderAnn();
   }
 
-  function resetStyles() {
-    if (P.el) for (const prop of Object.keys(P.tweaks)) restoreInline(P.el, prop);
-    P.tweaks = {};
-    P.align = {}; P.alignInfo = {}; P.snap = { x: 0, y: 0 };
+  // Shown value of a row after a nudge: its own change, else what the rule declares.
+  const rowValue = (row) => rowTweak(row)?.to ?? row.dataset.from;
+
+  // Undo one CSS value on the instance being edited (from the Changes list).
+  function removeTweak(prop) {
+    if (!P.el || !P.tweaks[prop]) return;
+    record();
+    restoreInline(P.el, prop);
+    delete P.tweaks[prop];
+    paintCss(P.el, P);
     buildStyleRows();
+    updateScope();
+    realign();
+    renderAnn();
+  }
+
+  // ✕ on an added property row: removes the row and its value.
+  function removeAddedRow(row) {
+    const { prop, key } = row.dataset;
+    const t = rowTweak(row);
+    record();
+    if (t) { delete P.tweaks[prop]; restoreInline(P.el, prop); paintCss(P.el, P); }
+    P.cssAdded = P.cssAdded.filter((a) => !(a.key === key && a.prop === prop));
+    buildStyleRows();
+    updateScope();
+    realign();
+    renderAnn();
+  }
+
+  function chooseRule(key) {
+    if (!P.el) return;
+    P.cssRule = key;
+    closeAddProp();
+    holdPosition(q('.css-rule'), () => buildStyleRows());
+  }
+
+  // + Add CSS property: a searchable list of the properties this browser supports (shorthands and longhands),
+  // common ones first. Properties the rule already has, or already added, aren't offered again.
+  const COMMON_PROPS = [
+    'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left', 'padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+    'font-size', 'font-weight', 'line-height', 'letter-spacing', 'font-family', 'font-style', 'color', 'background-color', 'background', 'text-align',
+    'text-transform', 'text-decoration', 'width', 'max-width', 'min-width', 'height', 'max-height', 'min-height', 'gap', 'row-gap', 'column-gap',
+    'border', 'border-radius', 'border-color', 'border-width', 'border-style', 'border-top', 'border-bottom', 'box-shadow', 'opacity', 'display',
+    'position', 'top', 'right', 'bottom', 'left', 'z-index', 'align-items', 'justify-content', 'flex-direction', 'flex-wrap', 'flex', 'grid-template-columns',
+    'overflow', 'object-fit', 'aspect-ratio', 'transform', 'transition',
+  ];
+  let cssPropNames = null;
+  function cssPropList() {
+    if (cssPropNames) return cssPropNames;
+    const names = new Set(COMMON_PROPS);
+    const cs = getComputedStyle(document.documentElement);
+    for (let i = 0; i < cs.length; i++) names.add(cs[i]);
+    const st = document.createElement('div').style;
+    for (const k in st) {
+      if (typeof st[k] !== 'string' || /^(cssText|cssFloat)$/.test(k)) continue;
+      names.add(/[A-Z]/.test(k) ? k.replace(/^webkit/, '-webkit').replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`) : k);
+    }
+    cssPropNames = [...names].filter((n) => /^-?[a-z][a-z-]*$/.test(n) && !RESERVED[n] && (() => { try { return CSS.supports(n, 'inherit'); } catch { return false; } })());
+    return cssPropNames;
+  }
+  const validCustom = (n) => /^--[A-Za-z_][\w-]*$/.test(n);
+  function propResults(query) {
+    const qv = query.trim().toLowerCase();
+    const used = new Set([...qa('.style-rows .st')].map((r) => r.dataset.prop));
+    if (query.trim().startsWith('--')) {
+      const name = query.trim();
+      return validCustom(name) && !used.has(name) ? [{ prop: name, custom: true }] : [];
+    }
+    if (!qv) return COMMON_PROPS.filter((p) => !used.has(p)).slice(0, 12).map((prop) => ({ prop }));
+    const all = cssPropList().filter((p) => !used.has(p) && p.includes(qv) && (qv.startsWith('-') || !p.startsWith('-')));
+    const rank = (p) => (p === qv ? 0 : COMMON_PROPS.includes(p) && p.startsWith(qv) ? 1 + COMMON_PROPS.indexOf(p) / 1000 : p.startsWith(qv) ? 2 : 3);
+    return all.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b)).slice(0, 12).map((prop) => ({ prop }));
+  }
+  function renderAddResults() {
+    const box = q('.css-add-res');
+    const query = q('.css-add-q').value;
+    const res = propResults(query);
+    box.innerHTML = res.length
+      ? res.map((r, i) => `<button type="button" class="css-add-opt${i === 0 ? ' first' : ''}" role="option" data-x="css-add-pick" data-prop="${esc(r.prop)}">${esc(r.prop)}${r.custom ? ' <span class="sub">custom property</span>' : ''}</button>`).join('')
+      : `<div class="sub" style="padding:4px 8px">${query.trim().startsWith('--') ? (validCustom(query.trim()) ? 'Already in this rule.' : 'A custom property name is -- followed by letters, digits, - or _.') : 'No matching property, or it’s already in this rule.'}</div>`;
+  }
+  function openAddProp() {
+    const boxEl = q('.css-add-box');
+    holdPosition(q('[data-x="css-add"]'), () => { boxEl.hidden = false; });
+    const input = q('.css-add-q');
+    input.value = '';
+    renderAddResults();
+    input.focus({ preventScroll: true });
+  }
+  function closeAddProp() { const b = q('.css-add-box'); if (b) b.hidden = true; }
+  function addCssProp(prop) {
+    if (!P.el || !prop || RESERVED[prop]) return;
+    const model = cssModel(P.el);
+    const rule = currentRule(model, missingRuleEntries(model));
+    if (!qa('.style-rows .st').some((r) => r.dataset.prop === prop)) P.cssAdded = [...P.cssAdded, { key: rule.key, prop }];
+    closeAddProp();
+    holdPosition(q('[data-x="css-add"]'), () => buildStyleRows());
+    const input = qa('.style-rows .st').find((r) => r.dataset.prop === prop)?.querySelector('.sv');
+    if (input) input.focus({ preventScroll: true });
+  }
+
+  // Bring the description field into view (Add note opens straight to writing).
+  function revealDescribe() {
+    const pop = q('.pop');
+    const ta = q('.pop-note');
+    if (pop && ta) pop.scrollTop = Math.max(0, pop.scrollTop + ta.getBoundingClientRect().top - pop.getBoundingClientRect().top - 40);
+  }
+
+  // Reset all puts back the previewed CSS values only. Alignment (its translate preview) is a separate edit and stays.
+  function resetStyles() {
+    for (const [prop, t] of Object.entries(P.tweaks)) {
+      if (t.snap) continue;
+      if (P.el) restoreInline(P.el, prop);
+      delete P.tweaks[prop];
+    }
+    P.cssAdded = [];
+    paintCss(P.el, P);
+    buildStyleRows();
+    updateScope();
     buildAlignRows();
+    renderElementEditor();
   }
 
   // ------------------------------------------------------------------ guides + snapping
@@ -2149,6 +2817,7 @@
     const same = Object.keys(P.align).filter((id) => (guidesHere().find((x) => x.id === id) || {}).axis === axis);
     const toggledOff = clear;
     same.forEach((id) => { delete P.align[id]; delete P.alignInfo[id]; });
+    if (P.alignEl?.[axis]) P.alignEl = { ...P.alignEl, [axis]: null };
     restoreInline(el, 'translate');
     P.snap[axis] = 0;
     let basePos = null;
@@ -2179,8 +2848,343 @@
       }
       P.tweaks.translate = { prop: 'translate', from: 'none', to: `${P.snap.x || 0}px ${P.snap.y || 0}px`, snap: true };
     } else { restoreInline(el, 'translate'); delete P.tweaks.translate; }
+    syncAlignUi();
     buildAlignRows();
+    renderAlign();
     renderAnn();
+  }
+
+  // ------------------------------------------------------------------ align to an element
+  // Two methods. Align edges: an edge or center of the selection matches the same edge or center of the
+  // reference (overlapping is fine). Place next to: the selection sits just outside the reference, touching it.
+  // The selected elements move as one group: their combined box is placed and every element gets the same
+  // shift, so their spacing is kept. The reference never moves. Each element's shift is its own edit (alignEl,
+  // previewed with `translate`, like guides). A shift is always worked out from where the elements sit without
+  // any shift, so a new choice replaces the previous one instead of adding to it, and CSS changes (margin, width…)
+  // are followed by working it out again.
+
+  const EDGE_WORD = { left: 'left edge', center: 'horizontal center', right: 'right edge', top: 'top edge', middle: 'vertical center', bottom: 'bottom edge' };
+  const NEXT_WORD = { 'left-of': 'to the left of', 'right-of': 'to the right of', above: 'above', below: 'below', center: 'horizontally centered on', middle: 'vertically centered on' };
+  const methodOf = (a) => (a?.method === 'next' ? 'next' : 'edges');
+  const alignWord = (a) => (methodOf(a) === 'next' ? `Placed ${NEXT_WORD[a.edge]}` : `Aligned ${EDGE_WORD[a.edge]} with`);
+  const edgeOf = (r, edge) => ({ left: r.left, center: (r.left + r.right) / 2, right: r.right, top: r.top, middle: (r.top + r.bottom) / 2, bottom: r.bottom }[edge]);
+  // The element's own side that is placed for each choice.
+  const SIDE = { left: 'left', right: 'right', top: 'top', bottom: 'bottom', 'right-of': 'left', 'left-of': 'right', below: 'top', above: 'bottom' };
+
+  // The element's box where the layout puts it, without any translate (ours or the page's). Reading the translate
+  // in effect right now keeps this right even while a CSS transition runs. Plain inline elements can't be
+  // translated, so their box is used as it is.
+  const REPLACED = /^(IMG|SVG|VIDEO|CANVAS|IFRAME|INPUT|SELECT|TEXTAREA|BUTTON|OBJECT|EMBED)$/i;
+  function layoutRect(el) {
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    const t = cs.display === 'inline' && !REPLACED.test(el.tagName) ? ['none'] : String(cs.translate || 'none').trim().split(/\s+/);
+    const px = (v) => (/^-?[\d.]+px$/.test(v || '') ? parseFloat(v) : 0);
+    const dx = t[0] === 'none' ? 0 : px(t[0]);
+    const dy = t[0] === 'none' ? 0 : px(t[1]);
+    return { left: r.left - dx, right: r.right - dx, top: r.top - dy, bottom: r.bottom - dy };
+  }
+  function groupRect(rs) {
+    return { left: Math.min(...rs.map((r) => r.left)), top: Math.min(...rs.map((r) => r.top)), right: Math.max(...rs.map((r) => r.right)), bottom: Math.max(...rs.map((r) => r.bottom)) };
+  }
+  // Space added on the placed side by a margin changed in Edit CSS (its original margin isn't counted), so a
+  // larger margin moves the element away from the reference the way it would in the real layout.
+  // Measured, not parsed: the computed margin on that side with the instance's margin edits (margin, margin-*,
+  // logical margins, and custom properties a margin may use) minus without them, so rem, calc() and var() count.
+  function marginChange(el, side) {
+    const r = P.edits.get(el);
+    const lift = Object.values(r?.tweaks || {}).filter((t) => !t.snap && (/^margin(-|$)/.test(t.prop) || t.prop.startsWith('--')));
+    if (!lift.length) return 0;
+    const read = () => parseFloat(getComputedStyle(el).getPropertyValue(`margin-${side}`)) || 0;
+    const now = read();
+    for (const t of lift) restoreInline(el, t.prop);
+    const was = read();
+    paintCss(el, r);
+    return now - was;
+  }
+  // Where the group's own edge must go for one choice: [its edge, position on screen].
+  function alignTarget(method, edge, ref, d) {
+    if (edge === 'center' || edge === 'middle') return [edge, edgeOf(ref, edge)];
+    if (method === 'next') return { 'right-of': ['left', ref.right + d], 'left-of': ['right', ref.left - d], below: ['top', ref.bottom + d], above: ['bottom', ref.top - d] }[edge];
+    return [edge, edgeOf(ref, edge) + (edge === 'right' || edge === 'bottom' ? -d : d)];
+  }
+  // The element's translate preview from its guide and element alignment shifts (one per axis).
+  function applySnap(el) {
+    if (P.snap.x || P.snap.y) { setInline(el, 'translate', `${P.snap.x || 0}px ${P.snap.y || 0}px`); P.tweaks.translate = { prop: 'translate', from: 'none', to: `${P.snap.x || 0}px ${P.snap.y || 0}px`, snap: true }; }
+    else { restoreInline(el, 'translate'); delete P.tweaks.translate; }
+  }
+  const setShift = (el, axis, v) => visitElement(el, () => { P.snap = { ...P.snap, [axis]: v }; applySnap(el); });
+  const refOutside = (ref) => !P.els.some((e) => e === ref || e.contains(ref));
+
+  // Place next to must not leave content where it can't be reached. A placement is refused (never applied, never
+  // resized, never scrolled to) when it would push the group well past an edge of the page (left, right or top, and
+  // the bottom only when the page can't scroll down to it) or out of a container that clips it (overflow hidden or
+  // clip). A group that already stuck out may stay or move back in, but not go further out. Taller pages scroll, so
+  // a position below the viewport is fine. Purely decorative media (images, graphics, video, canvas, or aria-hidden
+  // content without text) may overflow on purpose and is never checked. Move and Align edges are not restricted.
+  const OVERFLOW_TOL = 16;
+  const DECORATIVE = /^(IMG|SVG|PICTURE|VIDEO|CANVAS)$/i;
+  const isDecorative = (el) => DECORATIVE.test(el.tagName) || (el.getAttribute('aria-hidden') === 'true' && !el.textContent.trim());
+  const clips = (v) => v === 'hidden' || v === 'clip';
+  // The ranges (page coordinates) the group must stay inside on one axis: [from, to, what], to = Infinity when open.
+  function axisLimits(els, axis) {
+    const x = axis === 'x';
+    const root = document.documentElement;
+    const out = [];
+    const cs = [getComputedStyle(root), document.body ? getComputedStyle(document.body) : null].filter(Boolean);
+    const locked = cs.some((c) => clips(x ? c.overflowX : c.overflowY));
+    out.push(x ? [0, root.clientWidth || innerWidth, 'the page'] : [0, locked ? Math.max(root.clientHeight, innerHeight) : Infinity, 'the page']);
+    const seen = new Set();
+    for (const el of els) for (let a = el.parentElement; a && a !== document.body && a !== root; a = a.parentElement) {
+      if (seen.has(a)) continue;
+      seen.add(a);
+      if (!clips(x ? getComputedStyle(a).overflowX : getComputedStyle(a).overflowY)) continue;
+      const r = a.getBoundingClientRect();
+      out.push(x ? [r.left + scrollX, r.right + scrollX, 'the container that clips it'] : [r.top + scrollY, r.bottom + scrollY, 'the container that clips it']);
+    }
+    return out;
+  }
+  // `box` is the group's translate-free box (viewport coordinates); returns { side, by, what } or null.
+  function boundsOverflow(els, axis, box, shift) {
+    if (els.every(isDecorative)) return null;
+    const x = axis === 'x';
+    const lo = (x ? box.left + scrollX : box.top + scrollY);
+    const hi = (x ? box.right + scrollX : box.bottom + scrollY);
+    for (const [from, to, what] of axisLimits(els, axis)) {
+      const nowLow = Math.max(0, from - lo), nowHigh = Math.max(0, hi - to);
+      const lowBy = Math.max(0, from - (lo + shift)), highBy = Math.max(0, hi + shift - to);
+      if (lowBy > Math.max(nowLow, OVERFLOW_TOL)) return { side: x ? 'left' : 'top', by: Math.round(lowBy), what };
+      if (highBy > Math.max(nowHigh, OVERFLOW_TOL)) return { side: x ? 'right' : 'bottom', by: Math.round(highBy), what };
+    }
+    return null;
+  }
+  const overflowWarning = (o) => `That placement would push it about ${o.by}px past the ${o.side} edge of ${o.what}, so it wasn’t applied. The previous position is kept. Try another side, or make the element narrower in Edit CSS.`;
+
+  // Places `els` as one group on one axis and returns their shared shift (null when nothing can be measured).
+  // Measured from the layout, then checked once more: a shift can add a scrollbar and nudge a centered layout.
+  // For Place next to, a placement that would leave the page's or a clipping container's bounds is not applied:
+  // { overflow } comes back instead. With `dry`, nothing is applied at all and the first measured shift (or { overflow }) is returned.
+  function placeGroup(els, axis, method, edge, refEl, dry = false) {
+    rememberElement();
+    const shown = els.filter((e) => e.isConnected && e.getClientRects().length);
+    if (!shown.length || !refEl?.isConnected || !alignTarget(method, edge, { left: 0, right: 0, top: 0, bottom: 0 }, 0)) return null;
+    let shift = null;
+    for (let i = 0; i < 3; i++) {
+      const rs = shown.map((e) => ({ e, r: layoutRect(e) }));
+      const box = groupRect(rs.map((x) => x.r));
+      const side = SIDE[edge];
+      let d = 0;
+      if (side) { const v = box[side]; const m = rs.find((x) => x.r[side] === v); d = m ? marginChange(m.e, side) : 0; }
+      const [own, want] = alignTarget(method, edge, refEl.getBoundingClientRect(), d);
+      const next = rnd(want - edgeOf(box, own));
+      if (i === 0 && method === 'next') { const over = boundsOverflow(shown, axis, box, next); if (over) return { overflow: over }; }
+      if (dry) return next;
+      if (shift !== null && Math.abs(next - shift) < 0.6) break;
+      shift = next;
+      for (const e of els) setShift(e, axis, shift);
+    }
+    return shift;
+  }
+
+  // The Align panel's choices preview right away on every selected element (one undo step per change). None
+  // removes that axis's element alignment; an element alignment replaces a guide alignment on the same axis.
+  function previewAlign() {
+    const U = P.alignUi;
+    if (!P.els.length || isRegionPop()) { renderAlign(); return; }
+    const refEl = U.ref?.el?.isConnected ? U.ref.el : null;
+    rememberElement();
+    const had = P.els.some((el) => { const r = P.edits.get(el); return r?.alignEl?.x || r?.alignEl?.y; });
+    if ((U.h || U.v) && !refEl) { toast('Choose the element to align to first: press Choose, then click it on the page.'); renderAlign(); return; }
+    if (refEl && !refOutside(refEl)) { toast('Choose a reference outside your selection.'); renderAlign(); return; }
+    if (!U.h && !U.v && !had) { renderAlign(); return; }
+    // A sideways placement that would leave the page is refused before anything changes: the earlier valid
+    // position (and its Align choices) stay, and one short warning says why.
+    if (U.method === 'next') {
+      for (const [axis, edge] of [['x', U.h], ['y', U.v]]) {
+        const probe = edge ? placeGroup(P.els, axis, U.method, edge, refEl, true) : null;
+        if (probe && typeof probe === 'object') { syncAlignUi(); P.alignUi = { ...P.alignUi, hint: overflowWarning(probe.overflow) }; toast(overflowWarning(probe.overflow)); renderAlign(); return; }
+      }
+    }
+    record();
+    const group = { id: BL.uid(), size: P.els.length };
+    for (const [axis, edge] of [['x', U.h], ['y', U.v]]) {
+      if (!edge) {
+        for (const el of P.els) visitElement(el, () => { if (P.alignEl?.[axis]) { P.alignEl = { ...P.alignEl, [axis]: null }; P.snap = { ...P.snap, [axis]: 0 }; applySnap(el); } });
+        continue;
+      }
+      for (const el of P.els) visitElement(el, () => {
+        Object.keys(P.align).filter((id) => guidesHere().find((g) => g.id === id)?.axis === axis).forEach((id) => { delete P.align[id]; delete P.alignInfo[id]; });
+      });
+      const shift = placeGroup(P.els, axis, U.method, edge, refEl);
+      if (shift === null || typeof shift === 'object') continue;
+      for (const el of P.els) visitElement(el, () => { P.alignEl = { x: P.alignEl?.x || null, y: P.alignEl?.y || null, [axis]: { method: U.method, edge, ref: { ...U.ref.info }, shift, group } }; });
+    }
+    buildAlignRows();
+    renderAlign();
+    renderAnn();
+  }
+
+  // After a CSS change (margin, width, hide, text…) each element alignment is worked out again from the new
+  // layout, so the relationship still holds and no old shift is kept or applied twice. Part of the same undo step.
+  function realign() {
+    if (!S.pop || !P.els.length) return;
+    rememberElement();
+    const groups = new Map();
+    for (const el of P.els) for (const axis of ['x', 'y']) {
+      const a = P.edits.get(el)?.alignEl?.[axis];
+      if (!a) continue;
+      const k = `${axis}|${a.group?.id || BL.cssPath(el)}|${a.ref.selector}`;
+      const g = groups.get(k) || { axis, a, els: [] };
+      g.els.push(el);
+      groups.set(k, g);
+    }
+    if (!groups.size) return;
+    for (const g of groups.values()) {
+      const U = P.alignUi;
+      const refEl = U.ref?.el?.isConnected && U.ref.info.selector === g.a.ref.selector ? U.ref.el : BL.query(g.a.ref.selector);
+      const shift = placeGroup(g.els, g.axis, methodOf(g.a), g.a.edge, refEl);
+      if (shift && typeof shift === 'object') { toast(overflowWarning(shift.overflow)); continue; } // keeps the shift it had
+      if (shift === null) continue;
+      for (const el of g.els) visitElement(el, () => { P.alignEl = { ...P.alignEl, [g.axis]: { ...P.alignEl[g.axis], shift } }; });
+    }
+    renderAlign();
+    renderChanges();
+    renderMarks();
+  }
+
+  async function pickAlignRef() {
+    if (!P.els.length || isRegionPop()) { toast('Select the element(s) to move first.'); renderAlign(); return; }
+    const r = await pickOne('Align: click the element to align to. It stays where it is. Esc cancels.', null, { tool: 'Align', step: 'Click the element to align to' });
+    if (!r?.el || !S.pop) { renderAlign(); renderAnn(); return; }
+    if (!refOutside(r.el)) { toast('Choose an element outside your selection. The reference can’t be one of the elements being moved.'); renderAlign(); return; }
+    const { label, selector, text } = targetInfo(r.el);
+    P.alignUi = { ...P.alignUi, mode: 'element', ref: { el: r.el, info: { label, selector, text } } };
+    if (P.alignUi.h || P.alignUi.v) previewAlign(); else { renderAlign(); renderAnn(); }
+  }
+
+  // Place next to puts the selection outside the reference, so Center and Middle together (which would cover it)
+  // aren't offered there; the previous placement stays and the message points to Align edges.
+  function chooseAlign(next) {
+    if (next.method === 'next' && next.h === 'center' && next.v === 'middle') {
+      const msg = 'Center and Middle together would put it on top of the reference. To center on both axes, use Align edges.';
+      P.alignUi = { ...P.alignUi, hint: msg };
+      toast(msg);
+      renderAlign();
+      return;
+    }
+    P.alignUi = next;
+    previewAlign();
+  }
+
+  // Switching method keeps each method's own choices for this note and previews the other method's choices.
+  function setAlignMethod(method) {
+    const U = P.alignUi;
+    if (U.method === method) return;
+    const memo = { ...(U.memo || {}), [U.method]: { h: U.h, v: U.v } };
+    const next = memo[method] || { h: '', v: '' };
+    P.alignUi = { ...U, method, memo, h: next.h, v: next.v };
+    previewAlign();
+  }
+
+  // Removes the element alignment from every selected element (both axes).
+  function clearElementAlign() {
+    rememberElement();
+    if (!P.els.some((el) => { const r = P.edits.get(el); return r?.alignEl?.x || r?.alignEl?.y; })) return;
+    record();
+    for (const el of P.els) visitElement(el, () => {
+      for (const axis of ['x', 'y']) if (P.alignEl?.[axis]) P.snap = { ...P.snap, [axis]: 0 };
+      P.alignEl = null;
+      applySnap(el);
+    });
+    P.alignUi = { ...P.alignUi, h: '', v: '' };
+    renderAlign();
+    renderAnn();
+  }
+
+  // Removes one axis of an element alignment (the Changes list ✕): from every element aligned together with it.
+  function removeElementAlign(axis) {
+    const a = P.alignEl?.[axis];
+    if (!P.el || !a) return;
+    record();
+    const cur = P.el;
+    for (const el of P.els) visitElement(el, () => {
+      const b = P.alignEl?.[axis];
+      if (!b || !(el === cur || (a.group?.id && b.group?.id === a.group.id))) return;
+      P.alignEl = { ...P.alignEl, [axis]: null };
+      P.snap = { ...P.snap, [axis]: 0 };
+      applySnap(el);
+    });
+    syncAlignUi();
+    renderAlign();
+    renderAnn();
+  }
+
+  // The Align panel's choices follow the element being edited after Undo, a ✕ in Changes, or a guide.
+  function syncAlignUi() {
+    rememberElement();
+    const U = P.alignUi;
+    const own = P.alignEl?.x || P.alignEl?.y ? P.alignEl : null;
+    const a = own || [...P.els].map((el) => P.edits.get(el)?.alignEl).find((x) => x?.x || x?.y);
+    if (!a) { P.alignUi = { ...U, h: '', v: '', hint: '' }; return; }
+    const any = a.x || a.y;
+    const keepRef = U.ref && U.ref.info.selector === any.ref.selector;
+    P.alignUi = { ...U, method: methodOf(any), h: a.x?.edge || '', v: a.y?.edge || '', hint: '', ref: keepRef ? U.ref : { info: { ...any.ref }, el: BL.query(any.ref.selector) } };
+  }
+
+  // A reopened note shows the element alignment it was saved with.
+  function restoreAlignUi() {
+    rememberElement();
+    for (const r of [P.edits.get(P.el), ...P.edits.values()]) {
+      const a = r?.alignEl;
+      const any = a?.x || a?.y;
+      if (!any) continue;
+      P.alignUi = { mode: 'element', method: methodOf(any), memo: {}, ref: { info: { ...any.ref }, el: BL.query(any.ref.selector) }, h: a.x?.edge || '', v: a.y?.edge || '' };
+      return;
+    }
+  }
+
+  // "Placed below and to the right of button#cta." / "Aligned the top edge and the horizontal center with …"
+  function alignStatus(a) {
+    const [one, two] = [a.y, a.x].filter(Boolean);
+    if (two && (methodOf(one) !== methodOf(two) || one.ref.selector !== two.ref.selector)) return `${alignStatus({ y: one })} ${alignStatus({ y: two })}`;
+    const axes = { x: a.x?.edge, y: a.y?.edge };
+    if (methodOf(one) === 'next') return `Placed ${[axes.y, axes.x].filter(Boolean).map((p) => NEXT_WORD[p]).join(' and ')} ${one.ref.label}.`;
+    return `Aligned ${alignPhrase(axes)} with ${one.ref.label}.`;
+  }
+
+  function renderAlign() {
+    const U = P.alignUi;
+    if (!q('.al-element')) return;
+    for (const b of qa('[data-al-mode]')) b.setAttribute('aria-pressed', String(b.dataset.alMode === U.mode));
+    q('.al-guides').hidden = U.mode !== 'guides';
+    q('.al-element').hidden = U.mode !== 'element';
+    for (const b of qa('[data-al-method]')) b.setAttribute('aria-pressed', String(b.dataset.alMethod === U.method));
+    for (const box of qa('.al-axes')) {
+      box.hidden = box.dataset.alFor !== U.method;
+      for (const b of box.querySelectorAll('[data-al-h]')) b.setAttribute('aria-pressed', String(!box.hidden && b.dataset.alH === U.h));
+      for (const b of box.querySelectorAll('[data-al-v]')) b.setAttribute('aria-pressed', String(!box.hidden && b.dataset.alV === U.v));
+    }
+    const refBox = q('.al-ref');
+    refBox.textContent = U.ref ? `${U.ref.info.label}${U.ref.info.text ? ` · ${U.ref.info.text}` : ''}${U.ref.el?.isConnected ? '' : ' (not found on the page)'}` : 'None chosen';
+    refBox.classList.toggle('set', !!U.ref);
+    refBox.title = U.ref?.info.selector || '';
+    const pick = q('[data-x="al-pick"]');
+    pick.textContent = U.ref ? 'Change' : 'Choose';
+    pick.title = U.ref ? 'Choose a different element to align to' : 'Click an element on the page to align to. It stays where it is';
+    rememberElement();
+    const aligned = P.els.some((el) => { const r = P.edits.get(el); return r?.alignEl?.x || r?.alignEl?.y; });
+    q('[data-x="al-clear"]').hidden = !aligned;
+    const n = P.els.length;
+    const reason = !n || isRegionPop() ? 'Select the element(s) to move first.'
+      : !U.ref ? 'Choose the element to align to: press Choose, then click it on the page.'
+        : !U.ref.el?.isConnected ? 'The reference isn’t on the page right now. Press Change to choose another.' : '';
+    const cur = P.alignEl;
+    const now = cur?.x || cur?.y ? `${alignStatus(cur)} The reference stays where it is.` : '';
+    const who = n === 1 ? 'the selected element' : `all ${n} selected elements together, keeping their spacing`;
+    const idle = U.method === 'next' ? `Choose a side to place ${who} just outside the reference. Adjust spacing with Edit CSS.` : `Choose an edge or center to line up ${who} with the reference. It previews right away.`;
+    const status = q('.al-status');
+    status.textContent = reason || U.hint || now || idle;
+    status.classList.toggle('need', !!(reason || U.hint));
   }
 
   function alignFields() {
@@ -2229,7 +3233,9 @@
       if (it.path !== here() || it.kind === 'page') return;
       const cls = `${it.type === 'bug' ? 'bug' : ''}${badgesOnly ? ' badge-only' : ''}${T.hot === it.id ? ' hot' : ''}`;
       if (it.kind === 'region') { specs.push({ k: `${it.id}:r`, num: idx + 1, id: it.id, cls: `${cls} region`, rect: regionRect(it) }); return; }
-      targetsOf(it).forEach((el, i) => { const n = slotOf.get(el) || 0; slotOf.set(el, n + 1); specs.push({ k: `${it.id}:${i}`, num: idx + 1, id: it.id, cls, el, slot: n }); });
+      // The note being edited shows its current selection, so a removed element's outline goes at once.
+      const els = S.pop && P.item?.id === it.id ? P.els : targetsOf(it);
+      els.forEach((el, i) => { const n = slotOf.get(el) || 0; slotOf.set(el, n + 1); specs.push({ k: `${it.id}:${i}`, num: idx + 1, id: it.id, cls, el, slot: n }); });
     });
     reconcile(box, (s) => s.k, specs,
       () => mk('<div class="mk"><button class="bd" data-x="mk-open"></button></div>'),
@@ -2245,14 +3251,25 @@
         bd.style.left = `${Math.max(4, Math.min(innerWidth - 26, r.left - 11 + (s.slot || 0) * 25)) - r.left - 2}px`;
         bd.style.top = `${Math.max(4, r.top - 11) - r.top - 2}px`;
       });
+    // the element alignment reference, while the Align panel shows it
+    const rf = S.pop && shownTool() === 'align' && P.alignUi.mode === 'element' && P.alignUi.ref?.el?.isConnected ? P.alignUi.ref.el : null;
+    let rb = box.querySelector('.refb');
+    if (!rf) rb?.remove();
+    else {
+      if (!rb) { rb = mk('<div class="refb"><span class="hl-tag">Reference</span></div>'); box.appendChild(rb); }
+      const r = rf.getBoundingClientRect();
+      Object.assign(rb.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+      rb.querySelector('.hl-tag').classList.toggle('below', r.top < 24);
+    }
     // selection boxes while composing
     const sb = [];
-    if (S.pop && !isRegionPop()) P.els.forEach((el, i) => sb.push({ k: `s${i}`, el }));
+    if (S.pop && !isRegionPop()) P.els.forEach((el, i) => sb.push({ k: `s${i}`, el, cur: P.els.length > 1 && el === P.el }));
     for (const n of [...box.querySelectorAll('.selb')]) if (!sb.some((s) => s.k === n.dataset.k)) n.remove();
     for (const s of sb) {
       let n = box.querySelector(`.selb[data-k="${s.k}"]`);
       if (!n) { n = document.createElement('div'); n.className = 'selb'; n.dataset.k = s.k; box.appendChild(n); }
       const r = s.el.getBoundingClientRect();
+      n.classList.toggle('cur', !!s.cur);
       Object.assign(n.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
     }
   }
@@ -2340,6 +3357,7 @@
 
   function renderAnn() {
     if (!S.ui) return;
+    syncPlaceholder();
     renderGuides();
     renderMarks();
     renderDrawn();
@@ -2370,7 +3388,6 @@
     const bits = [`${uiType(it)} · ${where}`];
     if (it.also?.length) bits.push(`+${it.also.length} more`);
     if (it.marks?.some((m) => !m.auto)) bits.push('drawn on');
-    if (it.priority === 'nice') bits.push('nice to have');
     if (it.path !== here()) bits.unshift(it.path);
     return bits.join(' · ');
   }
@@ -2690,6 +3707,8 @@
   function renderMeasurePanel() {
     const box = q('.tool-measure-list');
     if (!box) return;
+    const sec = q('.tb-measure');
+    if (sec) sec.hidden = !(P.measures.length || T.measureOpen) || !canMeasure();
     const add = q('[data-x="measure-new"]');
     if (add) add.disabled = !canMeasure();
     const pair = q('.measure-pair');
@@ -2701,12 +3720,16 @@
         pair.innerHTML = `<span class="sub">Measure between</span><select class="xin m-from" aria-label="Measure from">${opts(cur)}</select><span class="sub">and</span><select class="xin m-to" aria-label="Measure to">${opts(cur === 0 ? 1 : 0)}</select><button type="button" class="xb" data-x="measure-pair" title="Measure the distance between the two chosen elements">Measure</button>`;
       }
     }
+    // One measurement is drawn at a time: the one selected in this list (a new measurement is selected when it is
+    // made). Pressing another row draws that one instead. There is no Hide: Toolbox → Hide is for page elements.
+    const shownIdx = visibleMeasureIndex ?? P.measures.length - 1;
     box.innerHTML = P.measures.length ? P.measures.map((m, i) => `
-      <div class="measure-row${(visibleMeasureIndex === i || (visibleMeasureIndex === null && i === P.measures.length - 1)) ? ' current' : ''}">
-        <strong>${i + 1}. ${esc(m.label)}</strong>
-        <span class="sub">${esc(m.summary)}</span>
+      <div class="measure-row${shownIdx === i ? ' current' : ''}">
+        <button type="button" class="measure-pick" data-x="measure-show" data-i="${i}" aria-pressed="${shownIdx === i}" title="Show this measurement on the webpage">
+          <strong>${i + 1}. ${esc(m.label)}</strong>
+          <span class="sub">${esc(m.summary)}</span>
+        </button>
         <div class="measure-actions">
-          <button type="button" class="xb" data-x="measure-show" data-i="${i}" title="Show this measurement on the webpage">Show</button>
           <button type="button" class="xb" data-x="measure-change" data-i="${i}" ${P.el ? '' : 'disabled'} title="Choose another second element without changing the original selected element">Change target</button>
           <button type="button" class="xb" data-x="rm-measure" data-i="${i}" title="Remove this measurement from the note">Remove</button>
         </div>
@@ -2715,29 +3738,44 @@
 
   function syncToolPanels() {
     if (!S.ui) return;
-    for (const btn of qa('.tool-main')) {
-      const unavailable = btn.dataset.tool === 'measure' && !canMeasure();
-      btn.disabled = !!unavailable;
-      if (!btn.dataset.readyTitle) btn.dataset.readyTitle = btn.title;
-      btn.title = unavailable ? (isRegionPop() ? 'Measuring needs elements. This note marks an empty area.' : 'Open this note’s page to measure.') : btn.dataset.readyTitle;
-      btn.setAttribute('aria-pressed', String(activeTool === btn.dataset.tool && !unavailable));
+    for (const btn of qa('.tool-main')) btn.setAttribute('aria-pressed', String(shownTool() === btn.dataset.tool));
+    for (const p of qa('[data-tool-panel]')) p.hidden = p.dataset.toolPanel !== shownTool();
+    const mb = q('[data-x="tb-measure"]');
+    if (mb) {
+      if (!mb.dataset.readyTitle) mb.dataset.readyTitle = mb.title;
+      mb.disabled = !canMeasure();
+      mb.title = mb.disabled ? (isRegionPop() ? 'Measuring needs elements. This note marks an empty area.' : 'Open this note’s page to measure.') : mb.dataset.readyTitle;
     }
-    for (const p of qa('[data-tool-panel]')) p.hidden = p.dataset.toolPanel !== activeTool;
-    if (activeTool === 'measure') renderMeasurePanel();
-    if (activeTool === 'align') buildAlignRows();
+    renderMeasurePanel();
+    if (activeTool === 'align') { buildAlignRows(); renderAlign(); }
+    renderMarks();
   }
 
-  function activateTool(name) {
-    const next = activeTool === name ? null : name;
-    if (next !== 'draw') stopDrawing();
-    activeTool = next;
-    syncToolPanels();
+  // Keeps `anchor` (the control just pressed, or the ribbon) at the same place on screen while part of the
+  // note changes height. Only the note's own scroll is adjusted, never the page. When the new content is
+  // shorter, the browser would clamp that scroll and pull everything down, so a spacer at the end of the
+  // note holds the height until the next change.
+  function holdPosition(anchor, change) {
     const pop = q('.pop');
-    const ribbon = q('.tool-ribbon');
-    if (activeTool && pop && ribbon) {
-      const delta = ribbon.getBoundingClientRect().top - pop.getBoundingClientRect().top;
-      pop.scrollTop = Math.max(0, pop.scrollTop + delta - 10);
-    }
+    const spacer = q('.pop-spacer');
+    if (!pop || !anchor || !spacer || pop.hidden) { change(); return; }
+    const top = anchor.getBoundingClientRect().top;
+    spacer.style.height = '0px';
+    change();
+    if (!anchor.isConnected) return;
+    const want = pop.scrollTop + anchor.getBoundingClientRect().top - top;
+    const max = pop.scrollHeight - pop.clientHeight;
+    if (want > max) spacer.style.height = `${Math.ceil(want - max)}px`;
+    pop.scrollTop = Math.max(0, want);
+  }
+
+  // Toolbox is the default mode: no other tool active means the Toolbox shows. Pressing the active tool
+  // again goes back to the Toolbox.
+  const shownTool = () => activeTool || 'elements';
+  function activateTool(name) {
+    const next = name === 'elements' || activeTool === name ? null : name;
+    if (next !== 'draw') stopDrawing();
+    holdPosition(q('.tool-ribbon'), () => { activeTool = next; syncToolPanels(); });
   }
 
   function renderStrips() {
@@ -2751,8 +3789,7 @@
     }
     if (P.match) rows.push(`<div class="strip"><span>Match <b>${esc(P.match.label)}</b>: ${P.match.diffs.length} difference${P.match.diffs.length === 1 ? '' : 's'}</span><span><button class="xb" data-x="match-apply">Preview</button>${rm('rm-match')}</span></div>`);
     if (P.textEdit) rows.push(`<div class="strip"><span>Text: “${esc(clip(P.textEdit.before, 24))}” → “${esc(clip(P.textEdit.after, 24))}”</span>${rm('rm-text')}</div>`);
-    let samples = q('.sampled-colors');
-    if (!samples) { samples = mk('<div class="sampled-colors"></div>'); q('[data-tool-panel="elements"]').appendChild(samples); }
+    const samples = q('.sampled-colors');
     samples.innerHTML = P.colors.map((c, i) => `<div class="strip"><span><span class="swatch" style="background:${esc(c)}"></span>${esc(c)}</span><button class="xb" data-x="color-copy" data-i="${i}" title="Copy this hex color">Copy</button><button class="xb" data-x="color-remove" data-i="${i}" title="Remove this sampled color">Remove</button></div>`).join('');
     if (P.variant) {
       const v = P.variant;
@@ -2760,22 +3797,34 @@
       rows.push(`<div class="strip"><span>Variant <b>${esc(v.title)}</b> · ${esc(v.handle)} · $${v.price.toFixed(2)}${sr ? ` · sheet $${sr.price.toFixed(2)}${Math.abs(sr.price - v.price) >= 0.005 ? ' (differs)' : ''}` : ''}</span>${rm('rm-variant')}</div>`);
     }
     box.innerHTML = rows.join('');
+    renderChanges();
   }
 
   // ------------------------------------------------------------------ event delegation
 
   function onClick(e) {
     if (e.target.classList && e.target.classList.contains('xmodal')) { e.target.hidden = true; return; }
-    if (e.target.closest('.type')) { updateTypeHint(); return; }
     if (e.target.closest('[data-act="side"]')) { sessionPos = null; applyPanelPos(); return; }
-    const chip = e.target.closest('[data-prio],[data-bp]');
+    const chip = e.target.closest('[data-bp]');
     if (chip) {
-      if (chip.dataset.prio) P.priority = chip.dataset.prio;
-      else if (chip.dataset.bp === 'all') {
+      if (chip.dataset.bp === 'all') {
         const all = ['mobile', 'tablet', 'desktop'].every((b) => P.bps.has(b));
         P.bps = new Set(all ? [bpNow()] : ['mobile', 'tablet', 'desktop']);
       } else if (P.bps.has(chip.dataset.bp)) { if (P.bps.size > 1) P.bps.delete(chip.dataset.bp); } else P.bps.add(chip.dataset.bp);
       syncChips();
+      return;
+    }
+    const al = e.target.closest('[data-al-mode],[data-al-method],[data-al-h],[data-al-v]');
+    if (al) {
+      const U = P.alignUi;
+      if (al.dataset.alMode) {
+        holdPosition(al, () => { P.alignUi = { ...U, mode: al.dataset.alMode }; renderAlign(); renderMarks(); });
+        // Element: with no reference yet, the next click on the page chooses it.
+        if (al.dataset.alMode === 'element' && !U.ref?.el?.isConnected && P.els.length && !isRegionPop()) pickAlignRef();
+      } else if (al.dataset.alMethod) holdPosition(al, () => setAlignMethod(al.dataset.alMethod));
+      else if ('alH' in al.dataset) { if (al.dataset.alH !== U.h) chooseAlign({ ...U, h: al.dataset.alH, hint: '' }); }
+      else if (al.dataset.alV !== U.v) chooseAlign({ ...U, v: al.dataset.alV, hint: '' });
+      if (S.pop) renderElementEditor();
       return;
     }
     const dt = e.target.closest('[data-draw]');
@@ -2786,7 +3835,7 @@
     if (!b || b.tagName === 'INPUT') return;
     const x = b.dataset.x;
     switch (x) {
-      case 'add-note': if (!S.pop) BL.openPop(null, null, { page: true, els: [] }); q('.pop-note').focus(); break;
+      case 'add-note': if (!S.pop) BL.openPop(null, null, { page: true, els: [] }); q('.pop-note').focus(); setTimeout(revealDescribe, 0); break;
       case 'start-select': case 'sel-element': startSelect(false); break;
       case 'start-area': case 'sel-area': startArea(); break;
       case 'sel-add': startSelect(true); break;
@@ -2804,27 +3853,38 @@
       case 'g-del': removeGuide(b.dataset.id); break;
       case 'mk-open': { const it = BL.findItem(b.dataset.id); if (!it) break; if (S.pop) toast('Save or cancel the note you\u2019re editing first.'); else hooksFocus(it); break; }
       case 'sel-clear': clearSelection(); break;
-      case 'sel-rm': if (P.els.length > 1) setTarget({ els: P.els.filter((_, i) => i !== +b.dataset.i) }); else BL.closePop(); break;
+      case 'sel-rm': removeSelected(+b.dataset.i); break;
+      case 'sel-rm-missing': removeMissing(+b.dataset.i); break;
       case 'dictate': toggleDictation(); break;
       case 'edittext': startEditText(); break;
+      case 'tb-measure': holdPosition(b, () => { T.measureOpen = true; renderMeasurePanel(); }); startMeasureFlow(); break;
+      case 'sel-showall': holdPosition(q('.x-sel'), () => { T.selOpen = !T.selOpen; renderSel(); }); break;
+      case 'al-pick': pickAlignRef(); break;
+      case 'al-clear': clearElementAlign(); break;
+      case 'alel-rm': removeElementAlign(b.dataset.axis); break;
+      case 'css-rm': removeTweak(b.dataset.prop); break;
       case 'hide': togglePopHide(); break;
       case 'match': startMatch(); break;
       case 'measure-to': case 'measure-new': if (P.el) startMeasureTo(); else startMeasureFlow(); break;
       case 'measure-pair': measureChosenPair(); break;
       case 'tool-draw': activateTool('draw'); break;
-      case 'tool-measure': activateTool('measure'); if (activeTool === 'measure') startMeasureFlow(); break;
+      case 'tool-css': activateTool('css'); break;
       case 'tool-align': activateTool('align'); break;
       case 'tool-elements': activateTool('elements'); break;
       case 'measure-show': visibleMeasureIndex = +b.dataset.i; renderMeasurePanel(); renderAnn(); break;
       case 'measure-change': changeMeasureTarget(+b.dataset.i); break;
       case 'pop-color': dropper((hex) => { record(); P.colors.push(hex); copyText(hex); renderStrips(); toast(`${hex} copied`); }); break;
       case 'st-drop': { const row = b.closest('.st'); dropper((hex) => { row.querySelector('.sv').value = hex; styleInput(row, hex); }); break; }
-      case 'st-dec': case 'st-inc': { const row = b.closest('.st'); const inp = row.querySelector('.sv'); styleInput(row, stepVal(row.dataset.prop, inp.value || row.dataset.from, x === 'st-inc' ? 1 : -1, e.shiftKey)); inp.value = P.tweaks[row.dataset.prop] ? P.tweaks[row.dataset.prop].to : row.dataset.from; break; }
-      case 'style-reset': record(); resetStyles(); break;
+      case 'st-dec': case 'st-inc': { const row = b.closest('.st'); const inp = row.querySelector('.sv'); styleInput(row, stepVal(row.dataset.prop, inp.value || row.dataset.from || row.dataset.base, x === 'st-inc' ? 1 : -1, e.shiftKey)); inp.value = rowValue(row); break; }
+      case 'css-add': if (q('.css-add-box').hidden) openAddProp(); else closeAddProp(); break;
+      case 'css-add-pick': addCssProp(b.dataset.prop); break;
+      case 'css-row-rm': removeAddedRow(b.closest('.st')); break;
+      case 'css-rule-pick': chooseRule(b.dataset.key); break;
+      case 'style-reset': record(); resetStyles(); realign(); renderAnn(); break;
       case 'snap': snapTo(b.dataset.g, b.dataset.edge); break;
       case 'align-go': snapTo(b.dataset.g, b.closest('.strip').querySelector('.align-edge').value); break;
       case 'align-clear': snapTo(b.dataset.g, P.align[b.dataset.g], true); break;
-      case 'edit-element': chooseElement(+b.dataset.i); break;
+      case 'edit-element': holdPosition(q('.x-sel'), () => chooseElement(+b.dataset.i)); break;
       case 'move-here': moveHere(); break;
       case 'draw-edit': startDrawing('edit'); break;
       case 'draw-delete': if (D.tool === 'edit' && P.marks[D.selected]) { record(); P.marks.splice(D.selected, 1); D.selected = null; P.marksDirty = true; syncDrawUi(); renderAnn(); } break;
@@ -2832,8 +3892,8 @@
       case 'draw-clear': if (!P.marks.length) break; record(); D.selected = null; P.marks = []; P.marksDirty = true; syncDrawUi(); renderAnn(); break;
       case 'rm-move': record(); P.move = null; renderStrips(); renderAnn(); break;
       case 'rm-match': record(); P.match = null; renderStrips(); break;
-      case 'match-apply': record(); if (q('.match-all')?.checked) applyMatchToAll(); else applyMatchPreview(); break;
-      case 'rm-text': record(); if (P.el && P.textEdit && !P.el.children.length) P.el.textContent = P.textEdit.before; P.textEdit = null; renderStrips(); break;
+      case 'match-apply': record(); if (q('.match-all')?.checked) applyMatchToAll(); else applyMatchPreview(); realign(); break;
+      case 'rm-text': record(); if (P.el && P.textEdit && !P.el.children.length) P.el.textContent = P.textEdit.before; P.textEdit = null; renderStrips(); realign(); break;
       case 'rm-measure': record(); P.measures.splice(+b.dataset.i, 1); visibleMeasureIndex = P.measures.length ? P.measures.length - 1 : null; renderMeasurePanel(); renderAnn(); break;
       case 'color-copy': copyText(P.colors[+b.dataset.i]); toast('Color copied'); break;
       case 'color-remove': record(); P.colors.splice(+b.dataset.i, 1); renderStrips(); break;
@@ -2866,6 +3926,7 @@
     const t = e.target;
     if (t.classList.contains('draw-custom')) { setDrawingColor(t.value); return; }
     if (t.classList.contains('sv')) { styleInput(t.closest('.st'), t.value); return; }
+    if (t.classList.contains('css-add-q')) { renderAddResults(); return; }
     if (t.classList.contains('sw')) { const row = t.closest('.st'); row.querySelector('.sv').value = t.value; styleInput(row, t.value); return; }
     if (t.classList.contains('figma-in')) { P.figma = t.value.trim(); return; }
     if (t.classList.contains('var-q')) { clearTimeout(varT); varT = setTimeout(() => variantSearch(t.value.trim()), 300); return; }
@@ -2874,7 +3935,8 @@
 
   function onChange(e) {
     const t = e.target;
-    if (t.classList.contains('element-choice')) { chooseElement(+t.value); return; }
+    if (t.classList.contains('element-choice')) { holdPosition(q('.element-editor'), () => chooseElement(+t.value)); return; }
+    if (t.classList.contains('css-rule')) { chooseRule(t.value); return; }
     if (t.name === 'scope') { P.scope = t.value; P.scopeTouched = true; updateScope(); }
     else if (t.classList.contains('grp-sel')) { P.groupIdx = +t.value; P.scope = 'group'; P.scopeTouched = true; updateScope(); }
     else if (t.classList.contains('mv-pos') && P.move) { P.move.position = t.value; renderAnn(); }
@@ -2888,8 +3950,15 @@
     if (t.classList?.contains('sv') && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
       e.preventDefault();
       const row = t.closest('.st');
-      styleInput(row, stepVal(row.dataset.prop, t.value || row.dataset.from, e.key === 'ArrowUp' ? 1 : -1, e.shiftKey));
-      t.value = P.tweaks[row.dataset.prop] ? P.tweaks[row.dataset.prop].to : row.dataset.from;
+      styleInput(row, stepVal(row.dataset.prop, t.value || row.dataset.from || row.dataset.base, e.key === 'ArrowUp' ? 1 : -1, e.shiftKey));
+      t.value = rowValue(row);
+    } else if (t.classList?.contains('css-add-q')) {
+      if (e.key === 'Enter') { e.preventDefault(); const first = q('.css-add-opt'); if (first) addCssProp(first.dataset.prop); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeAddProp(); q('[data-x="css-add"]').focus({ preventScroll: true }); } else if (e.key === 'ArrowDown') { e.preventDefault(); q('.css-add-opt')?.focus({ preventScroll: true }); }
+    } else if (t.classList?.contains('css-add-opt') && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Escape')) {
+      e.preventDefault();
+      if (e.key === 'Escape') { e.stopPropagation(); closeAddProp(); q('[data-x="css-add"]').focus({ preventScroll: true }); return; }
+      const next = e.key === 'ArrowDown' ? t.nextElementSibling : t.previousElementSibling;
+      (next || (e.key === 'ArrowUp' ? q('.css-add-q') : null))?.focus({ preventScroll: true });
     } else if (t.dataset?.ov && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && (t.dataset.ov === 'x' || t.dataset.ov === 'y')) {
       e.preventDefault();
       t.value = String((parseFloat(t.value) || 0) + (e.key === 'ArrowUp' ? -1 : 1) * (e.shiftKey ? 10 : 1));
@@ -2934,8 +4003,11 @@
     if (!P.el) { toast('Select an element first.'); return; }
     record();
     P.hide = !P.hide;
-    if (P.hide) setInline(P.el, 'display', 'none'); else restoreInline(P.el, 'display');
+    // Showing it again puts back the page's display, then any display value set in Edit CSS.
+    if (!P.hide) restoreInline(P.el, 'display');
+    paintCss(P.el, P);
     updateHideButton();
+    realign();
     renderAnn();
   }
 
@@ -2947,7 +4019,9 @@
     editing = { el, before };
     q('.panel').style.visibility = 'hidden';
     el.contentEditable = 'plaintext-only';
-    el.focus();
+    el.focus({ preventScroll: true });
+    const er = el.getBoundingClientRect();
+    if (er.bottom < 0 || er.top > innerHeight) el.scrollIntoView({ block: 'nearest' });
     const range = document.createRange();
     range.selectNodeContents(el);
     const sel = window.getSelection();
@@ -2976,6 +4050,7 @@
     if (panel) panel.style.visibility = '';
     if (keep && after && after !== before) { record(); P.textEdit = { before, after }; }
     else { el.textContent = P.textEdit ? P.textEdit.after : before; if (!P.textEdit) P.textEdit = null; }
+    realign();
     renderStrips();
   }
 
@@ -3022,10 +4097,9 @@
     for (const d of P.match.diffs) {
       if (d.prop === 'margin') continue;
       setInline(P.el, d.prop, d.to);
-      P.tweaks[d.prop] = { prop: d.prop, from: d.from, to: d.to, token: tokenHint(d.prop, d.to, tw) };
+      P.tweaks[d.prop] = { prop: d.prop, from: d.from, to: d.to, token: tokenHint(d.prop, d.to, tw), via: 'match' };
     }
     buildStyleRows();
-    q('[data-d="props"]').open = true;
   }
 
   // Changing a measurement target keeps the note's source element unchanged.
@@ -3034,14 +4108,16 @@
     if (!P.el || !P.measures[index]) return;
     const source = P.el;
     const picked = await pickOne('Click a different measurement target. Esc keeps the previous target.',
-      (el) => { if (el && el !== source) drawMeasure(source.getBoundingClientRect(), el.getBoundingClientRect()); });
-    if (!picked || !picked.el || picked.el === source) { renderAnn(); return; }
+      (el) => { if (el && el !== source) drawMeasure(source.getBoundingClientRect(), el.getBoundingClientRect()); },
+      { tool: 'Measure', step: 'Select the new target' });
+    if (!picked || !picked.el || picked.el === source || !S.pop) { renderAnn(); return; }
     record();
     const m = measureRects(source.getBoundingClientRect(), picked.el.getBoundingClientRect());
     const info = targetInfo(picked.el);
     P.measures[index] = { label: info.label, selector: info.selector, ...m, summary: measureText(m) };
     visibleMeasureIndex = index;
-    activeTool = 'measure';
+    activeTool = null;
+    T.measureOpen = true;
     syncToolPanels();
     renderAnn();
   }
@@ -3051,26 +4127,39 @@
   // Clicking Measure starts right away, based on what is selected:
   // none → pick the first element, then the second; one → pick the second;
   // two → measure between them; three or more → choose the pair in the panel.
+  // While picking, the panel steps aside for a compact "Blueline · Measure" toolbar (Cancel or Esc). Cancelling
+  // leaves the note as it was: a first element picked only for this measurement is not kept.
   async function startMeasureFlow() {
     if (!canMeasure()) return;
     if (P.els.length >= 3) { renderMeasurePanel(); toast('Choose which two selected elements to measure between.'); return; }
     if (P.els.length === 2) { measureBetween(P.el, P.els.find((e) => e !== P.el)); return; }
+    let before = null;
     if (!P.els.length) {
-      const first = await pickOne('Measure: click the first element (1 of 2). Esc cancels.');
+      const first = await pickOne('Measure: click the first element (1 of 2). Esc cancels.', null, { tool: 'Measure', step: 'Select element 1 of 2' });
       if (!first?.el || !S.pop) { renderAnn(); return; }
+      before = { page: S.pop.page, cleared: P.cleared };
       setTarget({ els: [first.el] });
-      activeTool = 'measure';
+      T.measureOpen = true;
       syncToolPanels();
     }
-    await startMeasureTo(true);
+    const done = await startMeasureTo(true);
+    if (!done && before && S.pop) {
+      setTarget({ els: [] });
+      S.pop.page = before.page;
+      P.cleared = before.cleared;
+      T.measureOpen = true;
+      loadCompose();
+    }
   }
 
   async function startMeasureTo(second) {
-    if (!P.el) return;
+    if (!P.el) return false;
     const a = P.el;
-    const r = await pickOne(`Measure: ${second ? 'click the second element (2 of 2)' : 'click the element to measure to'}. Hover to preview the distance. Esc cancels.`, (el) => { if (el && el !== a) drawMeasure(a.getBoundingClientRect(), el.getBoundingClientRect()); });
-    if (!r || !r.el || r.el === a || !S.pop) { renderAnn(); return; }
+    const r = await pickOne(`Measure: ${second ? 'click the second element (2 of 2)' : 'click the element to measure to'}. Hover to preview the distance. Esc cancels.`, (el) => { if (el && el !== a) drawMeasure(a.getBoundingClientRect(), el.getBoundingClientRect()); },
+      { tool: 'Measure', step: second ? 'Select element 2 of 2' : 'Select the element to measure to' });
+    if (!r || !r.el || r.el === a || !S.pop) { renderAnn(); return false; }
     measureBetween(a, r.el);
+    return true;
   }
 
   // Records a measurement on the "from" element (it becomes the instance being edited).
@@ -3079,7 +4168,8 @@
     if (a !== P.el && P.els.includes(a)) chooseElement(P.els.indexOf(a));
     if (a !== P.el) return;
     const info = targetInfo(b);
-    activeTool = 'measure';
+    activeTool = null; // the measurement shows in the Toolbox
+    T.measureOpen = true;
     const existing = P.measures.findIndex((m) => m.selector === info.selector);
     if (existing >= 0) {
       visibleMeasureIndex = existing;
@@ -3096,12 +4186,13 @@
     syncToolPanels();
     renderAnn();
     renderElementEditor();
-    // The results are above the actions. Reveal them without moving the page.
+    // Show the result only if it is out of sight below, and only as far as needed (never the page).
     const pop = q('.pop');
     const strip = q('.tool-measure-list');
-    if (pop && strip) {
-      const distance = strip.getBoundingClientRect().top - pop.getBoundingClientRect().top;
-      pop.scrollTop = Math.max(0, pop.scrollTop + distance - 12);
+    const foot = q('.pop-foot');
+    if (pop && strip && foot) {
+      const below = strip.getBoundingClientRect().top + 60 - foot.getBoundingClientRect().top;
+      if (below > 0) pop.scrollTop += below;
     }
   }
 
@@ -3289,13 +4380,13 @@
     const mode = BL.modeOf(S.page);
     const rx = ['next', 'react'].includes(mode) ? BL.inspectReact(el) : null;
     const sec = mode === 'shopify' ? BL.findSection(el) : null;
-    return { label: BL.label(el), selector: BL.cssPath(el), text: textOf(el, 40), size: `${Math.round(el.getBoundingClientRect().width)}×${Math.round(el.getBoundingClientRect().height)}`, rendered: rx?.rendered || null, section: sec ? sec.wrapperId : null };
+    return { label: BL.label(el), selector: BL.cssPath(el), classes: [...el.classList].filter(BL.isStableClass).join(' ') || undefined, text: textOf(el, 40), size: `${Math.round(el.getBoundingClientRect().width)}×${Math.round(el.getBoundingClientRect().height)}`, rendered: rx?.rendered || null, section: sec ? sec.wrapperId : null };
   }
 
   hooks.collect = (ps) => {
     const region = !!(ps.region || ps.item?.kind === 'region');
     const f = {
-      priority: P.priority, bps: ['mobile', 'tablet', 'desktop'].filter((b) => P.bps.has(b)), figma: P.figma || undefined,
+      bps: ['mobile', 'tablet', 'desktop'].filter((b) => P.bps.has(b)), figma: P.figma || undefined,
       colors: P.colors.length ? [...P.colors] : undefined,
       marks: P.marks.length ? P.marks.map((m) => JSON.parse(JSON.stringify(m))) : undefined,
       auto: P.auto ? true : undefined,
@@ -3318,6 +4409,23 @@
       f.also = P.els.length > 1 ? P.els.slice(1).map(alsoInfo) : undefined;
       f.elementEdits = elementFields();
       for (const key of ['scope', 'tweaks', 'textEdit', 'hidden', 'match', 'move', 'align', 'measures']) f[key] = undefined;
+      // Instances whose element isn't on the page stay in the note. When that includes the note's own element,
+      // it stays first, so the note keeps its details and the elements found here all go to "also".
+      if (P.missing.length) {
+        const own = P.missing.find((m) => m.primary);
+        const rest = P.missing.filter((m) => !m.primary).map((m) => m.rec);
+        if (own) { f.elementEdits = [own.rec, ...f.elementEdits, ...rest]; f.also = [...P.els.map(alsoInfo), ...rest.map((r) => r.el)]; }
+        else { f.elementEdits = [...f.elementEdits, ...rest]; f.also = [...(f.also || []), ...rest.map((r) => r.el)]; }
+      }
+    }
+    // Every element left in the note is one that isn't on this page: what remains of the saved instances is
+    // written back as it is, so an element removed on purpose stays removed.
+    else if (!region && ps.item && P.missingEdited && !P.els.length && ps.item.kind !== 'page' && P.missing.length) {
+      const recs = P.missing.map((m) => m.rec);
+      f.elementEdits = recs;
+      f.also = recs.length > 1 ? recs.slice(1).map((r) => r.el) : undefined;
+      if (recs[0].el.selector !== ps.item.el?.selector) f.el = { ...ps.item.el, ...recs[0].el };
+      for (const key of ['scope', 'tweaks', 'textEdit', 'hidden', 'match', 'move', 'align', 'measures']) f[key] = undefined;
     }
     const hasContent = !!(changeBits(f).length || refBits(f).length);
     // Inspect the element as the source has it, without our live previews applied.
@@ -3330,7 +4438,7 @@
     };
     // A saved note whose first element changed (Shift-click) gets that element's details refreshed.
     const it0 = ps.item;
-    if (it0 && !region && P.els[0] && it0.kind !== 'page' && BL.cssPath(P.els[0]) !== it0.el?.selector) {
+    if (it0 && !region && P.els[0] && it0.kind !== 'page' && !P.missing.some((m) => m.primary) && BL.cssPath(P.els[0]) !== it0.el?.selector) {
       try { const d = around(() => BL.describe(P.els[0], it0.type)); f.el = d.el; f.styling = d.styling; } catch { /* keep the old details */ }
     }
 
@@ -3364,6 +4472,7 @@
     if (e.match) out.push(`match the style of ${e.match.label}`);
     if (e.move) out.push(`move ${posText[e.move.position]} ${e.move.to.label}`);
     for (const a of e.align || []) out.push(`align ${a.edge} to guide ${a.guide}`);
+    for (const axis of ['x', 'y']) { const a = e.alignEl?.[axis]; if (a) out.push(methodOf(a) === 'next' ? `place ${NEXT_WORD[a.edge]} ${a.ref.label}` : `align ${EDGE_WORD[a.edge]} with ${a.ref.label}`); }
     return out;
   }
 
@@ -3402,7 +4511,7 @@
     if (P.item) return true;
     rememberElement();
     if (P.marks.some((m) => !m.auto) || P.colors.length) return true;
-    for (const r of P.edits.values()) if (Object.keys(r.tweaks).length || r.textEdit || r.hide || r.match || r.move || Object.keys(r.align).length || r.measures.length) return true;
+    for (const r of P.edits.values()) if (Object.keys(r.tweaks).length || r.textEdit || r.hide || r.match || r.move || Object.keys(r.align).length || r.alignEl?.x || r.alignEl?.y || r.measures.length) return true;
     return false;
   };
 
@@ -3462,12 +4571,12 @@
     if (items.some((i) => i.kind === 'region')) key.push('**Region**: the author marked empty space where something new should go. No element exists there yet. Add it, following the conventions of its neighbours.');
     if (items.some((i) => i.move)) key.push('**Move**: relocate the element to the destination shown. Keep its markup and styles, and adjust any layout that depended on its old spot.');
     if (items.some(showsScope)) key.push('**Scope** says how far a style change reaches: this one only, everything like it inside a container, or everywhere.');
+    if (items.some((i) => [i, ...(i.elementEdits || [])].some((e) => (e.tweaks || []).some((t) => t.rule)))) key.push('**CSS rule** lines name the stylesheet rule the author edited and where it is. Values on the left are the rule\u2019s own; **added** means the rule didn\u2019t declare that property before. Each change was previewed on the selected element only; its **Scope** says how far the real change should reach.');
     if (items.some((i) => (i.tweaks && i.tweaks.some((t) => !t.snap)) || i.textEdit)) key.push('**Previewed** values were tried live in the browser and approved by the author. Treat them as the target, using existing tokens, variables, or utility classes instead of hardcoding.');
     if (items.some((i) => refBits(i).length)) key.push('**Reference measurements** and sampled colors record the page as it is now. They are context, not change requests. Act on them only when the note or another annotation asks for a change. Items marked **(reference only)** need no edits.');
     if (items.some((i) => !i.note)) key.push('Some items have **no written note**. Their requested change is fully described by their annotations (previewed values, moves, alignment, drawings).');
     if (items.some((i) => (i.marks || []).some((m) => !m.auto))) key.push('**Drawn marks** (boxes, arrows, text) show where something belongs. Use the marked-up screenshot together with the text description.');
     if (items.some((i) => i.also && i.also.length)) key.push('**Multiple elements**: when a note lists "also applies to", make the same change to every listed element.');
-    if (items.some((i) => i.priority === 'nice')) key.push('**Nice to have** items come last. Skip any that would put the must-fix items at risk.');
     if (items.some((i) => i.figma)) key.push('Some items carry **Figma links**. If you can open those frames, use them for exact values before editing.');
     if (key.length) L.push('', '## Annotation key', ...key.map((k) => `- ${k}`));
     const gs = batch?.guides || [];
@@ -3484,6 +4593,13 @@
   function scopeLines(it) {
     const s = it.scope;
     const ex = s.labels?.length ? ` (e.g. ${s.labels.map(code).join(', ')})` : '';
+    // Scopes based on the CSS rule the author edited (v0.7). Older notes keep the wording below.
+    if (s.basis === 'rule') {
+      const src = s.rule?.source ? ` in ${s.rule.source}${s.rule.context ? ` (${s.rule.context})` : ''}` : '';
+      if (s.mode === 'one') return [`- Scope: **this one only**.${s.similar > 1 ? ` The CSS rule ${code(s.selector)}${src} also matches ${s.similar - 1} other element${s.similar === 2 ? '' : 's'} on this page; they must stay unchanged, so don\u2019t change that rule for this.` : ` The CSS rule ${code(s.selector)}${src} matches only this element on this page.`} Change this instance through its own classes, a variant or prop, a more specific selector, or a block/section setting.`];
+      if (s.mode === 'group') return [`- Scope: **everything like it inside ${code(s.container)}**: ${matches(s.count)} for the CSS rule ${code(s.selector)}${src}${ex}. Change them together at that level (a scoped rule, wrapper class, or prop). Don\u2019t change the rule for other places. The author previewed the change on this element only.`];
+      return [`- Scope: **everywhere**: change the CSS rule ${code(s.selector)}${src} itself, so the values apply wherever it matches: ${matches(s.count)} on this page${ex}. Then check other pages that use it. The author previewed the change on this element only.`];
+    }
     if (s.mode === 'one') return [`- Scope: **this one only**.${s.similar > 1 ? ` ${s.similar - 1} similar element${s.similar === 2 ? '' : 's'} (${code(s.selector)}) exist on this page and must stay unchanged.` : ''} Change this instance through its own classes, a variant or prop, or a block/section setting. Don\u2019t edit the shared default.`];
     if (s.mode === 'group') return [`- Scope: **everything like it inside ${code(s.container)}**: ${matches(s.count)} for ${code(s.selector)}${ex}. Change them together at that level (a scoped rule, wrapper class, or prop). Don\u2019t change the same component elsewhere.`];
     return [`- Scope: **everywhere**: ${matches(s.count)} for ${code(s.selector)} on this page${ex}. Change the shared source (component default, shared CSS rule, theme token or settings), then check other pages that use it.`];
@@ -3496,16 +4612,99 @@
     return `${Object.entries(n).map(([k, v]) => `${v} ${k}${v > 1 ? 's' : ''}`).join(', ')}${texts.length ? ` (text: ${texts.join(', ')})` : ''}`;
   }
 
+  // Element alignment, described as a relationship: one line per reference, method and alignment action, covering
+  // every element aligned with it (a group keeps its spacing). The previewed shifts stay with each instance.
+  // Notes saved before the two methods existed have no method and are "Align edges".
+  function alignPhrase(axes) {
+    const parts = [axes.y, axes.x].filter(Boolean);
+    const edges = parts.filter((p) => !/center|middle/.test(p));
+    const bits = edges.length ? [`${edges.join(' and ')} edge${edges.length > 1 ? 's' : ''}`] : [];
+    for (const p of parts) if (/center|middle/.test(p)) bits.push(EDGE_WORD[p]);
+    return `the ${bits.join(' and the ')}`;
+  }
+  const CORNER = { 'above|left-of': 'top-left', 'above|right-of': 'top-right', 'below|left-of': 'bottom-left', 'below|right-of': 'bottom-right' };
+  // Place next to: sides put the group outside the reference; Center and Middle line it up with the reference's
+  // center on that axis. Returns the text that goes between the group and the reference's name, and what follows it.
+  function nextPhrase(axes, target) {
+    const parts = [axes.y, axes.x].filter(Boolean);
+    const sides = parts.filter((p) => p !== 'center' && p !== 'middle').map((p) => NEXT_WORD[p]);
+    const centers = parts.filter((p) => p === 'center' || p === 'middle').map((p) => (p === 'center' ? 'horizontally' : 'vertically'));
+    if (!sides.length) return `${centers.join(' and ')} centered on ${target}, keeping its position on the other axis`;
+    const corner = CORNER[`${axes.y}|${axes.x}`];
+    return `immediately ${sides.join(' and ')} ${target}${corner ? ` (diagonally, off its ${corner} corner)` : ''}, outside its box and touching it${centers.length ? `, and ${centers.join(' and ')} centered on it` : ''}`;
+  }
+  const hasCss = (edit) => (edit.tweaks || []).some((t) => !t.snap);
+  function elementAlignLines(edits) {
+    const groups = new Map();
+    for (const edit of edits) for (const axis of ['x', 'y']) {
+      const a = edit.alignEl?.[axis];
+      if (!a) continue;
+      const k = `${a.group?.id || ''}|${a.ref.selector}|${methodOf(a)}`;
+      const g = groups.get(k) || { ref: a.ref, method: methodOf(a), members: [], axes: {} };
+      if (!g.members.includes(edit)) g.members.push(edit);
+      g.axes[axis] = a.edge;
+      groups.set(k, g);
+    }
+    return [...groups.values()].map((g) => {
+      const many = g.members.length > 1;
+      const names = g.members.map((m) => code(m.el.label)).join(', ');
+      const target = ref(g.ref.label, g.ref.selector);
+      const keep = `Keep ${code(g.ref.label)} stationary${many ? ', and keep the selected elements in the same positions relative to each other' : ''}.`;
+      const css = g.members.some(hasCss) ? ` The CSS changes listed for ${many ? 'these elements' : 'it'} below are part of the same correction: apply them as well${g.method === 'next' && g.members.some((m) => (m.tweaks || []).some((t) => t.prop === 'margin' && !t.snap)) ? '. The space between it and the reference comes from its margin change, not from an extra offset' : ''}.` : '';
+      if (g.method === 'next') {
+        const who = many ? `these ${g.members.length} selected elements as one group (${names}), using their combined bounding box,` : ref(g.members[0].el.label, g.members[0].el.selector);
+        return `Position ${who} ${nextPhrase(g.axes, target)}. ${keep}${css} Build it with the layout (element order in the document flow, or a flex or grid container), not a fixed offset or transform, so it holds at other screen sizes.`;
+      }
+      const who = many ? `these ${g.members.length} selected elements, taken as one group (${names}) using their combined bounding box,` : ref(g.members[0].el.label, g.members[0].el.selector);
+      return `Align ${alignPhrase(g.axes)} of ${who} with ${target}. ${keep}${css} Build it with the layout (a shared container, flex or grid alignment, margins or positioning), not a fixed offset or transform, so it holds at other screen sizes.`;
+    });
+  }
+  const shiftText = (a) => [a.x && a.x.shift ? `${Math.abs(a.x.shift)}px ${a.x.shift > 0 ? 'right' : 'left'}` : '', a.y && a.y.shift ? `${Math.abs(a.y.shift)}px ${a.y.shift > 0 ? 'down' : 'up'}` : ''].filter(Boolean).join(' and ') || 'no shift (already aligned)';
+
+  // CSS changes grouped by the rule they were made in: where it is, then one line per property. "added" means the
+  // rule didn't declare the property before; the original value is otherwise the rule's own, as written.
+  function cssRuleLines(tweaks) {
+    const groups = new Map();
+    for (const t of tweaks) { const k = t.rule.key; if (!groups.has(k)) groups.set(k, { rule: t.rule, list: [] }); groups.get(k).list.push(t); }
+    const L = [];
+    for (const { rule: r, list } of groups.values()) {
+      const sel = r.matched || r.selector;
+      const head = r.key === 'element'
+        ? 'CSS on this element only (not in a stylesheet rule), previewed on it:'
+        : `CSS rule ${code(sel)} in ${r.source}${r.context ? ` (${r.context})` : ''}${r.selector && r.selector !== sel ? `, from the selector ${code(r.selector)}` : ''}, previewed on this element only:`;
+      const notes = [
+        r.notFound ? 'This rule wasn\u2019t found on the page when the note was saved; find it by its selector and source.' : '',
+        r.uncertain ? `Its condition couldn\u2019t be checked in the browser, so confirm it applies.` : '',
+        r.utility ? 'It is a utility class: change which utility classes the element uses rather than redefining the class.' : '',
+      ].filter(Boolean);
+      L.push(`- ${head}${notes.length ? ` ${notes.join(' ')}` : ''}`);
+      for (const t of list) L.push(`  - ${t.prop}: ${t.declared === false ? 'added' : t.from} → ${t.to}${t.token ? ` (≈ ${t.token})` : ''}${t.important ? ' (the rule declares it !important)' : ''}`);
+    }
+    return L;
+  }
+
+  // A selected element with nothing recorded for it: no CSS, text, hide, match, move, alignment or measurement. It
+  // stays in the saved note (selection, undo, reopening); the export only leaves out its own instructions.
+  const isEmptyInstance = (e) => !((e.tweaks || []).length || e.textEdit || e.hidden || e.match || e.move || (e.align || []).length || e.alignEl?.x || e.alignEl?.y || (e.measures || []).length);
+
   hooks.promptItem = (it) => {
     const L = [];
     const add = (s) => L.push(`- ${s}`);
     if (it.elementEdits?.length) {
-      add('Selected instances have independent corrections. Apply only the actions recorded under each instance and respect its Scope.');
-      for (const edit of it.elementEdits) {
-        L.push(`- **Instance ${ref(edit.el.label, edit.el.selector)}**`);
-        const details = hooks.promptItem({ ...edit, scope: { ...edit.scope, chosen: true }, path: it.path });
-        L.push(...details.filter((line) => line && line !== '**Author\u2019s annotations**').map((line) => `  ${line}`));
+      const active = it.elementEdits.filter((e) => !isEmptyInstance(e));
+      const idle = it.elementEdits.filter(isEmptyInstance);
+      if (active.length) {
+        add('Selected instances have independent corrections. Apply only the actions recorded under each instance and respect its Scope.');
+        L.push(...elementAlignLines(active).map((x) => `- ${x}`));
+        for (const edit of active) {
+          L.push(`- **Instance ${ref(edit.el.label, edit.el.selector)}**`);
+          const details = hooks.promptItem({ ...edit, scope: { ...edit.scope, chosen: true }, path: it.path });
+          L.push(...details.filter((line) => line && line !== '**Author\u2019s annotations**').map((line) => `  ${line}`));
+        }
       }
+      // With a written note or drawings that may refer to them, selected elements without changes of their own are
+      // named in one line (no scope, no instructions). Otherwise they are left out.
+      if (idle.length && (it.note || (it.marks || []).some((m) => !m.auto))) add(`Also selected, with no changes of their own (nothing to apply to ${idle.length === 1 ? 'it' : 'them'} separately): ${idle.map((e) => ref(e.el.label, e.el.selector)).join(', ')}.`);
     }
     if (!it.elementEdits && it.also?.length) {
       add(`Also applies to ${it.also.length} more element${it.also.length === 1 ? '' : 's'}. Make the same change to each:`);
@@ -3513,7 +4712,10 @@
     }
     if (showsScope(it)) L.push(...scopeLines(it));
     const prev = (it.tweaks || []).filter((t) => !t.snap);
-    if (prev.length) add(`Previewed by the author${it.also?.length ? ' (on all selected elements)' : ''}: ${prev.map((t) => `${t.prop} ${t.from} → ${t.to}${t.token ? ` (≈ ${t.token})` : ''}`).join('; ')}`);
+    // Changes saved before rules were recorded (and Match style previews) keep their original line.
+    const loose = prev.filter((t) => !t.rule);
+    if (loose.length) add(`Previewed by the author${it.also?.length ? ' (on all selected elements)' : ''}: ${loose.map((t) => `${t.prop} ${t.from} → ${t.to}${t.token ? ` (≈ ${t.token})` : ''}`).join('; ')}`);
+    L.push(...cssRuleLines(prev.filter((t) => t.rule)));
     if (it.textEdit) add(`Copy change: “${it.textEdit.before}” → “${it.textEdit.after}”`);
     if (it.hidden) add('The author hid this element to preview the layout without it. Remove it (or hide it, per the note) and let the layout close up.');
     if (it.match) add(`Make it look like ${ref(it.match.label, it.match.selector)}${it.match.src ? ` (rendered at ${code(it.match.src)})` : ''}. Differences, this → target: ${it.match.diffs.map((d) => `${d.prop} ${d.from} → ${d.to}`).join('; ')}`);
@@ -3522,6 +4724,7 @@
       const dir = a.axis === 'x' ? (a.offset >= 0 ? 'right of' : 'left of') : a.offset >= 0 ? 'below' : 'above';
       add(`Align its ${a.edge}${a.edge === 'center' || a.edge === 'middle' ? '' : ' edge'} to guide ${a.guide} (${a.axis === 'x' ? 'vertical at x' : 'horizontal at y'}=${a.guidePos}px). ${a.offset === 0 ? 'It is already on the guide; keep it there.' : `It is currently ${Math.abs(a.offset)}px ${dir} the guide. The author previewed the snap with a ${a.shift}px translate; implement it with real layout (alignment, margin, grid or flex), not a transform.`}`);
     }
+    if (it.alignEl?.x || it.alignEl?.y) add(`Element alignment (described above): previewed by shifting this element ${shiftText(it.alignEl)}${hasCss(it) ? ', with the CSS values above applied' : ''}. The shift is a hint, not the implementation${hasCss(it) ? '; don’t add an offset to make up for the CSS values' : ''}.`);
     for (const m of it.measures || []) add(`Reference measurement to ${ref(m.label, m.selector)} (current layout, not a change by itself): ${m.summary}`);
     if (it.colors?.length) add(`Sampled colors: ${it.colors.map(code).join(', ')}`);
     if (it.auto) add('Selected by dragging a rectangle over an area of the page, so the target was matched automatically. Confirm it against the marked-up screenshot.');
@@ -3538,7 +4741,7 @@
   // ------------------------------------------------------------------ exports for tests
 
   BL.toolsApi = {
-    elementFields, chooseElement, rememberElement, restoreElementRecord, visitElement, arrowHit, editArrowPointer, setDrawingColor, applyItemPreview, revertLive, removeGuide, styleInput, togglePopHide, buildAlignRows, emptyPop,
+    elementFields, chooseElement, rememberElement, renderChanges, elKind, previewAlign, realign, layoutRect, holdPosition, restoreElementRecord, visitElement, arrowHit, editArrowPointer, setDrawingColor, applyItemPreview, revertLive, removeGuide, styleInput, togglePopHide, buildAlignRows, emptyPop,
     similarSelector, similar, groupOptions, scopeInfo, tokenHint, spacingClasses, regionContext, measureRects, measureText, parseCSV, sheetFromRows, checkPrices,
     normForVar, stepVal, normInput, priceReportText, scopeLines, marksSummary, snapTo, autoSelect, pointTarget, startSelect, startArea, T, A, D, getP: () => P, setP: (p) => { P = p; }, setAnnotate, setTarget, makeDraggable,
   };

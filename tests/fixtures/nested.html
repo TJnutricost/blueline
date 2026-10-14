@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Blueline nested selection fixtures</title>
+<style>
+  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #222; }
+  section { margin: 0 0 32px; padding: 20px 40px; }
+  /* A banner whose only child grows to fill it (the "div.banner.info > div.grow.small" shape) */
+  .banner { display: flex; align-items: center; gap: 12px; padding: 14px 18px; background: #e8f1ff; border: 1px solid #9ab8e6; border-radius: 6px; }
+  .grow { flex: 1 1 auto; }
+  .small { font-size: 13px; }
+  .banner .close { flex: none; width: 28px; height: 28px; }
+  /* A plain card with two paragraphs, for area selection */
+  .panel { width: 420px; padding: 16px; background: #fff; border: 1px solid #ccd; border-radius: 8px; }
+  .panel p { margin: 0 0 8px; }
+  /* Never selected, never changed: it only has to sit on the page */
+  .spare { margin: 0; color: #667; }
+</style>
+</head>
+<body>
+  <section>
+    <div class="banner info" id="banner"><div class="grow small" id="grow">Free shipping on orders over $50</div><button class="close" id="close" aria-label="Dismiss">×</button></div>
+  </section>
+  <section>
+    <div class="panel" id="panel"><p id="p1">First paragraph of the panel.</p><p id="p2">Second paragraph of the panel.</p></div>
+  </section>
+  <section>
+    <p class="spare" id="spare">Another element nobody selects.</p>
+  </section>
+</body>
+</html>
