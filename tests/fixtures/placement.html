@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Blueline placement fixtures</title>
+<style>
+  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #222; }
+  section { padding: 20px 40px; }
+  .ref { width: 240px; height: 40px; margin-left: 120px; background: #ddd; }
+  .box { width: 120px; height: 30px; background: #9cf; }
+  /* Wider than the space to the right of the reference: placing it "right of" would leave the page. It fits in the page itself. */
+  .wide { width: 1100px; height: 40px; margin: 0; background: #fc9; white-space: nowrap; overflow: hidden; font-size: 20px; }
+  .tall { height: 1500px; }
+  /* A container that clips what is inside it */
+  .clip { width: 300px; overflow: hidden; }
+  .clip h2 { width: 200px; margin: 0; }
+</style>
+</head>
+<body>
+  <section><div class="ref" id="ref">Reference</div></section>
+  <section><div class="box" id="box">Box</div></section>
+  <section><h1 class="wide" id="wide">A very wide heading that is as wide as most of the page</h1></section>
+  <section><div class="clip" id="clip"><img id="deco" alt="" width="1100" height="40" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></div></section>
+  <section><div class="clip" id="clip2"><h2 id="clipped">Clipped heading</h2></div></section>
+  <section><div class="box" id="tbox" style="height: 100px">Tall box</div></section>
+  <div class="tall"></div>
+  <section><div class="ref" id="ref2">Far reference</div></section>
+  <section><div class="box" id="box2">Far box</div></section>
+</body>
+</html>

@@ -21,8 +21,11 @@
     { id: 'polish', label: 'Polish', ui: 'Looks off', tip: 'Spacing, size, color or alignment needs adjusting' },
     { id: 'copy', label: 'Copy', ui: 'Change text', tip: 'Wording, labels or messages need changing' },
     { id: 'feature', label: 'Feature', ui: 'Add something', tip: 'Something new that does not exist yet' },
+    // v0.7: new notes are either a change or, when the Broken box is ticked, a bug. The older types above
+    // stay so saved notes keep their labels.
+    { id: 'change', label: 'Change', ui: 'Change', tip: 'A visual, layout or content change' },
   ];
-  const TYPE_RANK = { bug: 0, polish: 1, copy: 2, feature: 3 };
+  const TYPE_RANK = { bug: 0, polish: 1, change: 1, copy: 2, feature: 3 };
   const typeLabel = (id) => (TYPES.find((t) => t.id === id) || TYPES[1]).label;
 
   const S = {
@@ -30,13 +33,14 @@
     picking: false,
     page: {},
     batch: null,
-    prefs: { side: 'right', collapsed: false, saveShots: true, lastType: 'polish', previews: true },
+    prefs: { side: 'right', collapsed: false, saveShots: true, previews: true },
     hoverEl: null,
     trail: [],
     lastPoint: { x: 0, y: 0 },
     lockPoint: null,
     pop: null,
-    popType: 'polish',
+    popType: 'change',
+    popBase: 'change',
     ui: null,
     raf: 0,
     timer: 0,
@@ -505,44 +509,268 @@
   const RESET_SEL = /^(\*|html|body|:root|:host)$/;
   const isResetSel = (sel) => sel.split(',').every((x) => RESET_SEL.test(x.trim()) || /^\*?::/.test(x.trim()));
 
-  // Same-origin CSS rules that match the element, in cascade order (DevTools "Styles" lite).
-  function matchedRules(el, skipUtilities) {
-    const found = [];
+  // Splits a selector list (or a declaration block) at top-level separators, ignoring those inside (), [] and strings.
+  function splitTop(text, sep) {
+    const out = [];
+    let depth = 0;
+    let quote = '';
+    let cur = '';
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === '\\') { cur += ch + (text[i + 1] || ''); i++; continue; }
+      if (quote) { if (ch === quote) quote = ''; cur += ch; continue; }
+      if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === '(' || ch === '[') depth++;
+      else if (ch === ')' || ch === ']') depth = Math.max(0, depth - 1);
+      else if (ch === sep && depth === 0) { if (cur.trim()) out.push(cur.trim()); cur = ''; continue; }
+      cur += ch;
+    }
+    if (cur.trim()) out.push(cur.trim());
+    return out;
+  }
+
+  // Selector specificity [ids, classes, types], used only to order the rule list (no cascade claims are made).
+  function specificity(sel) {
+    let a = 0;
+    let b = 0;
+    let c = 0;
+    const ident = (i) => { while (i < sel.length && (/[\w\u00a0-\uffff-]/.test(sel[i]) || sel[i] === '\\')) i += sel[i] === '\\' ? 2 : 1; return i; };
+    const group = (i) => { let d = 1; let j = i; while (j < sel.length && d) { j++; if (sel[j] === '(') d++; else if (sel[j] === ')') d--; } return j; };
+    const maxOf = (list) => splitTop(list, ',').map(specificity).reduce((m, s) => (cmpSpec(s, m) > 0 ? s : m), [0, 0, 0]);
+    for (let i = 0; i < sel.length;) {
+      const ch = sel[i];
+      if (ch === '#') { a++; i = ident(i + 1); } else if (ch === '.') { b++; i = ident(i + 1); } else if (ch === '[') { b++; while (i < sel.length && sel[i] !== ']') i++; i++; } else if (ch === ':') {
+        const el2 = sel[i + 1] === ':';
+        const s = el2 ? i + 2 : i + 1;
+        const e = ident(s);
+        const name = sel.slice(s, e).toLowerCase();
+        let next = e;
+        let arg = null;
+        if (sel[e] === '(') { const close = group(e); arg = sel.slice(e + 1, close); next = close + 1; }
+        if (el2 || /^(before|after|first-line|first-letter)$/.test(name)) c++;
+        else if (name === 'where') { /* adds nothing */ } else if (/^(is|not|has|matches|-webkit-any)$/.test(name) && arg !== null) { const m = maxOf(arg); a += m[0]; b += m[1]; c += m[2]; } else if (/^nth-(last-)?child$/.test(name) && arg && / of /i.test(arg)) { const m = maxOf(arg.replace(/^.*? of /i, '')); a += m[0]; b += m[1] + 1; c += m[2]; } else b++;
+        i = next;
+      } else if (/[a-zA-Z_\u00a0-\uffff-]/.test(ch) && (i === 0 || /[\s>+~(,|]/.test(sel[i - 1]))) { c++; i = ident(i); } else i++;
+    }
+    return [a, b, c];
+  }
+  const cmpSpec = (x, y) => x[0] - y[0] || x[1] - y[1] || x[2] - y[2];
+
+  // One declaration block ("a: b; c: d !important") as [{ prop, value, important }]; a repeated property keeps
+  // its last value.
+  function parseDecls(text) {
+    const out = [];
+    for (const part of splitTop(String(text || ''), ';')) {
+      const i = part.indexOf(':');
+      if (i < 1) continue;
+      let prop = part.slice(0, i).trim();
+      if (!prop.startsWith('--')) prop = prop.toLowerCase();
+      if (!/^(--)?[a-zA-Z_-][\w-]*$/.test(prop)) continue;
+      let value = part.slice(i + 1).trim();
+      const important = /!\s*important\s*$/i.test(value);
+      if (important) value = value.replace(/\s*!\s*important\s*$/i, '');
+      const prev = out.findIndex((d) => d.prop === prop);
+      if (prev >= 0) out.splice(prev, 1);
+      out.push({ prop, value, important });
+    }
+    return out;
+  }
+
+  // Style rules of a stylesheet's source text, in the order the CSSOM lists them (nested rules after their parent).
+  // Only used to recover values as the author wrote them; comments are dropped, at-rule blocks are entered.
+  function authoredRules(text) {
+    const src = String(text || '').replace(/\/\*[\s\S]*?\*\//g, '');
+    const out = [];
+    let i = 0;
+    const block = (sel) => {
+      const decls = [];
+      const me = sel !== null ? { sel, decls: '' } : null;
+      if (me) out.push(me);
+      let cur = '';
+      let quote = '';
+      let depth = 0;
+      for (; i < src.length; i++) {
+        const ch = src[i];
+        if (ch === '\\') { cur += ch + (src[i + 1] || ''); i++; continue; }
+        if (quote) { if (ch === quote) quote = ''; cur += ch; continue; }
+        if (ch === '"' || ch === "'") { quote = ch; cur += ch; continue; }
+        if (ch === '(' || ch === '[') depth++;
+        else if (ch === ')' || ch === ']') depth = Math.max(0, depth - 1);
+        if (depth) { cur += ch; continue; }
+        if (ch === '{') {
+          const prelude = cur.trim();
+          cur = '';
+          i++;
+          if (/^@(media|supports|layer|container|scope|document)\b/i.test(prelude)) block(null);
+          else if (prelude.startsWith('@')) block(undefined);
+          else block(prelude);
+          continue;
+        }
+        if (ch === ';') { if (cur.trim() && !cur.trim().startsWith('@')) decls.push(cur.trim()); cur = ''; continue; }
+        if (ch === '}') { if (cur.trim()) decls.push(cur.trim()); if (me) me.decls = decls.join('; '); return; }
+        cur += ch;
+      }
+      if (cur.trim()) decls.push(cur.trim());
+      if (me) me.decls = decls.join('; ');
+    };
+    while (i < src.length) block(null);
+    return out.filter((r) => r.sel !== undefined);
+  }
+  const normSel = (s) => String(s).replace(/\s+/g, ' ').replace(/\s*([>+~,])\s*/g, '$1').trim();
+
+  // Declarations as the CSSOM holds them: shorthands, var(), rem and calc() are kept, but Chrome normalises some
+  // values on parse (0 → 0px, #ddd → rgb()). When the author's text is known (inline <style>, style attribute), its
+  // value is used instead, but only if it parses to exactly the same CSSOM value.
+  const probeStyle = () => document.createElement('div').style;
+  function declsOf(style, authoredText) {
+    const out = parseDecls(style?.cssText || '');
+    if (!authoredText) return out;
+    const by = new Map(parseDecls(authoredText).map((d) => [d.prop, d]));
+    const probe = probeStyle();
+    for (const d of out) {
+      const a = by.get(d.prop);
+      if (!a || a.value === d.value || a.important !== d.important) continue;
+      probe.cssText = '';
+      try { probe.setProperty(d.prop, a.value); } catch { continue; }
+      if (probe.getPropertyValue(d.prop).trim() === d.value) { d.value = a.value; d.authored = true; }
+    }
+    return out;
+  }
+
+  // The class a single-class selector (optionally with pseudo-classes) targets, or null.
+  const singleClass = (sel) => { const one = sel.match(/^\.((?:\\.|[^\s.,>+~:[\]()#])+)(?::[a-z-]+(?:\([^)]*\))?)*$/); return one ? one[1].replace(/\\(.)/g, '$1') : null; };
+
+  // Structured CSS rules that match an element (DevTools "Styles" lite), read through the CSSOM only: nothing on
+  // the page is changed and nothing is fetched. Conditions that can be checked (media, supports, sheet and import
+  // media) are; rules under conditions that can't (container, scope) are kept and marked `uncertain`.
+  // Rules come in source order. `inline` is the element's own style attribute (opts.inlineText overrides it).
+  function cssRulesFor(el, opts = {}) {
+    const rules = [];
     let blocked = 0;
-    let budget = 20000;
-    const visit = (rules, file, media, parent) => {
-      for (const r of rules) {
+    const blockedSources = [];
+    let budget = opts.budget || 30000;
+    let order = 0;
+    const tw = stylingOf(el).includes('tailwind');
+    const root = el.getRootNode ? el.getRootNode() : document;
+    const styleNodes = [...(root.querySelectorAll ? root.querySelectorAll('style') : [])];
+    const fileOf = (href) => href.split(/[?#]/)[0].split('/').pop() || href;
+    const mediaOk = (text) => { const t = String(text || '').trim(); if (!t || t === 'all') return true; try { return window.matchMedia ? matchMedia(t).matches : true; } catch { return true; } };
+    const supportsOk = (text) => { try { return CSS.supports(text); } catch { return true; } };
+    const ctxText = (ctx) => ctx.map((x) => (x.type === 'layer' ? `@layer ${x.text}` : `@${x.type} ${x.text}`.trim())).join(' · ');
+    const authoredBy = new WeakMap(); // source -> { list, at }: the <style> element's own text, walked in step with the CSSOM
+    const authoredFor = (src, sel) => {
+      const st = authoredBy.get(src);
+      if (!st || !sel) return null;
+      const want = normSel(sel);
+      for (let k = st.at; k < st.list.length; k++) if (normSel(st.list[k].sel) === want) { st.at = k + 1; return st.list[k].decls; }
+      return null;
+    };
+    const nest = (sel, parent) => splitTop(sel, ',').map((p) => (p.includes('&') ? p.replace(/&/g, `:is(${parent})`) : `:is(${parent}) ${p}`)).join(', ');
+
+    const visit = (list, src, ctx, parent, path) => {
+      for (let i = 0; i < list.length; i++) {
         if (--budget < 0) return;
-        if (r instanceof CSSStyleRule) {
-          let sel = r.selectorText || '';
-          if (parent) sel = sel.includes('&') ? sel.replace(/&/g, `:is(${parent})`) : `${parent} ${sel}`;
-          if (!sel || isResetSel(sel)) continue;
-          let hit = false;
-          try { hit = el.matches(sel); } catch { hit = false; }
-          if (hit && skipUtilities) {
-            const one = sel.match(/^\.((?:\\.|[^\s.,>+~:[\]()#])+)(?::[a-z-]+(?:\([^)]*\))?)*$/);
-            if (one && el.classList.contains(one[1].replace(/\\(.)/g, '$1'))) hit = false;
+        const r = list[i];
+        const kind = r.constructor?.name || '';
+        if (r instanceof CSSStyleRule || kind === 'CSSNestedDeclarations') {
+          const authored = r instanceof CSSStyleRule ? r.selectorText || '' : parent || '';
+          const full = r instanceof CSSStyleRule && parent ? nest(authored, parent) : authored;
+          if (full && !isResetSel(full)) {
+            const matched = [];
+            for (const part of splitTop(full, ',')) { try { if (el.matches(part)) matched.push(part); } catch { /* unsupported selector */ } }
+            const own = r instanceof CSSStyleRule ? authoredFor(src, authored) : null;
+            const decls = matched.length ? declsOf(r.style, own) : [];
+            if (decls.length) {
+              const spec = matched.map(specificity).reduce((m, s) => (cmpSpec(s, m) > 0 ? s : m), [0, 0, 0]);
+              const subject = matched.map((p) => p.split(/\s*[\s>+~]\s*/).pop()).join(' ');
+              const one = matched.length === 1 ? singleClass(matched[0]) : null;
+              const wholeOne = singleClass(full);
+              const uncertain = ctx.some((x) => x.uncertain);
+              const cond = [...ctx].reverse().find((x) => x.type === 'media' || x.type === 'container');
+              rules.push({
+                selector: full, authored, matched: matched.join(', '),
+                kind: /#/.test(subject) ? 'id' : /\./.test(subject) ? 'class' : 'other',
+                classes: [...el.classList].filter((c) => subject.includes(`.${CSS.escape(c)}`) || subject.includes(`.${c}`)),
+                source: { ...src }, conditions: ctx.map((x) => ({ ...x })), context: ctxText(ctx),
+                media: cond ? `@${cond.type} ${cond.text}` : null,
+                layer: ctx.filter((x) => x.type === 'layer').map((x) => x.text).join('.') || null,
+                uncertain, decls, specificity: spec, order: order++, path: path.concat(i).join('/'),
+                utility: !!(one && el.classList.contains(one) && TW.test(one)),
+                single: !!(wholeOne && el.classList.contains(wholeOne)),
+                cssText: r.style?.cssText || '',
+              });
+            }
           }
-          if (hit) found.push({ sel: clip(sel, 120), file, media, decl: compactDecl(r.style.cssText) });
-          if (r.cssRules && r.cssRules.length) visit(r.cssRules, file, media, sel);
+          if (r.cssRules && r.cssRules.length) visit(r.cssRules, src, ctx, full || parent, path.concat(i));
+        } else if (kind === 'CSSImportRule' || r instanceof CSSImportRule) {
+          const m = r.media?.mediaText || '';
+          if (!mediaOk(m)) continue;
+          if (r.supportsText && !supportsOk(r.supportsText)) continue;
+          const sub = [...ctx];
+          if (r.layerName !== null && r.layerName !== undefined) sub.push({ type: 'layer', text: r.layerName || '(anonymous)' });
+          if (m && m !== 'all') sub.push({ type: 'media', text: m });
+          const href = r.styleSheet?.href || r.href || '';
+          let inner;
+          try { inner = r.styleSheet?.cssRules; } catch { blocked++; blockedSources.push(href); continue; }
+          if (!inner) { if (href) { blocked++; blockedSources.push(href); } continue; }
+          visit(inner, { kind: 'import', href: href.split(/[?#]/)[0], file: fileOf(href), label: `${fileOf(href)} (imported by ${src.label})` }, sub, parent, path.concat(i));
         } else if (r.cssRules) {
+          if (kind === 'CSSStartingStyleRule') continue; // only applies while an element first appears
           const cond = r.conditionText || r.media?.mediaText || '';
-          if (r instanceof CSSMediaRule && cond && window.matchMedia && !matchMedia(cond).matches) continue;
-          const tag = r instanceof CSSMediaRule ? `@media ${cond}` : r instanceof CSSSupportsRule ? null : r.constructor?.name === 'CSSContainerRule' ? `@container ${cond}` : null;
-          visit(r.cssRules, file, tag || media, parent);
+          const sub = [...ctx];
+          if (r instanceof CSSMediaRule || kind === 'CSSMediaRule') { if (!mediaOk(cond)) continue; sub.push({ type: 'media', text: cond }); } else if (kind === 'CSSSupportsRule') { if (!supportsOk(cond)) continue; sub.push({ type: 'supports', text: cond }); } else if (kind === 'CSSContainerRule') sub.push({ type: 'container', text: cond, uncertain: true });
+          else if (kind === 'CSSLayerBlockRule') sub.push({ type: 'layer', text: r.name || '(anonymous)' });
+          else if (kind === 'CSSScopeRule') {
+            const start = r.start || '';
+            let inside = true;
+            try { inside = !start || !!el.closest(start); } catch { inside = true; }
+            if (!inside) continue;
+            sub.push({ type: 'scope', text: `(${start})${r.end ? ` to (${r.end})` : ''}`, uncertain: true });
+          } else if (/Keyframe|FontFace|Page|Property|FontFeature|CounterStyle/.test(kind)) continue;
+          visit(r.cssRules, src, sub, parent, path.concat(i));
         }
       }
     };
-    for (const sheet of document.styleSheets) {
+
+    const sheets = [...(root.styleSheets || [])].map((s, i) => ({ s, i, adopted: false }));
+    [...(root.adoptedStyleSheets || [])].forEach((s, i) => sheets.push({ s, i, adopted: true }));
+    for (const { s: sheet, i, adopted } of sheets) {
       if (sheet.ownerNode && sheet.ownerNode.id === 'blueline-cursor') continue;
-      let rules;
-      try { rules = sheet.cssRules; } catch { blocked++; continue; }
-      if (!rules) continue;
-      if (rules.length === 1 && rules[0].selectorText === 'html, body, body *' && /crosshair/.test(rules[0].cssText || '')) continue; // Blueline's own cursor rule
-      const file = sheet.href ? sheet.href.split('?')[0].split('/').pop() : 'inline <style>';
-      visit(rules, file, null, null);
+      if (sheet.disabled || !mediaOk(sheet.media?.mediaText)) continue;
+      let list;
+      try { list = sheet.cssRules; } catch { blocked++; blockedSources.push(sheet.href || ''); continue; }
+      if (!list) continue;
+      if (list.length === 1 && list[0].selectorText === 'html, body, body *' && /crosshair/.test(list[0].cssText || '')) continue; // Blueline's own cursor rule
+      let src;
+      if (adopted) src = { kind: 'adopted', file: `adopted stylesheet ${i + 1}`, label: `adopted stylesheet ${i + 1}`, index: i };
+      else if (sheet.href) src = { kind: 'link', href: sheet.href.split(/[?#]/)[0], file: fileOf(sheet.href), label: fileOf(sheet.href), index: i };
+      else {
+        const n = styleNodes.indexOf(sheet.ownerNode) + 1;
+        const id = sheet.ownerNode?.id;
+        src = { kind: 'style', file: 'inline <style>', label: id ? `<style id="${id}">` : `inline <style> ${n || '?'}`, index: i, id: id || undefined, n };
+      }
+      const ctx = sheet.media?.mediaText && sheet.media.mediaText !== 'all' ? [{ type: 'media', text: sheet.media.mediaText }] : [];
+      if (src.kind === 'style' && sheet.ownerNode?.textContent) authoredBy.set(src, { list: authoredRules(sheet.ownerNode.textContent), at: 0 });
+      visit(list, src, ctx, null, [adopted ? `a${i}` : i]);
     }
-    return { rules: found.slice(-8), blocked };
+
+    let inline = null;
+    if (opts.inline !== false) {
+      const text = opts.inlineText !== undefined ? opts.inlineText : el.getAttribute('style') || '';
+      const probe = document.createElement('div');
+      probe.style.cssText = text;
+      const decls = declsOf(probe.style, text);
+      inline = { selector: 'style attribute', matched: 'style attribute', kind: 'inline', source: { kind: 'inline', file: 'style attribute', label: 'style attribute' }, conditions: [], context: '', media: null, layer: null, uncertain: false, decls, specificity: [1, 0, 0, 0], order: Infinity, path: 'inline', utility: false, single: false, classes: [] };
+    }
+    return { rules, inline, blocked, blockedSources: blockedSources.filter(Boolean), tailwind: tw };
+  }
+
+  // Same-origin CSS rules that match the element, in source order (the inspection view used by the export).
+  // Built on cssRulesFor; keeps its original output: the last 8 rules, clipped, with the innermost media label.
+  function matchedRules(el, skipUtilities) {
+    const res = cssRulesFor(el, { inline: false, budget: 20000 });
+    const found = res.rules.filter((r) => !(skipUtilities && r.single)).map((r) => ({ sel: clip(r.selector, 120), file: r.source.file, media: r.media, decl: compactDecl(r.cssText) }));
+    return { rules: found.slice(-8), blocked: res.blocked };
   }
 
   // ---------------------------------------------------------------- describe
@@ -698,8 +926,8 @@
     L.push('', '## How to read this request');
     L.push('1. Each numbered item is one request about the page and element(s) it names. Items marked **(reference only)** document the page and need no change.');
     L.push('2. Find each element in the source using its selector, visible text, and any source hints. Confirm it is the right element before changing it.');
-    L.push('3. Suggested order: bugs, then polish, then copy, then features.');
-    L.push('4. Polish and copy items are visual or text only. Don\u2019t change logic or data for them.');
+    L.push('3. Suggested order: bugs (items marked broken) first, then the rest. See the Overview.');
+    L.push('4. Items not marked broken are visual, layout or content changes. Don\u2019t change logic or data for them unless the note asks for it.');
     L.push('5. Before changing something shared (a component, template, or style rule), check where else it is used. Prefer a change scoped to the item, and note which you chose.');
     L.push('6. Limit layout changes to the screen size noted unless the item says otherwise.');
     L.push('7. "Detected" lines come from automated checks. Fix them when they relate to the item; otherwise just mention them.');
@@ -731,7 +959,7 @@
     items.forEach((it) => (it.el?.issues || []).forEach((x) => { issueCounts[x.kind] = (issueCounts[x.kind] || 0) + 1; }));
     const ic = Object.entries(issueCounts);
     if (ic.length) L.push(`- Detected: ${ic.map(([k, n]) => `${n}× ${ISSUE_LABEL[k] || k}`).join(', ')}`);
-    const order = items.map((it, i) => ({ n: i + 1, rank: (it.priority === 'nice' ? 10 : 0) + (TYPE_RANK[it.type || 'polish'] ?? 1) })).sort((a, b) => a.rank - b.rank || a.n - b.n).map((o) => o.n);
+    const order = items.map((it, i) => ({ n: i + 1, rank: TYPE_RANK[it.type || 'polish'] ?? 1 })).sort((a, b) => a.rank - b.rank || a.n - b.n).map((o) => o.n);
     L.push(`- Suggested order: ${order.join(', ')}`);
 
     if (BL.hooks.promptHeader) L.push(...BL.hooks.promptHeader(items, batch));
@@ -742,7 +970,7 @@
       const v = it.viewport || {};
       const rx = e.react;
       L.push('', '---', '');
-      L.push(`## ${i + 1}. ${typeLabel(it.type || 'polish')}${it.kind && it.kind !== 'element' ? ' · ' + it.kind : ''}${it.priority === 'nice' ? ' (nice to have)' : ''}${BL.hooks.isReference?.(it) ? ' (reference only)' : ''}: ${it.path}  (${it.bps && it.bps.length ? (it.bps.length === 3 ? 'all breakpoints' : it.bps.join(' + ')) : bp(v.w)}, ${v.w}×${v.h})`);
+      L.push(`## ${i + 1}. ${typeLabel(it.type || 'polish')}${it.kind && it.kind !== 'element' ? ' · ' + it.kind : ''}${BL.hooks.isReference?.(it) ? ' (reference only)' : ''}: ${it.path}  (${it.bps && it.bps.length ? (it.bps.length === 3 ? 'all breakpoints' : it.bps.join(' + ')) : bp(v.w)}, ${v.w}×${v.h})`);
       L.push(it.note ? `**Note:** ${it.note}` : BL.hooks.noteFallback ? BL.hooks.noteFallback(it) : '**Note:** none written. See the annotations below.');
       if ((it.kind === 'region' || it.kind === 'page') && BL.hooks.promptRegion) {
         L.push(...BL.hooks.promptRegion(it));
@@ -967,11 +1195,12 @@
     .pop-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
     .pop-el { color: #1A33C7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .pop-sec { color: #6B7183; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
-    .types { display: flex; gap: 4px; }
-    .type { flex: 1; padding: 4px 0; border: 1px solid #D9DCE4; border-radius: 6px; font-size: 12px; font-weight: 600; color: #4A5063; }
-    .type:hover { background: #F5F7FF; }
-    .type[aria-pressed="true"] { background: ${INK}; border-color: ${INK}; color: #fff; }
-    .type.bug[aria-pressed="true"] { background: #D6336C; border-color: #D6336C; }
+    .broken { display: flex; align-items: flex-start; gap: 7px; padding: 6px 8px; border: 1px solid #E2E5EC; border-radius: 7px; font-size: 12px; cursor: pointer; }
+    .broken:hover { background: #F7F8FB; }
+    .broken input { margin-top: 2px; accent-color: #D6336C; }
+    .broken b { font-weight: 650; }
+    .broken span span { display: block; color: #6B7183; font-size: 11px; }
+    .broken:has(input:checked) { border-color: #D6336C; background: #FFF4F7; }
     .issues { list-style: none; display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; color: #A15C00;
       background: #FFF8EC; border-radius: 6px; padding: 6px 8px; }
     .issues li::before { content: "! "; font-weight: 700; }
@@ -1029,15 +1258,13 @@
     <div class="pop" hidden role="dialog" aria-label="Note">
       <div class="pop-head"><code class="pop-el"></code><span class="pop-sec"></span></div>
       <div class="x-sel"></div>
+      <div class="x-more"></div>
       <div class="x-step2"></div>
-      <div class="types" role="group" aria-label="Note type">
-        ${TYPES.map((t) => `<button class="type ${t.id}" data-type="${t.id}" aria-pressed="false" title="${t.tip}">${t.ui || t.label}</button>`).join('')}
-      </div>
-      <div class="x-typehint"></div>
       <textarea class="pop-note" rows="3" placeholder="What should change?"></textarea>
       <div class="x-top"></div>
+      <label class="broken" title="Tick this when something doesn\u2019t work. The export then adds recent clicks, console errors and failed requests, when Blueline has recorded them."><input type="checkbox" class="pop-broken"><span><b>Broken / error</b><span>Something doesn\u2019t work as it should</span></span></label>
       <ul class="issues" hidden></ul>
-      <div class="x-more"></div>
+      <div class="x-link"></div>
       <div class="pop-foot">
         <button class="ghost danger" data-act="pop-delete" hidden>Delete</button>
         <span class="hint">${IS_MAC ? '⌘↵' : 'Ctrl+Enter'} to save</span>
@@ -1091,8 +1318,6 @@
         if (it) openPop(pin._el || null, it);
         return;
       }
-      const typeBtn = e.target.closest('.type');
-      if (typeBtn) { setPopType(typeBtn.dataset.type); return; }
       const actEl = e.target.closest('[data-act]');
       const li = e.target.closest('.item');
       // A minimized panel expands from a click anywhere on its title bar except the other header buttons.
@@ -1126,6 +1351,8 @@
         S.prefs.saveShots = e.target.checked;
         savePrefs();
         refreshExport();
+      } else if (e.target.classList.contains('pop-broken')) {
+        setPopType(e.target.checked ? 'bug' : S.popBase);
       }
     });
 
@@ -1178,7 +1405,7 @@
       li.querySelector('.note').textContent = it.note;
       const issues = it.el?.issues?.length ? `  ${it.el.issues.length} detected` : '';
       const meta = li.querySelector('.meta');
-      meta.textContent = `${typeLabel(it.type)}${it.kind && it.kind !== 'element' ? ' · ' + it.kind : ''}${it.priority === 'nice' ? ' · nice' : ''}  ${onPage ? it.el.label : `${it.path}  ${it.el.label}`}`;
+      meta.textContent = `${typeLabel(it.type)}${it.kind && it.kind !== 'element' ? ' · ' + it.kind : ''}  ${onPage ? it.el.label : `${it.path}  ${it.el.label}`}`;
       if (issues) { const w = document.createElement('span'); w.className = 'warn'; w.textContent = issues; meta.appendChild(w); }
       if (!onPage) {
         const go = document.createElement('button');
@@ -1398,9 +1625,13 @@
 
   // ---------------------------------------------------------------- notes
 
+  // The Broken box switches a note between 'bug' and its other type: 'change' for new notes, or the type
+  // an older saved note already had (polish, copy, feature), which is kept unless the box is ticked.
   function setPopType(type) {
     S.popType = type;
-    for (const b of S.ui.root.querySelectorAll('.type')) b.setAttribute('aria-pressed', String(b.dataset.type === type));
+    if (type !== 'bug') S.popBase = type;
+    const box = S.ui.$('.pop-broken');
+    if (box) box.checked = type === 'bug';
   }
 
   function openPop(el, item = null, extra = null) {
@@ -1411,7 +1642,8 @@
     const $ = S.ui.$;
     $('.pop-el').textContent = el ? label(el) : item?.el?.label || '';
     $('.pop-sec').textContent = el ? whereShort(el) : item ? bestSource(item) : '';
-    setPopType(item?.type || S.prefs.lastType || 'polish');
+    S.popBase = 'change';
+    setPopType(item ? item.type || 'polish' : 'change');
 
     const issues = el ? detectIssues(el) : item?.el?.issues || [];
     const ul = $('.issues');
@@ -1430,7 +1662,8 @@
     if (el) drawHL(el, true); else hideHL();
     if (BL.hooks.onPopOpen) BL.hooks.onPopOpen(el, item);
     placePop(el);
-    setTimeout(() => ta.focus(), 0);
+    // Focus the description without scrolling to it, so the note opens on its selection and tools.
+    setTimeout(() => ta.focus({ preventScroll: true }), 0);
   }
 
   function placePop(el) {
@@ -1489,8 +1722,6 @@
     }
     const { el, item } = popState;
     const type = S.popType;
-    S.prefs.lastType = type;
-    savePrefs();
     if (extra.commit) extra.commit();
     closePop();
 
@@ -1708,13 +1939,13 @@
 
   Object.assign(BL, {
     S, send, hook, uid, query, clip, plural, code, bp, label, cssPath, describe, detectIssues, findSection, sectionLine,
-    routeGuess, bestSource, modeOf, inspectReact, decodeModule, isStableClass, stylingOf, rgba, hex, fromUI, openPop, closePop,
+    routeGuess, bestSource, modeOf, inspectReact, decodeModule, isStableClass, stylingOf, cssRulesFor, splitTop, rgba, hex, fromUI, openPop, closePop,
     setPicking, cursorStyle, render, saveBatch, savePrefs, ensureBatch, findItem, currentPath, toast, frames, loadImg,
     TYPES, typeLabel, shotKey, placePop, whereShort, drawHL, hideHL, setPopType, INK,
   });
 
   if (globalThis.__BLUELINE_TEST__) {
-    globalThis.__BLUELINE_TEST__.api = { cssPath, describe, buildPrompt, findSection, decodeModule, stylingOf, routeGuess, detectIssues, contrastOf, label, hook, S, setActive, matchedRules, compactDecl, snippet };
+    globalThis.__BLUELINE_TEST__.api = { cssPath, describe, buildPrompt, findSection, decodeModule, stylingOf, routeGuess, detectIssues, contrastOf, label, hook, S, setActive, matchedRules, cssRulesFor, specificity, compactDecl, snippet };
   }
 
   (async () => {

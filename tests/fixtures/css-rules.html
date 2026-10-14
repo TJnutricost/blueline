@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Blueline CSS rule fixtures</title>
+<!-- Served over http by run.mjs so linked and @import-ed sheets are readable (file:// sheets are not). -->
+<link rel="stylesheet" href="css/rules-linked.css">
+<link rel="stylesheet" href="css/rules-print.css" media="print">
+<style id="base">
+  :root { --brand-color: #005eb8; --pad: 6px; }
+  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #222; }
+  section { padding: 20px 40px; }
+  .hero { background: #f2f5fb; color: #333; }
+  .product-title { font-size: 1.5rem; color: var(--brand-color); margin: 0 0 16px; }
+  .product-title.featured, .promo-heading { font-weight: 700; }
+  #pt-1 { letter-spacing: 0.5px; }
+  h2 { line-height: 1.2; }
+  .product-title::before { content: ''; }
+  .product-title:hover { text-decoration: underline; }
+  @media (min-width: 600px) { .product-title { padding-top: 4px; } }
+  @media (max-width: 300px) { .product-title { padding-top: 99px; } }
+  @supports (display: grid) { .product-title { display: block; } }
+  @supports (not-a-real-property: 1) { .product-title { outline: 3px solid red; } }
+  @container card (min-width: 100px) { .product-title { text-align: left; } }
+  @layer theme { .product-title { border-radius: 4px; } }
+  .card { & .product-title { column-gap: 2px; } }
+  .product-title { margin-bottom: 8px !important; }
+  .stack { padding: var(--pad) 12px; --stack-gap: 8px; width: 300px; }
+  .flex { display: flex; }
+  .p-4 { padding: 1rem; }
+  .text-lg { font-size: 1.125rem; line-height: 1.75rem; }
+  .font-bold { font-weight: 700; }
+  .mt-2 { margin-top: 0.5rem; }
+  .tw-card { border: 1px solid #ddd; }
+  .ref { width: 240px; height: 40px; background: #ddd; translate: 0px; }
+  .box { width: 120px; height: 30px; background: #9cf; }
+</style>
+<script>
+  // A stylesheet from another origin (localhost vs 127.0.0.1): it applies, but its rules can't be read.
+  document.write(`<link rel="stylesheet" href="http://localhost:${location.port}/css/rules-cross.css">`);
+  const adopted = new CSSStyleSheet();
+  adopted.replaceSync('.product-title { font-style: normal; }');
+  document.adoptedStyleSheets = [adopted];
+</script>
+</head>
+<body>
+  <section class="hero" id="hero">
+    <div class="card">
+      <h2 class="product-title featured" id="pt-1" style="outline: 0px solid transparent">Product Title</h2>
+      <span id="plain">Inherited only</span>
+    </div>
+  </section>
+  <section>
+    <h2 class="product-title" id="pt-2">Second title</h2>
+    <h2 class="product-title" id="pt-3">Third title</h2>
+    <div class="stack" id="stack">Stack</div>
+    <div class="tw-card flex p-4 text-lg font-bold mt-2" id="tw">Utility card</div>
+    <p class="promo-heading" id="promo">Promo</p>
+  </section>
+  <section>
+    <div class="ref" id="ref">Reference</div>
+    <div style="height: 60px"></div>
+    <div class="box" id="mover">Mover</div>
+  </section>
+</body>
+</html>
