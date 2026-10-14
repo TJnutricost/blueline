@@ -2453,6 +2453,83 @@ console.log('\n# Change Report export: concise, change-focused, older notes stil
   await page.close();
 }
 
+// ------------------------------------------------------------------ 13. Change Report dialog: Export Screenshots is explicit
+console.log('\n# Change Report dialog: screenshots download only when Export Screenshots is pressed (fixtures/toolbox.html)');
+{
+  const page = await open('toolbox.html');
+  const { ui, click, prompt } = tools(page);
+  await ui(() => {
+    window.__calls = [];
+    window.__dlFail = false;
+    chrome.runtime.sendMessage = async (m) => {
+      if (m && m.type === 'blueline:hello') return { active: true };
+      window.__calls.push({ type: m?.type, names: (m?.files || []).map((f) => f.name), folder: m?.folder });
+      if (m?.type === 'blueline:download') return window.__dlFail ? { error: 'blocked' } : { paths: m.files.map((f) => ({ id: f.id, path: `/Users/me/Downloads/${m.folder}/${f.name}` })) };
+      return null;
+    };
+    chrome.storage.local.get = async (keys) => Object.fromEntries([].concat(keys).map((k) => [k, 'data:image/png;base64,AAAA']));
+    __BL.ensureBatch();
+    const info = __BLUELINE_TEST__.api.describe(document.querySelector('[data-t="t1"]'), 'change');
+    __BL.S.batch.items.push({ id: 'aaaa1111', note: 'First', createdAt: Date.now(), ...info, bps: ['desktop'], hasShot: true });
+    __BL.S.batch.items.push({ id: 'bbbb2222', note: 'Second', createdAt: Date.now(), ...info, bps: ['desktop'], hasShot: true, hasMarkup: true });
+    __BL.render();
+  });
+  const calls = () => ui(() => window.__calls.filter((c) => c.type === 'blueline:download'));
+  const dlg = () => ui(() => { const r = __BL.S.ui.root; return { shots: r.querySelector('[data-act="export-shots"]').textContent.trim(), disabled: r.querySelector('[data-act="export-shots"]').disabled, checkbox: r.querySelectorAll('.opt-shots').length, copy: r.querySelector('[data-act="copy"]').textContent.trim(), note: r.querySelector('.shots-note').textContent, md: r.querySelector('[data-act="save-md"]').textContent.trim() }; });
+  const shotLines = async () => (await prompt()) && ui(() => __BL.S.ui.root.querySelector('.out').value.split('\n').filter((l) => /^(Marked-up )?[Ss]creenshot/.test(l)));
+
+  await click('[data-act="export"]');
+  await sleep(300);
+  const d0 = await dlg();
+  check('Opening the Change Report downloads nothing', (await calls()).length === 0, JSON.stringify(await calls()));
+  check('There is an Export Screenshots button and no screenshot checkbox; the copy button reads Copy Report', d0.shots === 'Export Screenshots' && !d0.disabled && d0.checkbox === 0 && d0.copy === 'Copy Report' && d0.md === 'Save as .md', JSON.stringify(d0));
+  check('Before exporting, the report doesn’t list screenshot paths and the dialog says they are not exported', (await shotLines()).length === 0 && /3 screenshots not exported/.test(d0.note), JSON.stringify(d0.note));
+  await click('[data-act="copy"]');
+  await sleep(200);
+  check('Copying the report downloads nothing', (await calls()).length === 0, JSON.stringify(await calls()));
+  await click('[data-act="save-md"]');
+  await sleep(300);
+  const md = await calls();
+  check('Saving the Markdown report downloads only the report, never screenshots', md.length === 1 && md[0].names.join() === 'blueline-change-report.md', JSON.stringify(md));
+  check('The report is still free of screenshot paths after saving it', (await shotLines()).length === 0);
+
+  // A failed export is not reported as done.
+  await ui(() => { window.__dlFail = true; });
+  await click('[data-act="export-shots"]');
+  await sleep(300);
+  const f = await dlg();
+  check('If the download fails, the dialog says so and the report lists no screenshots', /Screenshots not saved: blocked/.test(f.note) && (await shotLines()).length === 0, JSON.stringify(f.note));
+
+  // The explicit export.
+  await ui(() => { window.__dlFail = false; });
+  await click('[data-act="export-shots"]');
+  await sleep(300);
+  const shots = (await calls()).filter((c) => c.names.some((n) => n.endsWith('.png')));
+  const after = await dlg();
+  const lines = await shotLines();
+  check('Export Screenshots downloads each screenshot once, with numbered names', shots.length === 2 && shots[1].names.join() === '01-aaaa.png,02-bbbb.png,02-bbbb-markup.png', JSON.stringify(shots));
+  check('The report now references them with the same file names', lines.length === 3 && lines[0].endsWith('/01-aaaa.png') && lines[1].endsWith('/02-bbbb.png') && lines[2].includes('Marked-up screenshot:') && lines[2].endsWith('/02-bbbb-markup.png'), JSON.stringify(lines));
+  check('The dialog reports where they were saved', /Screenshots saved in \/Users\/me\/Downloads\/blueline\//.test(after.note), after.note);
+  const n = (await calls()).length;
+  await click('[data-act="export-shots"]');
+  await sleep(200);
+  check('Pressing it again doesn’t download them twice', (await calls()).length === n);
+  await click('[data-act="modal-close"]');
+  await click('[data-act="export"]');
+  await sleep(300);
+  check('Reopening the report downloads nothing and keeps the references', (await calls()).length === n && (await shotLines()).length === 3);
+
+  // No screenshots at all.
+  await ui(() => { for (const it of __BL.S.batch.items) { it.hasShot = false; it.hasMarkup = false; it.shotPath = null; it.markupPath = null; } });
+  await click('[data-act="modal-close"]');
+  await click('[data-act="export"]');
+  await sleep(300);
+  const none = await dlg();
+  check('With no screenshots the button is disabled and says so', none.disabled && /No screenshots/.test(none.note), JSON.stringify(none));
+  check('No page errors (Change Report dialog)', page.errors.length === 0, page.errors.join(' | '));
+  await page.close();
+}
+
 // ------------------------------------------------------------------ 10. CSS rule restoration safety (fixtures/css-rules.html)
 console.log('\n# A saved CSS change is never attached to an unrelated rule (fixtures/css-rules.html)');
 {

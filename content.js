@@ -32,7 +32,7 @@
     picking: false,
     page: {},
     batch: null,
-    prefs: { side: 'right', collapsed: false, saveShots: true, previews: true },
+    prefs: { side: 'right', collapsed: false, previews: true },
     hoverEl: null,
     trail: [],
     lastPoint: { x: 0, y: 0 },
@@ -1166,7 +1166,7 @@
       border-radius: 12px; box-shadow: 0 24px 60px rgba(30,34,48,.3); overflow: hidden; }
     .sheet-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 12px 8px 16px; }
     .sheet-head h2 { font-size: 15px; font-weight: 650; }
-    .opt { display: flex; gap: 8px; align-items: center; padding: 0 16px 10px; color: #4A5063; font-size: 12.5px; cursor: pointer; }
+    .opt { display: flex; gap: 10px; align-items: center; padding: 0 16px 10px; color: #4A5063; font-size: 12.5px; }
     .out { flex: 1; min-height: 360px; margin: 0 16px; border: 1px solid #D9DCE4; border-radius: 8px; padding: 10px;
       font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #1E2230; background: #FAFBFC; resize: none; }
     .sheet-foot { display: flex; align-items: center; gap: 8px; padding: 12px 16px; }
@@ -1224,12 +1224,12 @@
     <div class="modal" hidden>
       <div class="sheet" role="dialog" aria-label="Export Change Report">
         <header class="sheet-head"><h2>Webpage change request</h2><button class="icon" data-act="modal-close" aria-label="Close">✕</button></header>
-        <label class="opt"><input type="checkbox" class="opt-shots"> Save screenshots to Downloads and add their paths</label>
+        <div class="opt"><button class="ghost" data-act="export-shots">Export Screenshots</button><span class="shots-note"></span></div>
         <textarea class="out" readonly spellcheck="false"></textarea>
         <footer class="sheet-foot">
           <span class="status"></span>
           <button class="ghost" data-act="save-md">Save as .md</button>
-          <button class="primary" data-act="copy">Copy prompt</button>
+          <button class="primary" data-act="copy">Copy Report</button>
         </footer>
       </div>
     </div>
@@ -1289,6 +1289,7 @@
         case 'modal-close': closeModal(); return;
         case 'copy': copyOut(); return;
         case 'save-md': saveMd(); return;
+        case 'export-shots': exportShots(); return;
         default: break;
       }
       if (e.target.classList.contains('modal')) { closeModal(); return; }
@@ -1296,11 +1297,7 @@
     });
 
     root.addEventListener('change', (e) => {
-      if (e.target.classList.contains('opt-shots')) {
-        S.prefs.saveShots = e.target.checked;
-        savePrefs();
-        refreshExport();
-      } else if (e.target.classList.contains('pop-broken')) {
+      if (e.target.classList.contains('pop-broken')) {
         setPopType(e.target.checked ? 'bug' : S.popBase);
       }
     });
@@ -1769,7 +1766,6 @@
     if (!S.batch?.items.length) return;
     if (S.picking) setPicking(false);
     S.ui.$('.modal').hidden = false;
-    S.ui.$('.opt-shots').checked = !!S.prefs.saveShots;
     await refreshExport();
     S.ui.$('[data-act="copy"]').focus();
   }
@@ -1778,34 +1774,56 @@
     if (S.ui) S.ui.$('.modal').hidden = true;
   }
 
+  // The screenshots an item has captured, with the file names they are saved under.
+  function shotJobs() {
+    const todo = [];
+    (S.batch?.items || []).forEach((i, idx) => {
+      const n = String(idx + 1).padStart(2, '0');
+      if (i.hasShot) todo.push({ it: i, field: 'shotPath', key: shotKey(i.id), name: `${n}-${i.id.slice(0, 4)}.png` });
+      if (i.hasMarkup) todo.push({ it: i, field: 'markupPath', key: shotKey(i.id) + ':markup', name: `${n}-${i.id.slice(0, 4)}-markup.png` });
+    });
+    return todo;
+  }
+
+  // Opening, copying and saving the report never download anything. The report names a screenshot only after it
+  // has been exported with Export Screenshots (that is the only time a file path is known).
   async function refreshExport() {
     const $ = S.ui.$;
-    const status = $('.status');
-    status.textContent = '';
-    if (S.prefs.saveShots && S.batch) {
-      const todo = [];
-      S.batch.items.forEach((i, idx) => {
-        const n = String(idx + 1).padStart(2, '0');
-        if (i.hasShot && !i.shotPath) todo.push({ it: i, field: 'shotPath', key: shotKey(i.id), name: `${n}-${i.id.slice(0, 4)}.png` });
-        if (i.hasMarkup && !i.markupPath) todo.push({ it: i, field: 'markupPath', key: shotKey(i.id) + ':markup', name: `${n}-${i.id.slice(0, 4)}-markup.png` });
-      });
-      if (todo.length) {
-        status.textContent = `Saving ${plural(todo.length, 'image')}…`;
-        const data = await chrome.storage.local.get(todo.map((t) => t.key));
-        const files = todo.filter((t) => data[t.key]).map((t) => ({ id: t.key, name: t.name, dataUrl: data[t.key] }));
-        const res = await send({ type: 'blueline:download', folder: `blueline/${S.batch.id}`, files });
-        for (const { id, path } of res?.paths || []) {
-          const t = todo.find((x) => x.key === id);
-          if (t && path) t.it[t.field] = path;
-        }
-        await saveBatch();
-        status.textContent = res?.error ? `Images not saved: ${res.error}` : '';
-      }
-      const any = S.batch.items.map((i) => i.shotPath || i.markupPath).find(Boolean);
-      if (any && !status.textContent) status.textContent = `Images saved in ${any.replace(/[\\/][^\\/]*$/, '')}`;
+    const jobs = shotJobs();
+    const saved = jobs.filter((j) => j.it[j.field]);
+    const btn = $('[data-act="export-shots"]');
+    btn.disabled = !jobs.length;
+    btn.title = jobs.length ? 'Download the screenshots to your Downloads folder and add their paths to the report' : 'These notes have no screenshots';
+    const note = $('.shots-note');
+    const folder = (saved[0]?.it[saved[0].field] || '').replace(/[\\/][^\\/]*$/, '');
+    note.textContent = !jobs.length ? 'No screenshots in these notes.'
+      : saved.length === jobs.length ? `Screenshots saved in ${folder}`
+        : saved.length ? `${saved.length} of ${jobs.length} screenshots saved. Press Export Screenshots for the rest.`
+          : `${plural(jobs.length, 'screenshot')} not exported. The report doesn’t list them until you press Export Screenshots.`;
+    $('.out').value = buildPrompt(S.batch);
+  }
+
+  // Explicit: downloads the screenshots not exported yet (using the capture saved with each note) and then adds their
+  // paths to the report. Nothing is claimed as exported unless the download reports a path.
+  async function exportShots() {
+    const $ = S.ui.$;
+    const todo = shotJobs().filter((j) => !j.it[j.field]);
+    const note = $('.shots-note');
+    if (!todo.length) { await refreshExport(); return; }
+    note.textContent = `Saving ${plural(todo.length, 'image')}…`;
+    const data = await chrome.storage.local.get(todo.map((t) => t.key));
+    const files = todo.filter((t) => data[t.key]).map((t) => ({ id: t.key, name: t.name, dataUrl: data[t.key] }));
+    const res = files.length ? await send({ type: 'blueline:download', folder: `blueline/${S.batch.id}`, files }) : null;
+    let saved = 0;
+    for (const { id, path } of res?.paths || []) {
+      const t = todo.find((x) => x.key === id);
+      if (t && path) { t.it[t.field] = path; saved++; }
     }
-    const batch = S.prefs.saveShots ? S.batch : { ...S.batch, items: S.batch.items.map((i) => ({ ...i, shotPath: null, markupPath: null })) };
-    $('.out').value = buildPrompt(batch);
+    if (saved) await saveBatch();
+    await refreshExport();
+    if (!saved) note.textContent = res?.error ? `Screenshots not saved: ${res.error}` : 'Screenshots couldn’t be saved.';
+    else if (saved < todo.length) note.textContent = `Saved ${saved} of ${todo.length} screenshots. ${note.textContent}`;
+    else toast('Screenshots saved');
   }
 
   async function copyOut() {
@@ -1835,12 +1853,12 @@
     const res = await send({
       type: 'blueline:download',
       folder: `blueline/${S.batch.id}`,
-      files: [{ id: 'prompt', name: 'prompt.md', dataUrl: 'data:text/markdown;charset=utf-8,' + encodeURIComponent(text) }],
+      files: [{ id: 'prompt', name: 'blueline-change-report.md', dataUrl: 'data:text/markdown;charset=utf-8,' + encodeURIComponent(text) }],
     });
     const path = res?.paths?.[0]?.path;
     if (path) {
       S.ui.$('.status').textContent = `Saved ${path}`;
-      toast('Saved prompt.md');
+      toast('Saved blueline-change-report.md');
     } else {
       toast(res?.error ? `Couldn\u2019t save: ${res.error}` : 'Couldn\u2019t save the file');
     }

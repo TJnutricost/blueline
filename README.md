@@ -47,7 +47,7 @@ With several elements selected, choose which one you are editing; each keeps its
 Describe also has **Screen size** (which sizes the change is for; it doesn't resize the page), **Broken / error**, and a per-note Figma link. On Shopify pages there is a read-only product variant picker.
 
 ## The Change Report
-The export is a short, change-focused report: the page and detected technology, then for each note its type, your text, the target element and selector, the CSS rule and property changes (old → new), scope, alignment and measurements, drawings, and screenshots. Bugs also include diagnostic details and the steps before the note. Reference-only items (measurements, sampled colors) are labelled as such.
+The export is a short, change-focused report: the page and detected technology, then for each note its type, your text, the target element and selector, the CSS rule and property changes (old → new), scope, alignment and measurements, drawings, and screenshots. Bugs also include diagnostic details and the steps before the note. Reference-only items (measurements, sampled colors) are labelled as such. Opening, copying (**Copy Report**) or saving the report never downloads anything; press **Export Screenshots** to download the screenshots, which then adds their file paths to the report.
 
 ## More tools
 Guide lines, a design-image overlay, **Check prices from a CSV** (Shopify pages, read-only), and **Hide / Show my live edits**. Saved notes stay on the page as numbered badges.
