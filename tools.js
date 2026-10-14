@@ -3378,7 +3378,7 @@
   const ONBOARD = `<b>How it works</b>
     <div class="step"><i>1</i><span>Press <b>Add note</b>, or start from the page with <b>Select element</b> or <b>Select area</b>.</span></div>
     <div class="step"><i>2</i><span>Say what should change. Try values live if you like.</span></div>
-    <div class="step"><i>3</i><span>When you have all your notes, press <b>Export prompt</b> and share it with a developer or AI assistant.</span></div>`;
+    <div class="step"><i>3</i><span>When you have all your notes, press <b>Export Change Report</b> and share it with a developer or AI assistant.</span></div>`;
 
   const MODE_NAME = { shopify: 'a Shopify theme', next: 'a Next.js app', react: 'a React app', html: 'plain HTML/CSS/JS' };
 
@@ -4499,8 +4499,8 @@
   hooks.noteFallback = (it) => {
     const ch = changeBits(it);
     const rf = refBits(it);
-    if (ch.length) return `**Note:** none written. The requested change is given by the annotations below: ${ch.join('; ')}.${rf.length ? ` Context only, not changes: ${rf.join(', ')}.` : ''}`;
-    return `**Note:** none written. **Reference only** (${rf.join(', ') || 'annotations'}): these record the page as it is now. Don’t change anything for this item; use the values as context for the other items.`;
+    if (ch.length) return `**Note:** none written; the change is the annotations below: ${ch.join('; ')}.${rf.length ? ` Context only: ${rf.join(', ')}.` : ''}`;
+    return `**Note:** none written. **Reference only** (${rf.join(', ') || 'annotations'}): the page as it is now; change nothing for this item.`;
   };
 
   // Shown in the note list when no text was written.
@@ -4568,23 +4568,22 @@
   hooks.promptHeader = (items, batch) => {
     const L = [];
     const key = [];
-    if (items.some((i) => i.kind === 'region')) key.push('**Region**: the author marked empty space where something new should go. No element exists there yet. Add it, following the conventions of its neighbours.');
-    if (items.some((i) => i.move)) key.push('**Move**: relocate the element to the destination shown. Keep its markup and styles, and adjust any layout that depended on its old spot.');
-    if (items.some(showsScope)) key.push('**Scope** says how far a style change reaches: this one only, everything like it inside a container, or everywhere.');
-    if (items.some((i) => [i, ...(i.elementEdits || [])].some((e) => (e.tweaks || []).some((t) => t.rule)))) key.push('**CSS rule** lines name the stylesheet rule the author edited and where it is. Values on the left are the rule\u2019s own; **added** means the rule didn\u2019t declare that property before. Each change was previewed on the selected element only; its **Scope** says how far the real change should reach.');
-    if (items.some((i) => (i.tweaks && i.tweaks.some((t) => !t.snap)) || i.textEdit)) key.push('**Previewed** values were tried live in the browser and approved by the author. Treat them as the target, using existing tokens, variables, or utility classes instead of hardcoding.');
-    if (items.some((i) => refBits(i).length)) key.push('**Reference measurements** and sampled colors record the page as it is now. They are context, not change requests. Act on them only when the note or another annotation asks for a change. Items marked **(reference only)** need no edits.');
-    if (items.some((i) => !i.note)) key.push('Some items have **no written note**. Their requested change is fully described by their annotations (previewed values, moves, alignment, drawings).');
-    if (items.some((i) => (i.marks || []).some((m) => !m.auto))) key.push('**Drawn marks** (boxes, arrows, text) show where something belongs. Use the marked-up screenshot together with the text description.');
-    if (items.some((i) => i.also && i.also.length)) key.push('**Multiple elements**: when a note lists "also applies to", make the same change to every listed element.');
-    if (items.some((i) => i.figma)) key.push('Some items carry **Figma links**. If you can open those frames, use them for exact values before editing.');
-    if (key.length) L.push('', '## Annotation key', ...key.map((k) => `- ${k}`));
+    const edits = (i) => [i, ...(i.elementEdits || [])];
+    const hasRule = items.some((i) => edits(i).some((e) => (e.tweaks || []).some((t) => t.rule)));
+    const hasPreview = items.some((i) => edits(i).some((e) => (e.tweaks || []).some((t) => !t.snap && !t.rule) || e.textEdit));
+    const hasAlign = items.some((i) => edits(i).some((e) => e.alignEl?.x || e.alignEl?.y || (e.align || []).length));
+    if (hasRule || hasPreview) key.push(`Values were previewed live on the selected element only and are the target${hasRule ? '; **added** means the rule didn\u2019t declare that property before' : ''}. **Scope** says where the real change goes. Use existing tokens or classes rather than hardcoding.`);
+    if (hasAlign) key.push('Alignment is a relationship to a reference element that stays put. Any pixel shift is only a preview: build it with layout (flex or grid, margins, order), not a fixed offset or transform.');
+    if (items.some((i) => i.kind === 'region')) key.push('**Region**: empty space where something new goes. Add it, following its neighbours.');
+    if (items.some((i) => refBits(i).length)) key.push('Measurements and sampled colors are reference only, not changes. **(reference only)** items need no edits.');
+    if (items.some((i) => (i.marks || []).some((m) => !m.auto))) key.push('Drawn marks show where something belongs; see the marked-up screenshot.');
+    if (key.length) L.push('', '## Notes', ...key.map((k) => `- ${k}`));
     const gs = batch?.guides || [];
     if (gs.length) {
       L.push('', '## Guide lines');
       const byPath = new Map();
       gs.forEach((g) => byPath.set(g.path, [...(byPath.get(g.path) || []), g]));
-      for (const [path, list] of byPath) L.push(`- On ${code(path)} (viewport ${list[0].vw}px wide): ${list.map((g) => `guide ${g.name} ${g.axis === 'x' ? 'vertical at x' : 'horizontal at y'}=${Math.round(g.pos)}px`).join('; ')}. Items that should line up with a guide say so.`);
+      for (const [path, list] of byPath) L.push(`- On ${code(path)} (viewport ${list[0].vw}px wide): ${list.map((g) => `guide ${g.name} ${g.axis === 'x' ? 'vertical at x' : 'horizontal at y'}=${Math.round(g.pos)}px`).join('; ')}. `);
     }
     if (batch?.priceReport) L.push('', '## Price check (read-only)', ...priceReportText(batch.priceReport).map((x) => `- ${x.trim()}`), '- Don\u2019t change prices in the store. Report mismatches, and replace any hardcoded prices in page code with Liquid so they follow the store.');
     return L;
@@ -4596,13 +4595,13 @@
     // Scopes based on the CSS rule the author edited (v0.7). Older notes keep the wording below.
     if (s.basis === 'rule') {
       const src = s.rule?.source ? ` in ${s.rule.source}${s.rule.context ? ` (${s.rule.context})` : ''}` : '';
-      if (s.mode === 'one') return [`- Scope: **this one only**.${s.similar > 1 ? ` The CSS rule ${code(s.selector)}${src} also matches ${s.similar - 1} other element${s.similar === 2 ? '' : 's'} on this page; they must stay unchanged, so don\u2019t change that rule for this.` : ` The CSS rule ${code(s.selector)}${src} matches only this element on this page.`} Change this instance through its own classes, a variant or prop, a more specific selector, or a block/section setting.`];
-      if (s.mode === 'group') return [`- Scope: **everything like it inside ${code(s.container)}**: ${matches(s.count)} for the CSS rule ${code(s.selector)}${src}${ex}. Change them together at that level (a scoped rule, wrapper class, or prop). Don\u2019t change the rule for other places. The author previewed the change on this element only.`];
-      return [`- Scope: **everywhere**: change the CSS rule ${code(s.selector)}${src} itself, so the values apply wherever it matches: ${matches(s.count)} on this page${ex}. Then check other pages that use it. The author previewed the change on this element only.`];
+      if (s.mode === 'one') return [`- Scope: **this one only**. Rule ${code(s.selector)}${src} ${s.similar > 1 ? `also matches ${s.similar - 1} other element${s.similar === 2 ? '' : 's'} on this page; they must stay unchanged` : 'matches only this element'}. Change this instance through its own classes, a variant, or a more specific selector.`];
+      if (s.mode === 'group') return [`- Scope: **everything like it inside ${code(s.container)}**: ${matches(s.count)} for rule ${code(s.selector)}${src}${ex}. Change them together at that level; leave the rule alone elsewhere.`];
+      return [`- Scope: **everywhere**: change rule ${code(s.selector)}${src} itself (${matches(s.count)} on this page${s.labels?.length ? `, e.g. ${s.labels.map(code).join(', ')}` : ''}), then check other pages that use it.`];
     }
-    if (s.mode === 'one') return [`- Scope: **this one only**.${s.similar > 1 ? ` ${s.similar - 1} similar element${s.similar === 2 ? '' : 's'} (${code(s.selector)}) exist on this page and must stay unchanged.` : ''} Change this instance through its own classes, a variant or prop, or a block/section setting. Don\u2019t edit the shared default.`];
-    if (s.mode === 'group') return [`- Scope: **everything like it inside ${code(s.container)}**: ${matches(s.count)} for ${code(s.selector)}${ex}. Change them together at that level (a scoped rule, wrapper class, or prop). Don\u2019t change the same component elsewhere.`];
-    return [`- Scope: **everywhere**: ${matches(s.count)} for ${code(s.selector)} on this page${ex}. Change the shared source (component default, shared CSS rule, theme token or settings), then check other pages that use it.`];
+    if (s.mode === 'one') return [`- Scope: **this one only**.${s.similar > 1 ? ` ${s.similar - 1} similar element${s.similar === 2 ? '' : 's'} (${code(s.selector)}) must stay unchanged.` : ''} Change this instance through its own classes, a variant, or a block/section setting; don\u2019t edit the shared default.`];
+    if (s.mode === 'group') return [`- Scope: **everything like it inside ${code(s.container)}**: ${matches(s.count)} for ${code(s.selector)}${ex}. Change them together at that level; leave the same component elsewhere.`];
+    return [`- Scope: **everywhere**: ${matches(s.count)} for ${code(s.selector)} on this page${ex}. Change the shared source, then check other pages that use it.`];
   }
 
   function marksSummary(marks) {
@@ -4650,13 +4649,13 @@
       const names = g.members.map((m) => code(m.el.label)).join(', ');
       const target = ref(g.ref.label, g.ref.selector);
       const keep = `Keep ${code(g.ref.label)} stationary${many ? ', and keep the selected elements in the same positions relative to each other' : ''}.`;
-      const css = g.members.some(hasCss) ? ` The CSS changes listed for ${many ? 'these elements' : 'it'} below are part of the same correction: apply them as well${g.method === 'next' && g.members.some((m) => (m.tweaks || []).some((t) => t.prop === 'margin' && !t.snap)) ? '. The space between it and the reference comes from its margin change, not from an extra offset' : ''}.` : '';
+      const css = g.members.some(hasCss) ? ` Apply the CSS changes listed below as part of it${g.method === 'next' && g.members.some((m) => (m.tweaks || []).some((t) => t.prop === 'margin' && !t.snap)) ? '; the gap comes from the margin change, not an extra offset' : ''}.` : '';
       if (g.method === 'next') {
         const who = many ? `these ${g.members.length} selected elements as one group (${names}), using their combined bounding box,` : ref(g.members[0].el.label, g.members[0].el.selector);
-        return `Position ${who} ${nextPhrase(g.axes, target)}. ${keep}${css} Build it with the layout (element order in the document flow, or a flex or grid container), not a fixed offset or transform, so it holds at other screen sizes.`;
+        return `Position ${who} ${nextPhrase(g.axes, target)}. ${keep}${css}`;
       }
       const who = many ? `these ${g.members.length} selected elements, taken as one group (${names}) using their combined bounding box,` : ref(g.members[0].el.label, g.members[0].el.selector);
-      return `Align ${alignPhrase(g.axes)} of ${who} with ${target}. ${keep}${css} Build it with the layout (a shared container, flex or grid alignment, margins or positioning), not a fixed offset or transform, so it holds at other screen sizes.`;
+      return `Align ${alignPhrase(g.axes)} of ${who} with ${target}. ${keep}${css}`;
     });
   }
   const shiftText = (a) => [a.x && a.x.shift ? `${Math.abs(a.x.shift)}px ${a.x.shift > 0 ? 'right' : 'left'}` : '', a.y && a.y.shift ? `${Math.abs(a.y.shift)}px ${a.y.shift > 0 ? 'down' : 'up'}` : ''].filter(Boolean).join(' and ') || 'no shift (already aligned)';
@@ -4670,12 +4669,12 @@
     for (const { rule: r, list } of groups.values()) {
       const sel = r.matched || r.selector;
       const head = r.key === 'element'
-        ? 'CSS on this element only (not in a stylesheet rule), previewed on it:'
-        : `CSS rule ${code(sel)} in ${r.source}${r.context ? ` (${r.context})` : ''}${r.selector && r.selector !== sel ? `, from the selector ${code(r.selector)}` : ''}, previewed on this element only:`;
+        ? 'CSS on this element only (not in a stylesheet rule):'
+        : `CSS rule ${code(sel)} in ${r.source}${r.context ? ` (${r.context})` : ''}${r.selector && r.selector !== sel ? `, from the selector ${code(r.selector)}` : ''}:`;
       const notes = [
-        r.notFound ? 'This rule wasn\u2019t found on the page when the note was saved; find it by its selector and source.' : '',
-        r.uncertain ? `Its condition couldn\u2019t be checked in the browser, so confirm it applies.` : '',
-        r.utility ? 'It is a utility class: change which utility classes the element uses rather than redefining the class.' : '',
+        r.notFound ? 'Not found on the page when saved; locate it by selector and source.' : '',
+        r.uncertain ? 'Its condition couldn\u2019t be checked; confirm it applies.' : '',
+        r.utility ? 'Utility class: change which utilities the element uses rather than redefining it.' : '',
       ].filter(Boolean);
       L.push(`- ${head}${notes.length ? ` ${notes.join(' ')}` : ''}`);
       for (const t of list) L.push(`  - ${t.prop}: ${t.declared === false ? 'added' : t.from} → ${t.to}${t.token ? ` (≈ ${t.token})` : ''}${t.important ? ' (the rule declares it !important)' : ''}`);
@@ -4694,7 +4693,7 @@
       const active = it.elementEdits.filter((e) => !isEmptyInstance(e));
       const idle = it.elementEdits.filter(isEmptyInstance);
       if (active.length) {
-        add('Selected instances have independent corrections. Apply only the actions recorded under each instance and respect its Scope.');
+        if (active.length > 1) add('Each instance has its own changes and Scope; apply only what is recorded under it.');
         L.push(...elementAlignLines(active).map((x) => `- ${x}`));
         for (const edit of active) {
           L.push(`- **Instance ${ref(edit.el.label, edit.el.selector)}**`);
@@ -4704,7 +4703,7 @@
       }
       // With a written note or drawings that may refer to them, selected elements without changes of their own are
       // named in one line (no scope, no instructions). Otherwise they are left out.
-      if (idle.length && (it.note || (it.marks || []).some((m) => !m.auto))) add(`Also selected, with no changes of their own (nothing to apply to ${idle.length === 1 ? 'it' : 'them'} separately): ${idle.map((e) => ref(e.el.label, e.el.selector)).join(', ')}.`);
+      if (idle.length && (it.note || (it.marks || []).some((m) => !m.auto))) add(`Also selected, no changes of their own: ${idle.map((e) => ref(e.el.label, e.el.selector)).join(', ')}.`);
     }
     if (!it.elementEdits && it.also?.length) {
       add(`Also applies to ${it.also.length} more element${it.also.length === 1 ? '' : 's'}. Make the same change to each:`);
@@ -4717,17 +4716,17 @@
     if (loose.length) add(`Previewed by the author${it.also?.length ? ' (on all selected elements)' : ''}: ${loose.map((t) => `${t.prop} ${t.from} → ${t.to}${t.token ? ` (≈ ${t.token})` : ''}`).join('; ')}`);
     L.push(...cssRuleLines(prev.filter((t) => t.rule)));
     if (it.textEdit) add(`Copy change: “${it.textEdit.before}” → “${it.textEdit.after}”`);
-    if (it.hidden) add('The author hid this element to preview the layout without it. Remove it (or hide it, per the note) and let the layout close up.');
+    if (it.hidden) add('Hide this element (previewed hidden by the author); let the layout close up.');
     if (it.match) add(`Make it look like ${ref(it.match.label, it.match.selector)}${it.match.src ? ` (rendered at ${code(it.match.src)})` : ''}. Differences, this → target: ${it.match.diffs.map((d) => `${d.prop} ${d.from} → ${d.to}`).join('; ')}`);
-    if (it.move) add(`Move this element **${posText[it.move.position]}** ${ref(it.move.to.label, it.move.to.selector)}${it.move.to.src ? ` (target rendered at ${code(it.move.to.src)})` : ''}. Keep its markup and styles; adjust any layout that depended on its old spot.`);
+    if (it.move) add(`Move this element **${posText[it.move.position]}** ${ref(it.move.to.label, it.move.to.selector)}${it.move.to.src ? ` (target rendered at ${code(it.move.to.src)})` : ''}. Keep its markup and styles.`);
     for (const a of it.align || []) {
       const dir = a.axis === 'x' ? (a.offset >= 0 ? 'right of' : 'left of') : a.offset >= 0 ? 'below' : 'above';
       add(`Align its ${a.edge}${a.edge === 'center' || a.edge === 'middle' ? '' : ' edge'} to guide ${a.guide} (${a.axis === 'x' ? 'vertical at x' : 'horizontal at y'}=${a.guidePos}px). ${a.offset === 0 ? 'It is already on the guide; keep it there.' : `It is currently ${Math.abs(a.offset)}px ${dir} the guide. The author previewed the snap with a ${a.shift}px translate; implement it with real layout (alignment, margin, grid or flex), not a transform.`}`);
     }
-    if (it.alignEl?.x || it.alignEl?.y) add(`Element alignment (described above): previewed by shifting this element ${shiftText(it.alignEl)}${hasCss(it) ? ', with the CSS values above applied' : ''}. The shift is a hint, not the implementation${hasCss(it) ? '; don’t add an offset to make up for the CSS values' : ''}.`);
+    if (it.alignEl?.x || it.alignEl?.y) add(`Alignment (described above) was previewed with a shift of ${shiftText(it.alignEl)}${hasCss(it) ? ', with the CSS values above applied' : ''}. That shift is a hint, not the implementation.`);
     for (const m of it.measures || []) add(`Reference measurement to ${ref(m.label, m.selector)} (current layout, not a change by itself): ${m.summary}`);
     if (it.colors?.length) add(`Sampled colors: ${it.colors.map(code).join(', ')}`);
-    if (it.auto) add('Selected by dragging a rectangle over an area of the page, so the target was matched automatically. Confirm it against the marked-up screenshot.');
+    if (it.auto) add('Matched automatically from a dragged area; confirm it against the marked-up screenshot.');
     const drawn = (it.marks || []).filter((m) => !m.auto);
     if (drawn.length) { add(`Drawn on the page: ${marksSummary(drawn)}. See the marked-up screenshot.`); for (const m of drawn.filter((m) => m.t === 'arrow')) add(`Arrow ${m.c}: page coordinates (${rnd(m.a.x)}, ${rnd(m.a.y)}) → (${rnd(m.b.x)}, ${rnd(m.b.y)}).`); }
     if (it.figma) add(`Figma: ${it.figma}`);

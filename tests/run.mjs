@@ -706,8 +706,8 @@ console.log('\n# Toolbox, per-instance CSS changes, corrections and export (fixt
     const b1 = instanceBlock(text, ee[0].el.selector);
     const b2 = instanceBlock(text, ee[1].el.selector);
     // v0.7 export: CSS changes are listed under their rule ("prop: from → to", "added" when the rule didn't declare it).
-    check('Export: instance 2 lists its own CSS change and its "everywhere" scope for the class', b2.includes('CSS rule `.card-title` in inline <style> 1, previewed on this element only:') && b2.includes('font-size: 18px → 28px') && b2.includes('color: added → #005EB8') && b2.includes('Scope: **everywhere**: change the CSS rule `.card-title`'), b2);
-    check('Export: instance 1 keeps "this one only" and none of instance 2’s values', b1.includes('padding: added → 4px') && b1.includes('this one only') && b1.includes('don’t change that rule for this') && !b1.includes('font-size'), b1);
+    check('Export: instance 2 lists its own CSS change and its "everywhere" scope for the class', b2.includes('CSS rule `.card-title` in inline <style> 1:') && b2.includes('font-size: 18px → 28px') && b2.includes('color: added → #005EB8') && b2.includes('Scope: **everywhere**: change rule `.card-title`'), b2);
+    check('Export: instance 1 keeps "this one only" and none of instance 2’s values', b1.includes('padding: added → 4px') && b1.includes('this one only') && b1.includes('they must stay unchanged') && !b1.includes('font-size'), b1);
     check('Export: item heading is "Change", nothing about priority', /\n## 1\. Change: /.test(text) && !/nice to have/i.test(text) && !/must-fix/i.test(text), text.split('\n').find((l) => l.startsWith('## 1.')));
   }
 
@@ -768,7 +768,7 @@ console.log('\n# Toolbox, per-instance CSS changes, corrections and export (fixt
     });
     const text = await prompt();
     const head = text.split('\n').find((l) => l.startsWith('## 3.')) || '';
-    check('Older note exports with its own type and without priority wording', head.startsWith('## 3. Copy: ') && !/nice to have/i.test(text) && /Types: .*1 copy/.test(text) && text.includes('font-weight 600 → 800'), head);
+    check('Older note exports with its own type and without priority wording', head.startsWith('## 3. Copy: ') && !/nice to have/i.test(text) && !/Types:|Suggested order/.test(text) && text.includes('font-weight 600 → 800'), head);
     const meta = await ui(() => __BL.S.ui.root.querySelectorAll('.list .item')[2]?.querySelector('.meta')?.textContent || '');
     check('Notes list shows the older type and no priority', meta.startsWith('Change text · ') && !/nice/i.test(meta), meta);
     await ui(() => __BL.S.ui.root.querySelectorAll('.list .item')[2].click());
@@ -1099,7 +1099,7 @@ console.log('\n# Toolbox, per-instance CSS changes, corrections and export (fixt
     check('Saved: method, side, reference, shift and scope', aeN?.y?.method === 'next' && aeN.y.edge === 'above' && aeN.y.ref.selector === '#cta' && !aeN.x && typeof aeN.y.shift === 'number' && pn.elementEdits[0].scope.mode === 'one', JSON.stringify(pn.elementEdits[0]));
     {
       const text = await lastBlock();
-      check('Export (Place next to): positioned immediately above the reference, which stays put', text.includes('Position `h3.card-title` (`#c3 > h3.card-title`) immediately above `button#cta` (`#cta`), outside its box and touching it. Keep `button#cta` stationary.') && text.includes('not a fixed offset or transform'), text);
+      check('Export (Place next to): positioned immediately above the reference, which stays put', text.includes('Position `h3.card-title` (`#c3 > h3.card-title`) immediately above `button#cta` (`#cta`), outside its box and touching it. Keep `button#cta` stationary.') && (await prompt()).includes('not a fixed offset or transform') && !text.includes('Build it with the layout'), text);
     }
     await delLast();
 
@@ -1117,7 +1117,7 @@ console.log('\n# Toolbox, per-instance CSS changes, corrections and export (fixt
     check('Saved: the element alignment keeps target, reference, method, both axes, shifts and scope', (await resolves(one.elementEdits[0].el.selector, T('t3'))) && ae1?.x?.edge === 'right' && ae1?.y?.edge === 'top' && ae1.x.method === 'edges' && ae1.x.ref.selector === '#cta' && ae1.x.ref.label === 'button#cta' && typeof ae1.x.shift === 'number' && one.elementEdits[0].scope.mode === 'one', JSON.stringify(one.elementEdits?.[0]));
     {
       const text = await lastBlock();
-      check('Export (Align edges): the top and right edges line up with the reference, which stays put', text.includes('Align the top and right edges of `h3.card-title` (`#c3 > h3.card-title`) with `button#cta` (`#cta`). Keep `button#cta` stationary.') && text.includes('not a fixed offset or transform') && text.includes('Element alignment (described above): previewed by shifting this element'), text);
+      check('Export (Align edges): the top and right edges line up with the reference, which stays put', text.includes('Align the top and right edges of `h3.card-title` (`#c3 > h3.card-title`) with `button#cta` (`#cta`). Keep `button#cta` stationary.') && (await prompt()).includes('not a fixed offset or transform') && text.includes('Alignment (described above) was previewed with a shift of'), text);
     }
     await delLast();
 
@@ -1146,7 +1146,7 @@ console.log('\n# Toolbox, per-instance CSS changes, corrections and export (fixt
     check('Saved group: every element has the same reference, method, edge, group and shift', xs.length === 3 && xs.every((x) => x && x.edge === 'center' && x.method === 'edges' && x.ref.selector === '#cta' && x.group.id === xs[0].group.id && x.group.size === 3 && x.shift === xs[0].shift) && grp.elementEdits.every((e) => !e.alignEl.y), JSON.stringify(xs));
     {
       const text = await lastBlock();
-      check('Export: the group’s horizontal center lines up with the reference, keeping its spacing', text.includes('Align the horizontal center of these 3 selected elements, taken as one group (`p.card-price`, `p.card-price`, `p.card-price`) using their combined bounding box, with `button#cta` (`#cta`). Keep `button#cta` stationary, and keep the selected elements in the same positions relative to each other.') && (text.match(/Element alignment \(described above\)/g) || []).length === 3, text);
+      check('Export: the group’s horizontal center lines up with the reference, keeping its spacing', text.includes('Align the horizontal center of these 3 selected elements, taken as one group (`p.card-price`, `p.card-price`, `p.card-price`) using their combined bounding box, with `button#cta` (`#cta`). Keep `button#cta` stationary, and keep the selected elements in the same positions relative to each other.') && (text.match(/Alignment \(described above\) was previewed/g) || []).length === 3, text);
     }
     await openLast();
     const reopened = { ...(await al()), tool: (await shown()).pressed.join(), ch: await changes(), r: await Promise.all(['p1', 'p2', 'p3'].map((t) => rect(T(t)))) };
@@ -1203,7 +1203,7 @@ console.log('\n# Toolbox, per-instance CSS changes, corrections and export (fixt
     {
       const text = await lastBlock();
       const block = instanceBlock(text, rec.el.selector);
-      check('Export: the relationship and the CSS values together, with no fixed offset', text.includes('Position `h3.card-title` (`#c1 > h3.card-title`) immediately below `button#cta` (`#cta`), outside its box and touching it. Keep `button#cta` stationary. The CSS changes listed for it below are part of the same correction: apply them as well. The space between it and the reference comes from its margin change, not from an extra offset.') && block.includes('margin: 0 0 6px → 24px 0px 6px') && block.includes('width: added → 200px') && block.includes('with the CSS values above applied'), text);
+      check('Export: the relationship and the CSS values together, with no fixed offset', text.includes('Position `h3.card-title` (`#c1 > h3.card-title`) immediately below `button#cta` (`#cta`), outside its box and touching it. Keep `button#cta` stationary. Apply the CSS changes listed below as part of it; the gap comes from the margin change, not an extra offset.') && block.includes('margin: 0 0 6px → 24px 0px 6px') && block.includes('width: added → 200px') && block.includes('with the CSS values above applied'), text);
     }
     await openLast();
     const ro = { ...(await al()), tool: (await shown()).pressed.join(), ch: await changes(), r: await rect(T('t1')), m: await inline(T('t1'), 'margin'), w: await inline(T('t1'), 'width') };
@@ -1621,9 +1621,9 @@ console.log('\n# CSS changes keep their rule: save, reopen, scope, export, older
   check('Saved: per-element scope records the rule as the intended target, and that the preview was this element only', e1?.scope.mode === 'all' && e1.scope.basis === 'rule' && e1.scope.selector === '.product-title' && e1.scope.count === 3 && e1.scope.preview === 'element' && e1.scope.rule?.source === '<style id="base">' && e1.scope.rule.reliable === true, JSON.stringify(e1?.scope));
   check('After saving, the preview is still on this element only', (await inline('#pt-1', 'font-size')) === '1.75rem' && (await inline('#pt-2', 'font-size')) === '' && (await inline('#pt-1', 'margin-top')) === '24px');
   const x1 = section(await prompt(), 1);
-  check('Export: rule, source, scope and "from → to" / "added → to" values', x1.includes('CSS rule `.product-title` in <style id="base">, previewed on this element only:') && x1.includes('  - font-size: 1.5rem → 1.75rem') && x1.includes('  - margin-top: added → 24px') && x1.includes('Scope: **everywhere**: change the CSS rule `.product-title` in <style id="base"> itself') && x1.includes('previewed the change on this element only'), x1);
+  check('Export: rule, source, scope and "from → to" / "added → to" values', x1.includes('CSS rule `.product-title` in <style id="base">:') && x1.includes('  - font-size: 1.5rem → 1.75rem') && x1.includes('  - margin-top: added → 24px') && x1.includes('Scope: **everywhere**: change rule `.product-title` in <style id="base"> itself') && !x1.includes('previewed on this element only'), x1);
   const full = await prompt();
-  check('Export: the annotation key explains rule lines and "added"; the inspection still lists matched rules', full.includes('**CSS rule** lines name the stylesheet rule') && full.includes('**added** means') && full.includes('- Matched rules (cascade order):') && full.includes('cross-origin stylesheet couldn’t be inspected'), full.slice(0, 1500));
+  check('Export: the annotation key explains rule lines and "added"; the inspection still lists matched rules', full.includes('Values were previewed live on the selected element only') && full.includes('**added** means') && !x1.includes('Matched rules') && !x1.includes('Computed:') && full.includes('cross-origin stylesheet couldn’t be inspected'), full.slice(0, 1500));
 
   // 2. Reopen: the same rule, values and added row come back; Update without changes keeps the data.
   await reopen(0);
@@ -1640,7 +1640,7 @@ console.log('\n# CSS changes keep their rule: save, reopen, scope, export, older
   await setRow('font-size', '2rem');
   await save('');
   const x2 = section(await prompt(), 2);
-  check('This element: the export names the shared rule and keeps it unchanged', x2.includes('Scope: **this one only**. The CSS rule `.product-title` in <style id="base"> also matches 2 other elements on this page; they must stay unchanged, so don’t change that rule for this.') && x2.includes('  - font-size: 1.5rem → 2rem'), x2);
+  check('This element: the export names the shared rule and keeps it unchanged', x2.includes('Scope: **this one only**. Rule `.product-title` in <style id="base"> also matches 2 other elements on this page; they must stay unchanged.') && x2.includes('  - font-size: 1.5rem → 2rem'), x2);
 
   // 4. A saved rule that isn't on the page: kept, shown as not found, never moved to another rule; a rule that
   //    only shifted (same selector, source and condition) is linked again.
@@ -1662,7 +1662,7 @@ console.log('\n# CSS changes keep their rule: save, reopen, scope, export, older
   await save('');
   const kept = (await item(1)).elementEdits[0].tweaks[0];
   check('Missing rule: Update keeps the change with its saved rule, flagged notFound', kept.rule.matched === '.old-title' && kept.rule.source === 'old.css' && kept.rule.notFound === true && kept.to === '2rem' && kept.from === '1.5rem', JSON.stringify(kept));
-  check('Missing rule: the export says so', section(await prompt(), 2).includes('CSS rule `.old-title` in old.css, previewed on this element only: This rule wasn’t found on the page when the note was saved'), section(await prompt(), 2));
+  check('Missing rule: the export says so', section(await prompt(), 2).includes('CSS rule `.old-title` in old.css: Not found on the page when saved'), section(await prompt(), 2));
   await reopen(0);
   await save('Bigger product title');
   const relinked = (await item(0)).elementEdits[0].tweaks;
@@ -1677,7 +1677,7 @@ console.log('\n# CSS changes keep their rule: save, reopen, scope, export, older
     __BL.saveBatch(); __BL.render();
   });
   const x3 = section(await prompt(), 3);
-  check('Older note: export unchanged (previewed line, guessed-selector scope)', x3.includes('Previewed by the author: letter-spacing normal → 2px') && x3.includes('2 similar elements (`h2.product-title`) exist on this page') && !x3.includes('CSS rule `'), x3);
+  check('Older note: export unchanged (previewed line, guessed-selector scope)', x3.includes('Previewed by the author: letter-spacing normal → 2px') && x3.includes('2 similar elements (`h2.product-title`) must stay unchanged') && !x3.includes('CSS rule `') && x3.includes('- Matched rules (cascade order):'), x3);
   await reopen(2);
   await click('[data-x="tool-css"]');
   const o1 = await editor();
@@ -1696,7 +1696,7 @@ console.log('\n# CSS changes keep their rule: save, reopen, scope, export, older
   await save('');
   const ue = (await item(3)).elementEdits[0];
   check('Utility class: the scope keeps a guessed selector and says why; the change keeps its utility rule', ue.scope.basis === 'similar' && ue.scope.rule?.reliable === false && ue.tweaks[0].rule.utility === true && us.includes('which is a utility class'), JSON.stringify({ scope: ue.scope, us }));
-  check('Utility class: the export says to change classes, not redefine the utility', section(await prompt(), 4).includes('CSS rule `.p-4` in <style id="base">, previewed on this element only: It is a utility class'), section(await prompt(), 4));
+  check('Utility class: the export says to change classes, not redefine the utility', section(await prompt(), 4).includes('CSS rule `.p-4` in <style id="base">: Utility class:'), section(await prompt(), 4));
 
   // 7. translate is kept for Align: a declared translate row is read-only.
   await shiftClick(page, await pointFor(page, '#ref', 'text'));
@@ -1742,8 +1742,10 @@ console.log('\n# CSS changes keep their rule: save, reopen, scope, export, older
   const al = (await item(4)).elementEdits[0];
   check('Saved: one correction holds the placement and the CSS values with their rule', al.alignEl?.y?.method === 'next' && al.alignEl.y.edge === 'below' && al.tweaks.filter((t) => !t.snap).map((t) => `${t.prop}=${t.to}@${t.rule.matched}`).join() === 'margin-top=calc(1rem + 8px)@.box,margin=10px 0px 0px@.box' && al.tweaks.some((t) => t.snap && t.prop === 'translate'), JSON.stringify(al.tweaks));
   const x5 = section(await prompt(), 5);
-  check('Export: the relationship, then the CSS rule block, with the margin as the space', x5.includes('immediately below `div#ref`') && x5.includes('The space between it and the reference comes from its margin change, not from an extra offset.') && x5.includes('CSS rule `.box` in <style id="base">, previewed on this element only:') && x5.includes('  - margin-top: added → calc(1rem + 8px)'), x5);
-  check('Inspection is taken without the previews, even with margin and margin-top both previewed', x5.includes('- Markup: `<div class="box" id="mover">`') && x5.includes('- Box: margin 0 | '), x5.split('\n').filter((l) => /Markup|Box:/.test(l)).join(' / '));
+  check('Export: the relationship, then the CSS rule block, with the margin as the space', x5.includes('immediately below `div#ref`') && x5.includes('the gap comes from the margin change, not an extra offset.') && x5.includes('CSS rule `.box` in <style id="base">:') && x5.includes('  - margin-top: added → calc(1rem + 8px)'), x5);
+  // The inspection data is still collected without the previews; the export shows it only for bugs and items with no CSS rule recorded.
+  const ins = (await item(4)).el;
+  check('Inspection is taken without the previews, even with margin and margin-top both previewed (the export leaves it out for an item with CSS rules)', ins.markup === '<div class="box" id="mover">' && ins.box.startsWith('margin 0 | ') && !x5.includes('**Inspection**') && !x5.includes('Computed:'), JSON.stringify({ markup: ins.markup, box: ins.box }));
   check('No page errors (css-rules.html, save/scope/export/alignment)', page.errors.length === 0, page.errors.join(' | '));
   await page.close();
 }
@@ -2013,13 +2015,13 @@ console.log('\n# Export leaves out selected elements with no changes (fixtures/t
   check('The saved note still holds both selected elements (the empty one is not deleted from the model)', sv.elementEdits.length === 2 && sv.elementEdits[1].el.selector === '#c2 > h3.card-title' && !sv.elementEdits[1].tweaks?.length, JSON.stringify(sv.elementEdits.map((e) => e.el.selector)));
   check('Export: the changed element has its instance, CSS and scope', instanceBlock(await prompt(), '#c1 > h3.card-title').includes('font-size: 18px → 30px') && scopeLines === 1, x1);
   check('Export: the element with no changes gets no instance block and no scope instructions', !x1.includes('**Instance `h3.card-title` (`#c2 > h3.card-title`)**') && instanceBlock(await prompt(), '#c2 > h3.card-title') === '' && scopeLines === 1, x1);
-  check('Export: with a written note it is named once, as selected with nothing to apply to it', x1.includes('Also selected, with no changes of their own (nothing to apply to it separately): `h3.card-title` (`#c2 > h3.card-title`).'), x1);
+  check('Export: with a written note it is named once, as selected with nothing to apply to it', x1.includes('Also selected, no changes of their own: `h3.card-title` (`#c2 > h3.card-title`).'), x1);
   // No written note and nothing drawn: it is left out altogether.
   await ui(() => { __BL.S.batch.items[0].note = ''; });
   check('Export: with no written note or drawings the unchanged element is not mentioned at all', !section(await prompt(), 1).includes('#c2 > h3.card-title'), section(await prompt(), 1));
   // A drawn annotation can refer to it, so it is named (still without instructions).
   await ui(() => { __BL.S.batch.items[0].marks = [{ t: 'box', c: '#E5239D', a: { x: 10, y: 10 }, b: { x: 60, y: 60 } }]; });
-  check('Export: with a drawn annotation it is named in the same single line', section(await prompt(), 1).includes('Also selected, with no changes of their own') && !section(await prompt(), 1).includes('**Instance `h3.card-title` (`#c2 > h3.card-title`)**'), section(await prompt(), 1));
+  check('Export: with a drawn annotation it is named in the same single line', section(await prompt(), 1).includes('Also selected, no changes of their own') && !section(await prompt(), 1).includes('**Instance `h3.card-title` (`#c2 > h3.card-title`)**'), section(await prompt(), 1));
 
   // Elements that are meaningfully involved are all kept.
   await ui(() => {
@@ -2035,7 +2037,7 @@ console.log('\n# Export leaves out selected elements with no changes (fixtures/t
     it.also = [it.elementEdits[1].el, third.el];
   });
   const x2 = section(await prompt(), 1);
-  check('Export: elements with a CSS change, a hide or a measurement each keep their instance', x2.includes('**Instance `h3.card-title` (`#c1 > h3.card-title`)**') && x2.includes('**Instance `h3.card-title` (`#c2 > h3.card-title`)**') && x2.includes('**Instance `h3.card-title` (`#c3 > h3.card-title`)**') && instanceBlock(await prompt(), '#c2 > h3.card-title').includes('The author hid this element') && instanceBlock(await prompt(), '#c3 > h3.card-title').includes('Reference measurement to `button#cta` (`#cta`)') && !x2.includes('Also selected, with no changes'), x2);
+  check('Export: elements with a CSS change, a hide or a measurement each keep their instance', x2.includes('**Instance `h3.card-title` (`#c1 > h3.card-title`)**') && x2.includes('**Instance `h3.card-title` (`#c2 > h3.card-title`)**') && x2.includes('**Instance `h3.card-title` (`#c3 > h3.card-title`)**') && instanceBlock(await prompt(), '#c2 > h3.card-title').includes('Hide this element') && instanceBlock(await prompt(), '#c3 > h3.card-title').includes('Reference measurement to `button#cta` (`#cta`)') && !x2.includes('Also selected, no changes'), x2);
   // Alignment relationships: an element that only has an alignment is kept.
   await ui(() => {
     const it = __BL.S.batch.items[0];
@@ -2045,7 +2047,7 @@ console.log('\n# Export leaves out selected elements with no changes (fixtures/t
     it.elementEdits[1].alignEl = null;
   });
   const x3 = section(await prompt(), 1);
-  check('Export: an alignment-only element keeps its instance and its alignment sentence; the unchanged one is only named', x3.includes('**Instance `h3.card-title` (`#c3 > h3.card-title`)**') && x3.includes('Align the top edge of `h3.card-title` (`#c3 > h3.card-title`) with `button#cta` (`#cta`)') && x3.includes('Also selected, with no changes of their own') && !x3.includes('**Instance `h3.card-title` (`#c2 > h3.card-title`)**'), x3);
+  check('Export: an alignment-only element keeps its instance and its alignment sentence; the unchanged one is only named', x3.includes('**Instance `h3.card-title` (`#c3 > h3.card-title`)**') && x3.includes('Align the top edge of `h3.card-title` (`#c3 > h3.card-title`) with `button#cta` (`#cta`)') && x3.includes('Also selected, no changes of their own') && !x3.includes('**Instance `h3.card-title` (`#c2 > h3.card-title`)**'), x3);
   check('No page errors (export filtering)', page.errors.length === 0, page.errors.join(' | '));
   await page.close();
 }
@@ -2130,7 +2132,7 @@ console.log('\n# Place next to: Center / Middle, off-page protection, Undo, CSS 
   const ax = saved.elementEdits[0].alignEl;
   check('Saved: method, Center and Below, reference and the CSS value', ax.x.method === 'next' && ax.x.edge === 'center' && ax.y.method === 'next' && ax.y.edge === 'below' && ax.x.ref.selector === '#ref' && saved.elementEdits[0].tweaks.some((t) => t.prop === 'width' && t.to === '200px'), JSON.stringify(ax));
   const text1 = section(await prompt(), 1);
-  check('Export: below the reference, touching it, and horizontally centered on it; the CSS change is part of it', text1.includes('immediately below `div#ref` (`#ref`), outside its box and touching it, and horizontally centered on it. Keep `div#ref` stationary.') && text1.includes('The CSS changes listed for it below are part of the same correction'), text1);
+  check('Export: below the reference, touching it, and horizontally centered on it; the CSS change is part of it', text1.includes('immediately below `div#ref` (`#ref`), outside its box and touching it, and horizontally centered on it. Keep `div#ref` stationary.') && text1.includes('Apply the CSS changes listed below as part of it'), text1);
   await reopen(0);
   const ro = await al();
   await click('[data-x="tool-align"]');
@@ -2368,6 +2370,166 @@ console.log('\n# Shift+hover works from the first move; the Describe placeholder
   await page.close();
 }
 
+// ------------------------------------------------------------------ 12. Concise export (fixtures/toolbox.html)
+console.log('\n# Change Report export: concise, change-focused, older notes still export (fixtures/toolbox.html)');
+{
+  const page = await open('toolbox.html');
+  const { ui, T, click, setCss, choose, save, item, prompt, instanceBlock, section } = tools(page);
+  const REMOVED = ['How to read this request', 'Finding the source', '## Overview', 'Suggested order', '## Annotation key', 'Likely sources', 'Items not marked broken are visual'];
+
+  check('The Home-screen button reads Export Change Report', (await ui(() => __BL.S.ui.root.querySelector('[data-act="export"]').textContent.trim())) === 'Export Change Report' && (await ui(() => __BL.S.ui.root.querySelector('.sheet').getAttribute('aria-label'))) === 'Export Change Report');
+
+  // A CSS note on two instances: different values, scope and screen sizes.
+  await shiftClick(page, await pointFor(page, T('t1'), 'text'));
+  await shiftClick(page, await pointFor(page, T('t2'), 'text'));
+  await choose(0); await click('[data-x="tool-css"]'); await setCss('font-size', '30');
+  await choose(1); await setCss('color', '#005EB8');
+  await ui(() => { const r = __BL.S.ui.root.querySelector('[name="scope"][value="all"]'); r.checked = true; r.dispatchEvent(new Event('change', { bubbles: true })); });
+  await click('[data-bp="mobile"]');
+  await save('Make the titles stand out');
+  const text = await prompt();
+  const x1 = section(text, 1);
+  check('Structure: title, Page, short Notes, then the item; none of the removed boilerplate', text.startsWith('# Webpage Change Request') && text.includes('## Page') && text.includes('## Notes') && REMOVED.every((r) => !text.includes(r)), text.slice(0, 900));
+  check('The export is short for one note: no tutorials, overview, or per-item computed styles and markup', text.length < 4200 && !x1.includes('Computed:') && !x1.includes('- Markup:') && !x1.includes('- Layout:') && !x1.includes('**Inspection**'), `${text.length} chars`);
+  check('Viewport is stated once, not on every item', (text.match(/- Viewport: 1280×900/g) || []).length === 1 && !/## 1\..*1280×900/.test(x1), x1.split('\n')[0]);
+  check('Screen sizes are on the item heading (mobile + desktop here)', /## 1\. Change: .*\(mobile \+ desktop\)/.test(x1), x1.split('\n')[0]);
+  check('The target keeps its element, selector and classes', x1.includes('- Element: `h3.card-title`') && x1.includes('- Selector: `#c1 > h3.card-title`') && x1.includes('- Classes: `card-title`'), x1);
+  check('CSS changes keep rule, source, selector, original and new values', instanceBlock(text, '#c1 > h3.card-title').includes('CSS rule `.card-title` in inline <style> 1:') && instanceBlock(text, '#c1 > h3.card-title').includes('font-size: 18px → 30px') && instanceBlock(text, '#c2 > h3.card-title').includes('color: added → #005EB8'), x1);
+  check('Two instances: each has its own block and its own scope; the Notes line says values are previews and Scope says where they go', x1.includes('**Instance `h3.card-title` (`#c1 > h3.card-title`)**') && x1.includes('**Instance `h3.card-title` (`#c2 > h3.card-title`)**') && text.includes('Values were previewed live on the selected element only') && text.includes('**Scope** says where the real change goes'), x1);
+  const scopes = [...x1.matchAll(/Scope: \*\*([^*]+)\*\*/g)].map((m) => m[1]);
+  check('The scope of each instance is stated once', scopes.length === 2 && scopes.every((x) => /everywhere|this one only/.test(x)), JSON.stringify(scopes));
+
+  // Responsive: all sizes, and a second viewport.
+  await ui(() => { __BL.S.batch.items[0].bps = ['mobile', 'tablet', 'desktop']; });
+  check('All three screen sizes read "all breakpoints"', /## 1\. .*\(all breakpoints\)/.test(section(await prompt(), 1)));
+  await ui(() => { const it = JSON.parse(JSON.stringify(__BL.S.batch.items[0])); it.id = 'v2'; it.viewport = { w: 390, h: 800 }; it.bps = ['mobile']; __BL.S.batch.items.push(it); });
+  const t2 = await prompt();
+  check('When items were made at different viewport sizes, each item names its own and there is no single viewport line', !t2.includes('- Viewport:') && /## 1\. .*1280×900\)/.test(section(t2, 1)) && /## 2\. .*\(mobile, 390×800\)/.test(section(t2, 2)), t2.split('\n').filter((l) => /^## \d|Viewport/.test(l)).join(' | '));
+  await ui(() => { __BL.S.batch.items.pop(); });
+
+  // Alignment, measurements and reference-only items.
+  await ui(() => {
+    const el = document.querySelector('[data-t="t3"]');
+    const info = __BLUELINE_TEST__.api.describe(el, 'change');
+    const ref = { label: 'button#cta', selector: '#cta', text: '★ Shop now' };
+    const rec = (extra) => ({ el: { label: info.el.label, selector: info.el.selector, text: 'x', size: '1×1' }, scope: { mode: 'one', count: 1, selector: 'h3.card-title', similar: 3, chosen: false }, tweaks: [], textEdit: null, hidden: false, match: null, move: null, align: [], alignEl: null, measures: [], ...extra });
+    __BL.S.batch.items.push({ id: 'al1', note: '', createdAt: Date.now(), ...info, bps: ['desktop'], elementEdits: [rec({ alignEl: { x: null, y: { method: 'next', edge: 'below', ref, shift: 40, group: { id: 'g', size: 1 } } }, tweaks: [{ prop: 'translate', from: 'none', to: '0px 40px', snap: true }] })] });
+    __BL.S.batch.items.push({ id: 'ref1', note: '', createdAt: Date.now(), ...info, bps: ['desktop'], elementEdits: [rec({ measures: [{ label: 'button#cta', selector: '#cta', summary: '24px below' }] })] });
+  });
+  const t3 = await prompt();
+  const a = section(t3, 2);
+  const r = section(t3, 3);
+  check('Alignment: the relationship is stated with its reference, and the "build it with layout" advice appears once in Notes, not per item', a.includes('immediately below `button#cta` (`#cta`), outside its box and touching it. Keep `button#cta` stationary.') && (t3.match(/not a fixed offset or transform/g) || []).length === 1 && t3.includes('Any pixel shift is only a preview') && a.includes('Alignment (described above) was previewed with a shift of 40px down'), a);
+  check('Reference-only: marked as such, measurement labelled as context, and no inspection dump', section(t3, 3).split('\n')[0].includes('(reference only)') && r.includes('Reference measurement to `button#cta` (`#cta`)') && r.includes('change nothing for this item') && !r.includes('**Inspection**') && t3.includes('Measurements and sampled colors are reference only'), r);
+
+  // A bug keeps the diagnostic context.
+  await ui(() => {
+    const el = document.querySelector('[data-t="t3"]');
+    const info = __BLUELINE_TEST__.api.describe(el, 'bug');
+    __BL.S.batch.items.push({ id: 'bug1', note: 'Price is cut off', createdAt: Date.now(), ...info, type: 'bug', armed: true, bps: ['desktop'], steps: [{ kind: 'click', what: 'button#cta', path: info.path }], console: [{ level: 'error', msg: 'TypeError: x is undefined' }] });
+  });
+  const b = section(await prompt(), 4);
+  check('A bug keeps its inspection (computed styles, box, markup), reproduction steps and console', b.includes('**Inspection**') && b.includes('- Computed:') && b.includes('- Box:') && b.includes('- Markup:') && b.includes('**Steps before the note**') && b.includes('1. click button#cta') && b.includes('TypeError: x is undefined'), b);
+  // An item with no CSS rule recorded gets the matched rules so the source can be found, but not the full dump.
+  await ui(() => {
+    const el = document.querySelector('[data-t="t2"]');
+    const info = __BLUELINE_TEST__.api.describe(el, 'change');
+    __BL.S.batch.items.push({ id: 'plain1', note: 'Make this heading bigger', createdAt: Date.now(), ...info, bps: ['desktop'] });
+  });
+  const p = section(await prompt(), 5);
+  check('A note with no recorded values gets matched rules (to find the source) but not computed styles or markup', p.includes('- Matched rules (cascade order):') && !p.includes('- Computed:') && !p.includes('- Markup:'), p);
+
+  // Older saved notes.
+  await ui(() => {
+    const info = __BLUELINE_TEST__.api.describe(document.querySelector('[data-t="t1"]'), 'polish');
+    const also = [{ label: 'h3.card-title', selector: '#c2 > h3.card-title', text: 'Creatine', size: '220×27' }];
+    __BL.S.batch.items.push({ id: 'old1', note: 'Older note', createdAt: Date.now(), ...info, type: 'polish', priority: 'nice', bps: ['desktop'], tweaks: [{ prop: 'font-weight', from: '600', to: '800' }], also, scope: { mode: 'one', count: 1, selector: 'h3.card-title', similar: 3, chosen: false } });
+  });
+  const o = section(await prompt(), 6);
+  check('An older note (one set of edits, priority, "also") still exports its target, previewed values and the other elements', o.startsWith('## 6. Polish: ') && o.includes('- Selector: `#c1 > h3.card-title`') && o.includes('Previewed by the author (on all selected elements): font-weight 600 → 800') && o.includes('Also applies to 1 more element') && o.includes('`#c2 > h3.card-title`') && !/nice to have/i.test(o), o);
+  const all = await prompt();
+  check('Whatever the mix, no removed boilerplate comes back', REMOVED.every((r) => !all.includes(r)) && !all.includes('Repeated'), all.slice(0, 600));
+  check('No page errors (export)', page.errors.length === 0, page.errors.join(' | '));
+  await page.close();
+}
+
+// ------------------------------------------------------------------ 13. Change Report dialog: Export Screenshots is explicit
+console.log('\n# Change Report dialog: screenshots download only when Export Screenshots is pressed (fixtures/toolbox.html)');
+{
+  const page = await open('toolbox.html');
+  const { ui, click, prompt } = tools(page);
+  await ui(() => {
+    window.__calls = [];
+    window.__dlFail = false;
+    chrome.runtime.sendMessage = async (m) => {
+      if (m && m.type === 'blueline:hello') return { active: true };
+      window.__calls.push({ type: m?.type, names: (m?.files || []).map((f) => f.name), folder: m?.folder });
+      if (m?.type === 'blueline:download') return window.__dlFail ? { error: 'blocked' } : { paths: m.files.map((f) => ({ id: f.id, path: `/Users/me/Downloads/${m.folder}/${f.name}` })) };
+      return null;
+    };
+    chrome.storage.local.get = async (keys) => Object.fromEntries([].concat(keys).map((k) => [k, 'data:image/png;base64,AAAA']));
+    __BL.ensureBatch();
+    const info = __BLUELINE_TEST__.api.describe(document.querySelector('[data-t="t1"]'), 'change');
+    __BL.S.batch.items.push({ id: 'aaaa1111', note: 'First', createdAt: Date.now(), ...info, bps: ['desktop'], hasShot: true });
+    __BL.S.batch.items.push({ id: 'bbbb2222', note: 'Second', createdAt: Date.now(), ...info, bps: ['desktop'], hasShot: true, hasMarkup: true });
+    __BL.render();
+  });
+  const calls = () => ui(() => window.__calls.filter((c) => c.type === 'blueline:download'));
+  const dlg = () => ui(() => { const r = __BL.S.ui.root; return { shots: r.querySelector('[data-act="export-shots"]').textContent.trim(), disabled: r.querySelector('[data-act="export-shots"]').disabled, checkbox: r.querySelectorAll('.opt-shots').length, copy: r.querySelector('[data-act="copy"]').textContent.trim(), note: r.querySelector('.shots-note').textContent, md: r.querySelector('[data-act="save-md"]').textContent.trim() }; });
+  const shotLines = async () => (await prompt()) && ui(() => __BL.S.ui.root.querySelector('.out').value.split('\n').filter((l) => /^(Marked-up )?[Ss]creenshot/.test(l)));
+
+  await click('[data-act="export"]');
+  await sleep(300);
+  const d0 = await dlg();
+  check('Opening the Change Report downloads nothing', (await calls()).length === 0, JSON.stringify(await calls()));
+  check('There is an Export Screenshots button and no screenshot checkbox; the copy button reads Copy Report', d0.shots === 'Export Screenshots' && !d0.disabled && d0.checkbox === 0 && d0.copy === 'Copy Report' && d0.md === 'Save as .md', JSON.stringify(d0));
+  check('Before exporting, the report doesn’t list screenshot paths and the dialog says they are not exported', (await shotLines()).length === 0 && /3 screenshots not exported/.test(d0.note), JSON.stringify(d0.note));
+  await click('[data-act="copy"]');
+  await sleep(200);
+  check('Copying the report downloads nothing', (await calls()).length === 0, JSON.stringify(await calls()));
+  await click('[data-act="save-md"]');
+  await sleep(300);
+  const md = await calls();
+  check('Saving the Markdown report downloads only the report, never screenshots', md.length === 1 && md[0].names.join() === 'blueline-change-report.md', JSON.stringify(md));
+  check('The report is still free of screenshot paths after saving it', (await shotLines()).length === 0);
+
+  // A failed export is not reported as done.
+  await ui(() => { window.__dlFail = true; });
+  await click('[data-act="export-shots"]');
+  await sleep(300);
+  const f = await dlg();
+  check('If the download fails, the dialog says so and the report lists no screenshots', /Screenshots not saved: blocked/.test(f.note) && (await shotLines()).length === 0, JSON.stringify(f.note));
+
+  // The explicit export.
+  await ui(() => { window.__dlFail = false; });
+  await click('[data-act="export-shots"]');
+  await sleep(300);
+  const shots = (await calls()).filter((c) => c.names.some((n) => n.endsWith('.png')));
+  const after = await dlg();
+  const lines = await shotLines();
+  check('Export Screenshots downloads each screenshot once, with numbered names', shots.length === 2 && shots[1].names.join() === '01-aaaa.png,02-bbbb.png,02-bbbb-markup.png', JSON.stringify(shots));
+  check('The report now references them with the same file names', lines.length === 3 && lines[0].endsWith('/01-aaaa.png') && lines[1].endsWith('/02-bbbb.png') && lines[2].includes('Marked-up screenshot:') && lines[2].endsWith('/02-bbbb-markup.png'), JSON.stringify(lines));
+  check('The dialog reports where they were saved', /Screenshots saved in \/Users\/me\/Downloads\/blueline\//.test(after.note), after.note);
+  const n = (await calls()).length;
+  await click('[data-act="export-shots"]');
+  await sleep(200);
+  check('Pressing it again doesn’t download them twice', (await calls()).length === n);
+  await click('[data-act="modal-close"]');
+  await click('[data-act="export"]');
+  await sleep(300);
+  check('Reopening the report downloads nothing and keeps the references', (await calls()).length === n && (await shotLines()).length === 3);
+
+  // No screenshots at all.
+  await ui(() => { for (const it of __BL.S.batch.items) { it.hasShot = false; it.hasMarkup = false; it.shotPath = null; it.markupPath = null; } });
+  await click('[data-act="modal-close"]');
+  await click('[data-act="export"]');
+  await sleep(300);
+  const none = await dlg();
+  check('With no screenshots the button is disabled and says so', none.disabled && /No screenshots/.test(none.note), JSON.stringify(none));
+  check('No page errors (Change Report dialog)', page.errors.length === 0, page.errors.join(' | '));
+  await page.close();
+}
+
 // ------------------------------------------------------------------ 10. CSS rule restoration safety (fixtures/css-rules.html)
 console.log('\n# A saved CSS change is never attached to an unrelated rule (fixtures/css-rules.html)');
 {
@@ -2414,7 +2576,7 @@ console.log('\n# A saved CSS change is never attached to an unrelated rule (fixt
   const t5 = await result(4);
   check('Ambiguous: two rules, only an added property, and a matching position: not guessed (position alone is not enough)', unresolved(t5) && t5.rule.path === rA.path, JSON.stringify(t5));
   const e5 = section(await prompt(), 5);
-  check('Ambiguous: the change is kept with its selector, source, values and scope, flagged not found, and still previewed', e5.includes('CSS rule `.product-title` in <style id="base">, previewed on this element only: This rule wasn’t found') && e5.includes('margin-top: added → 9px') && e5.includes('Scope: **this one only**') && (await ui(() => document.getElementById('pt-2').style.marginTop)) === '9px', e5);
+  check('Ambiguous: the change is kept with its selector, source, values and scope, flagged not found, and still previewed', e5.includes('CSS rule `.product-title` in <style id="base">: Not found on the page when saved') && e5.includes('margin-top: added → 9px') && e5.includes('Scope: **this one only**') && (await ui(() => document.getElementById('pt-2').style.marginTop)) === '9px', e5);
   await inject('amb2', { prop: 'margin-top', from: '', to: '9px', declared: false, path: '99/99', rule: { decls: [{ prop: 'margin-bottom', value: '8px', important: true }] } });
   const t6 = await result(5);
   check('A saved list of the rule’s properties identifies it among duplicates, even when the changed property was only added', linked(t6, rB.path), JSON.stringify(t6.rule));
