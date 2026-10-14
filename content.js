@@ -25,7 +25,6 @@
     // stay so saved notes keep their labels.
     { id: 'change', label: 'Change', ui: 'Change', tip: 'A visual, layout or content change' },
   ];
-  const TYPE_RANK = { bug: 0, polish: 1, change: 1, copy: 2, feature: 3 };
   const typeLabel = (id) => (TYPES.find((t) => t.id === id) || TYPES[1]).label;
 
   const S = {
@@ -844,12 +843,6 @@
   const code = (s) => '`' + String(s).replace(/`/g, "'") + '`';
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
   const DYN = /^(\d+|[0-9a-f]{8}-[0-9a-f-]{27,}|[0-9a-f]{12,}|[A-Za-z0-9_-]{20,}|(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{6,})$/i;
-  const ISSUE_LABEL = {
-    tap: 'small tap target', contrast: 'low contrast', 'page-overflow': 'sideways page scroll', overflow: 'overflowing box',
-    clipped: 'clipped content', image: 'image sizing', 'input-zoom': 'iOS input zoom', 'small-text': 'small text',
-    a11y: 'missing accessible name/alt', covered: 'covered element', hidden: 'hidden element', offscreen: 'off-screen element', 'width-cap': 'width cap',
-  };
-
   function routeGuess(it) {
     const next = it.page?.next;
     if (!next) return null;
@@ -878,24 +871,6 @@
     return `Section: ${w}. Static section, likely \`sections/${sec.key}.liquid\`.`;
   }
 
-  const GUIDE = {
-    shopify: [
-      '**Finding source (Shopify theme):** wrapper ids look like `shopify-section-template--<id>__<key>`. Find `<key>` in the matching JSON template (or section group JSON), read its `type`, then edit `sections/<type>.liquid` and the blocks or snippets it renders.',
-      'Items flagged Shogun or app block are not theme code. Describe the fix for those instead of editing.',
-    ],
-    next: [
-      '**Finding source (Next.js/React):** "Rendered at" is where the element\u2019s JSX lives, read from the dev build. Trust it over the selector. A `chunk` value is a Turbopack chunk name: underscores stand in for slashes and dots.',
-      'Components run outermost to innermost; "(server)" marks server components. The route file is a guess from the URL: check `src/app`, route groups like `(dashboard)`, and the real dynamic segment names.',
-      'CSS module classes are decoded as `File.module.css → .class`. With Tailwind, change utility classes at the call site.',
-    ],
-    react: [
-      '**Finding source (React):** "Rendered at" is where the element\u2019s JSX lives, read from the dev build. Trust it over the selector. Components run outermost to innermost.',
-    ],
-    html: [
-      '**Finding source (static HTML/CSS/JS):** search the source for the element\u2019s id, distinctive classes, or visible text. "Matched rules" lists the stylesheet rules that currently apply, last one wins. Edit those rules rather than stacking overrides.',
-    ],
-  };
-
   function buildPrompt(batch) {
     const items = batch?.items || [];
     const pages = new Set(items.map((i) => i.path));
@@ -923,44 +898,9 @@
     L.push(`- Detected technology (from the live page, may be incomplete): ${stack.join('; ')}`);
     if (items.some((i) => i.el?.react?.minified)) L.push('- Component names look minified (captured from a production build), so component sources may be inexact.');
 
-    L.push('', '## How to read this request');
-    L.push('1. Each numbered item is one request about the page and element(s) it names. Items marked **(reference only)** document the page and need no change.');
-    L.push('2. Find each element in the source using its selector, visible text, and any source hints. Confirm it is the right element before changing it.');
-    L.push('3. Suggested order: bugs (items marked broken) first, then the rest. See the Overview.');
-    L.push('4. Items not marked broken are visual, layout or content changes. Don\u2019t change logic or data for them unless the note asks for it.');
-    L.push('5. Before changing something shared (a component, template, or style rule), check where else it is used. Prefer a change scoped to the item, and note which you chose.');
-    L.push('6. Limit layout changes to the screen size noted unless the item says otherwise.');
-    L.push('7. "Detected" lines come from automated checks. Fix them when they relate to the item; otherwise just mention them.');
-    L.push('8. When reporting back, list each item number with what changed, and call out anything skipped, not found, or interpreted.');
-    L.push('', '## Finding the source', 'Hints based on the technology detected on the page:');
-    for (const m of modes) L.push(...GUIDE[m].map((g) => `- ${g}`));
-
-    // ---- overview
-    L.push('', '## Overview');
-    const counts = TYPES.map((t) => [t, items.filter((i) => (i.type || 'polish') === t.id).length]).filter(([, n]) => n);
-    L.push(`- Types: ${counts.map(([t, n]) => `${n} ${t.label.toLowerCase()}`).join(', ')}`);
-    const groups = new Map();
-    items.forEach((it, i) => {
-      const k = bestSource(it);
-      groups.set(k, [...(groups.get(k) || []), i + 1]);
-    });
-    L.push(`- Likely sources: ${[...groups].map(([k, ns]) => `${code(k)} (item${ns.length > 1 ? 's' : ''} ${ns.join(', ')})`).join('; ')}`);
-    const compUse = new Map();
-    items.forEach((it, i) => {
-      for (const c of (it.el?.react?.components || []).filter((c) => !c.server).slice(-2)) {
-        compUse.set(c.name, new Set([...(compUse.get(c.name) || []), i + 1]));
-      }
-    });
-    const shared = [...compUse].filter(([, s]) => s.size > 1);
-    if (shared.length) L.push(`- Shared components: ${shared.map(([n, s]) => `${code(n)} in items ${[...s].join(', ')}`).join('; ')}. Change these once, deliberately.`);
-    const uiPrims = items.map((it, i) => [it, i + 1]).filter(([it]) => /components\/ui\//.test(JSON.stringify(it.el?.react || {})));
-    if (uiPrims.length) L.push(`- ${uiPrims.length === 1 ? 'Item' : 'Items'} ${uiPrims.map(([, n]) => n).join(', ')} ${uiPrims.length === 1 ? 'touches' : 'touch'} \`components/ui/*\` primitives. Use a variant or className at the call site, not the primitive itself.`);
-    const issueCounts = {};
-    items.forEach((it) => (it.el?.issues || []).forEach((x) => { issueCounts[x.kind] = (issueCounts[x.kind] || 0) + 1; }));
-    const ic = Object.entries(issueCounts);
-    if (ic.length) L.push(`- Detected: ${ic.map(([k, n]) => `${n}× ${ISSUE_LABEL[k] || k}`).join(', ')}`);
-    const order = items.map((it, i) => ({ n: i + 1, rank: TYPE_RANK[it.type || 'polish'] ?? 1 })).sort((a, b) => a.rank - b.rank || a.n - b.n).map((o) => o.n);
-    L.push(`- Suggested order: ${order.join(', ')}`);
+    // One viewport line when every item was made at the same size; otherwise each item names its own.
+    const vps = new Set(items.map((i) => (i.viewport ? `${i.viewport.w}×${i.viewport.h}` : '')).filter(Boolean));
+    if (vps.size === 1) L.push(`- Viewport: ${[...vps][0]}`);
 
     if (BL.hooks.promptHeader) L.push(...BL.hooks.promptHeader(items, batch));
 
@@ -970,7 +910,8 @@
       const v = it.viewport || {};
       const rx = e.react;
       L.push('', '---', '');
-      L.push(`## ${i + 1}. ${typeLabel(it.type || 'polish')}${it.kind && it.kind !== 'element' ? ' · ' + it.kind : ''}${BL.hooks.isReference?.(it) ? ' (reference only)' : ''}: ${it.path}  (${it.bps && it.bps.length ? (it.bps.length === 3 ? 'all breakpoints' : it.bps.join(' + ')) : bp(v.w)}, ${v.w}×${v.h})`);
+      const sizes = it.bps && it.bps.length ? (it.bps.length === 3 ? 'all breakpoints' : it.bps.join(' + ')) : bp(v.w);
+      L.push(`## ${i + 1}. ${typeLabel(it.type || 'polish')}${it.kind && it.kind !== 'element' ? ' · ' + it.kind : ''}${BL.hooks.isReference?.(it) ? ' (reference only)' : ''}: ${it.path}  (${sizes}${vps.size > 1 && v.w ? `, ${v.w}×${v.h}` : ''})`);
       L.push(it.note ? `**Note:** ${it.note}` : BL.hooks.noteFallback ? BL.hooks.noteFallback(it) : '**Note:** none written. See the annotations below.');
       if ((it.kind === 'region' || it.kind === 'page') && BL.hooks.promptRegion) {
         L.push(...BL.hooks.promptRegion(it));
@@ -999,22 +940,30 @@
       if (e.modules?.length) L.push(`- CSS modules: ${e.modules.map((m) => `${code(m.file)} → ${code('.' + m.cls)}${m.depth ? ` (${m.depth === 1 ? 'parent' : 'grandparent'})` : ''}`).join('; ')}`);
       L.push(`- Element: ${code(e.label)}${e.text ? ` with text "${e.text}"` : ''} (${e.size})`);
       L.push(`- Selector: ${code(e.selector)}`);
+      const classes = e.classes || (it.elementEdits || []).find((x) => x.el?.selector === e.selector)?.el?.classes;
+      if (classes) L.push(`- Classes: ${code(classes)}`);
 
-      L.push('', '**Inspection**');
-      if (e.issues?.length) {
-        L.push('- Detected:');
-        e.issues.forEach((x) => L.push(`  - ${x.text}`));
+      // Inspection details only where they help: a bug gets the full picture; an item with no CSS rule recorded for it
+      // (a note without values, an older note) gets the matched rules and detected issues so the source can be found.
+      // The data is still collected for every item.
+      const ruled = [it, ...(it.elementEdits || [])].some((x) => (x.tweaks || []).some((t) => t.rule));
+      const bug = it.type === 'bug';
+      if (bug || (!ruled && !BL.hooks.isReference?.(it))) {
+        L.push('', '**Inspection**');
+        if (e.issues?.length) {
+          L.push('- Detected:');
+          e.issues.forEach((x) => L.push(`  - ${x.text}`));
+        }
+        if (bug && e.box) L.push(`- Box: ${e.box}`);
+        if (bug && e.layout?.length) L.push(`- Layout: ${e.layout.join('; ')}`);
+        if (bug && e.styles) L.push(`- Computed: ${code(e.styles)}`);
+        if (e.rules?.length) {
+          L.push('- Matched rules (cascade order):');
+          e.rules.forEach((r) => L.push(`  - ${code(r.sel)} in ${r.file}${r.media ? ` ${r.media}` : ''}: ${code(r.decl)}`));
+        }
+        if (bug && e.markup) L.push(`- Markup: ${code(e.markup)}`);
       }
-      if (e.box) L.push(`- Box: ${e.box}`);
-      if (e.layout?.length) L.push(`- Layout: ${e.layout.join('; ')}`);
-      if (e.styles) L.push(`- Computed: ${code(e.styles)}`);
-      if (e.classes) L.push(`- Classes: ${code(e.classes)}`);
-      if (e.rules?.length) {
-        L.push('- Matched rules (cascade order):');
-        e.rules.forEach((r) => L.push(`  - ${code(r.sel)} in ${r.file}${r.media ? ` ${r.media}` : ''}: ${code(r.decl)}`));
-      }
-      if (e.blockedSheets && it.mode !== 'next' && it.mode !== 'react') L.push(`- ${plural(e.blockedSheets, 'cross-origin stylesheet')} couldn\u2019t be inspected.`);
-      if (e.markup) L.push(`- Markup: ${code(e.markup)}`);
+      if (e.blockedSheets && it.mode !== 'next' && it.mode !== 'react') L.push(`- ${plural(e.blockedSheets, 'cross-origin stylesheet')} couldn\u2019t be inspected, so rules in them aren\u2019t listed.`);
 
       if (it.steps?.length) {
         L.push('', '**Steps before the note** (oldest first)');
@@ -1027,7 +976,7 @@
       if (it.network?.length) {
         L.push('', '**Requests** (failed or writes, last 3 min)');
         it.network.forEach((n) => L.push(`- ${n.method} ${code(n.url)}${n.kind ? ` (${n.kind})` : ''} → ${n.status || 'network error'} in ${n.ms}ms${n.error ? `: ${n.error}` : ''}${n.body ? `. Body: ${code(n.body)}` : ''}`));
-      } else if ((it.type === 'bug' || it.type === 'feature') && !it.armed) {
+      } else if (it.type === 'bug' && !it.armed) {
         L.push('', '_Console and network weren\u2019t being recorded yet. Reload the page with Blueline on to capture them._');
       }
       if (BL.hooks.promptItem) L.push(...BL.hooks.promptItem(it, i, items));
@@ -1252,7 +1201,7 @@
       </div>
       <footer class="foot">
         <button class="ghost" data-act="clear">Clear batch</button>
-        <button class="primary" data-act="export">Export prompt</button>
+        <button class="primary" data-act="export">Export Change Report</button>
       </footer>
     </section>
     <div class="pop" hidden role="dialog" aria-label="Note">
@@ -1273,7 +1222,7 @@
       </div>
     </div>
     <div class="modal" hidden>
-      <div class="sheet" role="dialog" aria-label="Export prompt">
+      <div class="sheet" role="dialog" aria-label="Export Change Report">
         <header class="sheet-head"><h2>Webpage change request</h2><button class="icon" data-act="modal-close" aria-label="Close">✕</button></header>
         <label class="opt"><input type="checkbox" class="opt-shots"> Save screenshots to Downloads and add their paths</label>
         <textarea class="out" readonly spellcheck="false"></textarea>
