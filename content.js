@@ -47,7 +47,24 @@
     clearArmed: 0,
   };
 
-  const send = (msg) => chrome.runtime.sendMessage(msg).catch(() => null);
+  // When the extension is reloaded or updated, Chrome leaves the old copy of this script running in open tabs with a
+  // dead `chrome` (chrome.runtime is undefined or has no id; messaging throws "Extension context invalidated").
+  // That copy can no longer talk to the extension, so it retires itself the way a superseded copy does instead of
+  // throwing on every click. Failures of a live extension are NOT hidden by this: only a dead context is handled.
+  const runtimeAlive = () => { try { return !!(globalThis.chrome && chrome.runtime && chrome.runtime.id); } catch { return false; } };
+  function orphaned() {
+    if (runtimeAlive()) return false;
+    if (!S.retired) { S.retired = true; try { setActive(false); } catch { /* already torn down */ } }
+    return true;
+  }
+  const send = async (msg) => {
+    if (orphaned()) return null;
+    try { return await chrome.runtime.sendMessage(msg); } catch (e) {
+      if (!/context invalidated|Receiving end does not exist|message port closed/i.test(String(e && e.message))) console.warn('[Blueline] message failed:', e);
+      orphaned();
+      return null;
+    }
+  };
   const currentPath = () => location.pathname + location.search + (/^#[/!]/.test(location.hash) ? location.hash.split('?')[0] : '');
   const findItem = (id) => (S.batch?.items || []).find((i) => i.id === id);
   const uid = () => Math.random().toString(36).slice(2, 10);
@@ -947,23 +964,26 @@
       // (a note without values, an older note) gets the matched rules and detected issues so the source can be found.
       // The data is still collected for every item.
       const ruled = [it, ...(it.elementEdits || [])].some((x) => (x.tweaks || []).some((t) => t.rule));
+      const productOnly = !!(it.productMapping || it.productCard) && ![it, ...(it.elementEdits || [])].some((x) => (x.tweaks || []).length || x.textEdit || x.move || x.match || (x.align || []).length);
+      // A note that only maps a product card gets no rule listing: the card, product and selector say what to change.
       const bug = it.type === 'bug';
-      if (bug || (!ruled && !BL.hooks.isReference?.(it))) {
-        L.push('', '**Inspection**');
+      if (bug || (!ruled && !productOnly && !BL.hooks.isReference?.(it))) {
+        const I = [];
         if (e.issues?.length) {
-          L.push('- Detected:');
-          e.issues.forEach((x) => L.push(`  - ${x.text}`));
+          I.push('- Detected:');
+          e.issues.forEach((x) => I.push(`  - ${x.text}`));
         }
-        if (bug && e.box) L.push(`- Box: ${e.box}`);
-        if (bug && e.layout?.length) L.push(`- Layout: ${e.layout.join('; ')}`);
-        if (bug && e.styles) L.push(`- Computed: ${code(e.styles)}`);
+        if (bug && e.box) I.push(`- Box: ${e.box}`);
+        if (bug && e.layout?.length) I.push(`- Layout: ${e.layout.join('; ')}`);
+        if (bug && e.styles) I.push(`- Computed: ${code(e.styles)}`);
         if (e.rules?.length) {
-          L.push('- Matched rules (cascade order):');
-          e.rules.forEach((r) => L.push(`  - ${code(r.sel)} in ${r.file}${r.media ? ` ${r.media}` : ''}: ${code(r.decl)}`));
+          I.push('- Matched rules (cascade order):');
+          e.rules.forEach((r) => I.push(`  - ${code(r.sel)} in ${r.file}${r.media ? ` ${r.media}` : ''}: ${code(r.decl)}`));
         }
-        if (bug && e.markup) L.push(`- Markup: ${code(e.markup)}`);
+        if (bug && e.markup) I.push(`- Markup: ${code(e.markup)}`);
+        if (I.length) L.push('', '**Inspection**', ...I); // never a heading with nothing under it
       }
-      if (e.blockedSheets && it.mode !== 'next' && it.mode !== 'react') L.push(`- ${plural(e.blockedSheets, 'cross-origin stylesheet')} couldn\u2019t be inspected, so rules in them aren\u2019t listed.`);
+      if (e.blockedSheets && it.mode !== 'next' && it.mode !== 'react' && !productOnly) L.push(`- ${plural(e.blockedSheets, 'cross-origin stylesheet')} couldn\u2019t be inspected, so rules in them aren\u2019t listed.`);
 
       if (it.steps?.length) {
         L.push('', '**Steps before the note** (oldest first)');
@@ -988,26 +1008,117 @@
 
   // ---------------------------------------------------------------- storage
 
+  // Workspaces. Everything Blueline saved lives in one stored batch, but each website is its own workspace and
+  // only the notes for the page being viewed are shown. S.all is the stored batch as it is; S.batch is the view of
+  // it for this origin and page (same item objects, so edits to them are edits to the stored data). Saving merges
+  // the view back and leaves every other site's and page's notes exactly as stored. A note whose website can't be
+  // determined (no usable url) is never shown anywhere and never changed or deleted.
+  const originNow = () => (location.protocol === 'file:' ? 'file://' : location.origin);
+  const originOf = (u) => { try { const x = new URL(u); return x.protocol === 'file:' ? 'file://' : x.origin; } catch { return null; } };
+  const itemHere = (it) => !!it && originOf(it.url) === originNow() && it.path === currentPath();
+  const scoped = (x) => x.origin === originNow() && x.path === currentPath();
+  const newBatch = () => {
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    return { id: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`, createdAt: Date.now() };
+  };
+
+  function rescope() {
+    const all = S.all;
+    S.scopeIds = new Set();
+    if (!all) { S.batch = null; return; }
+    const items = (all.items || []).filter(itemHere);
+    const guides = (all.guides || []).filter(scoped);
+    const priceReport = all.priceReport && all.priceReport.origin === originNow() ? all.priceReport : undefined;
+    S.scopeIds = new Set(items.map((i) => i.id));
+    S.batch = items.length || guides.length || priceReport ? { ...all, items, guides, priceReport } : null;
+  }
+
+  // Folds the view back into a stored batch: other sites' and pages' notes, guides and reports are kept as they are.
+  function mergeAll(base) {
+    const v = S.batch;
+    const all = base || S.all || (v ? { id: v.id, createdAt: v.createdAt, items: [] } : null);
+    if (!all) return null;
+    const mine = new Map((v?.items || []).map((i) => [i.id, i]));
+    const items = [];
+    for (const i of all.items || []) {
+      if (!S.scopeIds.has(i.id)) { items.push(mine.has(i.id) ? mine.get(i.id) : i); mine.delete(i.id); }
+      else if (mine.has(i.id)) { items.push(mine.get(i.id)); mine.delete(i.id); }
+    }
+    items.push(...mine.values());
+    const out = { ...all, items };
+    const guides = [...(all.guides || []).filter((g) => !scoped(g)), ...(v?.guides || [])];
+    if (guides.length) out.guides = guides; else delete out.guides;
+    if (v?.priceReport) out.priceReport = v.priceReport;
+    else if (all.priceReport?.origin === originNow()) delete out.priceReport;
+    if (v) for (const k of Object.keys(v)) if (!['items', 'guides', 'priceReport'].includes(k)) out[k] = v[k];
+    S.scopeIds = new Set((v?.items || []).map((i) => i.id));
+    return out.items.length || out.guides || out.priceReport ? out : null;
+  }
+
   async function loadState() {
     const r = await chrome.storage.local.get([BATCH_KEY, PREFS_KEY]);
-    S.batch = r[BATCH_KEY] || null;
+    S.all = r[BATCH_KEY] || null;
+    rescope();
     S.prefs = { ...S.prefs, ...(r[PREFS_KEY] || {}) };
   }
-  const saveBatch = () => (S.batch ? chrome.storage.local.set({ [BATCH_KEY]: S.batch }) : chrome.storage.local.remove(BATCH_KEY));
-  const savePrefs = () => chrome.storage.local.set({ [PREFS_KEY]: S.prefs });
+  // Works from what is stored right now (another tab may have saved something), not from an older copy.
+  async function saveBatch() {
+    if (orphaned()) return undefined;
+    let fresh = null;
+    try { fresh = (await chrome.storage.local.get(BATCH_KEY))[BATCH_KEY] || null; } catch { /* keep the copy we have */ }
+    S.all = mergeAll(fresh) ;
+    return S.all ? chrome.storage.local.set({ [BATCH_KEY]: S.all }) : chrome.storage.local.remove(BATCH_KEY);
+  }
+  // Changes ONE stored note, and nothing else, on what storage holds right now. It never goes through the in-memory view
+  // (S.batch), which another save or tab can replace while an earlier write is still arriving; a change made on that
+  // view could then be lost without any error. `verify(storedNote)` returns a problem message, or null when the stored
+  // note is right. On any failure the note is put back as it was and { ok: false, error } says why.
+  async function patchItem(id, change, verify) {
+    if (orphaned()) return { ok: false, error: 'Blueline was reloaded. Reload this page and try again.' };
+    const get = async () => (await chrome.storage.local.get(BATCH_KEY))[BATCH_KEY] || null;
+    let before;
+    try { before = await get(); } catch (e) { return { ok: false, error: `The browser storage couldn\u2019t be read (${e.message || e}).` }; }
+    const all = before ? JSON.parse(JSON.stringify(before)) : null;
+    const it = all && (all.items || []).find((i) => i.id === id);
+    if (!it) return { ok: false, error: 'This note isn\u2019t in the saved notes any more. Reload the page and try again.' };
+    const was = JSON.parse(JSON.stringify(it));
+    try { change(it); } catch (e) { return { ok: false, error: e.message || String(e) }; }
+    const restore = async () => {
+      try {
+        const cur = await get();
+        const n = cur && (cur.items || []).find((i) => i.id === id);
+        if (n) { cur.items = cur.items.map((i) => (i.id === id ? was : i)); await chrome.storage.local.set({ [BATCH_KEY]: cur }); }
+      } catch { /* the note was never changed in storage */ }
+    };
+    try { await chrome.storage.local.set({ [BATCH_KEY]: all }); } catch (e) { return { ok: false, error: `The browser refused to save (${e.message || e}).` }; }
+    let back;
+    try { back = await get(); } catch (e) { await restore(); return { ok: false, error: `The saved note couldn\u2019t be read back (${e.message || e}).` }; }
+    const stored = back && (back.items || []).find((i) => i.id === id);
+    const problem = !stored ? 'The note is missing from storage after saving.' : verify ? verify(stored) : null;
+    if (problem) { await restore(); return { ok: false, error: problem }; }
+    S.all = back; rescope(); render();
+    return { ok: true, item: stored };
+  }
+  const savePrefs = () => (orphaned() ? Promise.resolve() : chrome.storage.local.set({ [PREFS_KEY]: S.prefs }));
 
   function ensureBatch() {
-    if (!S.batch) {
-      const d = new Date();
-      const p = (n) => String(n).padStart(2, '0');
-      S.batch = { id: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`, createdAt: Date.now(), items: [] };
-    }
+    if (!S.batch) S.batch = { ...(S.all ? { ...S.all } : newBatch()), items: [], guides: [], priceReport: undefined };
     return S.batch;
+  }
+
+  // The page changed without a reload (single-page app, hash route, back/forward): show that page's notes.
+  function pageChanged() {
+    if (BL.hooks.beforeRescope) BL.hooks.beforeRescope();
+    S.lastRenderPath = currentPath();
+    rescope();
+    render();
   }
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local' || !S.active || !changes[BATCH_KEY]) return;
-    S.batch = changes[BATCH_KEY].newValue || null;
+    S.all = changes[BATCH_KEY].newValue || null;
+    rescope();
     render();
   });
 
@@ -1071,12 +1182,12 @@
     button:focus-visible, textarea:focus-visible, input:focus-visible, li:focus-visible { outline: 2px solid ${INK}; outline-offset: 2px; }
     code, kbd, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
 
-    .hl { position: fixed; pointer-events: none; border: 2px solid ${INK}; background: rgba(43,78,255,.08); border-radius: 2px; }
-    .hl.locked { background: rgba(43,78,255,.14); box-shadow: 0 0 0 9999px rgba(30,34,48,.16); }
-    .hl-tag { position: absolute; left: -2px; bottom: 100%; margin-bottom: 3px; background: ${INK}; color: #fff;
+    .hl { position: fixed; pointer-events: none; outline: 1px solid rgba(43,78,255,.6); outline-offset: 3px; border-radius: 2px; }
+    .hl.locked { outline-width: 2px; outline-color: rgba(43,78,255,.75); }
+    .hl-tag { position: absolute; left: -3px; bottom: 100%; margin-bottom: 6px; background: ${INK}; color: #fff;
       padding: 2px 6px; border-radius: 3px; font: 500 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       white-space: nowrap; max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
-    .hl-tag.below { bottom: auto; top: 100%; margin: 3px 0 0; }
+    .hl-tag.below { bottom: auto; top: 100%; margin: 6px 0 0; }
 
     .pin { position: fixed; width: 22px; height: 22px; border-radius: 50%; background: ${INK}; color: #fff;
       font-weight: 700; font-size: 11px; line-height: 22px; text-align: center; pointer-events: auto;
@@ -1137,7 +1248,9 @@
     .ghost { padding: 7px 10px; border-radius: 7px; color: #4A5063; font-weight: 500; }
     .ghost:hover { background: #F2F3F7; }
     .ghost:disabled { opacity: .4; cursor: default; }
-    .ghost.armed, .ghost.danger { color: #C62F2F; }
+    .ghost.armed, .ghost.danger { color: #B42318; border-color: #E8B4AE; }
+    .ghost.danger:hover { background: #FEECEC; }
+    .ghost.danger.solid, .ghost.armed.solid { background: #B42318; border-color: #B42318; color: #fff; }
 
     .pop { position: fixed; width: 320px; background: #fff; border: 1px solid #D9DCE4; border-radius: 10px;
       box-shadow: 0 12px 32px rgba(30,34,48,.22); padding: 10px; pointer-events: auto; display: flex; flex-direction: column; gap: 8px; }
@@ -1224,7 +1337,7 @@
     <div class="modal" hidden>
       <div class="sheet" role="dialog" aria-label="Export Change Report">
         <header class="sheet-head"><h2>Webpage change request</h2><button class="icon" data-act="modal-close" aria-label="Close">✕</button></header>
-        <div class="opt"><button class="ghost" data-act="export-shots">Export Screenshots</button><span class="shots-note"></span></div>
+        <div class="opt"><button class="primary" data-act="export-shots">Export Screenshots</button><span class="shots-note"></span></div>
         <textarea class="out" readonly spellcheck="false"></textarea>
         <footer class="sheet-foot">
           <span class="status"></span>
@@ -1554,8 +1667,9 @@
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('scroll', schedule, true);
     window.addEventListener('resize', schedule);
-    window.addEventListener('popstate', render);
-    S.timer = setInterval(() => { schedule(); if (S.ui && S.lastRenderPath !== currentPath()) { S.lastRenderPath = currentPath(); render(); } }, 800);
+    window.addEventListener('popstate', pageChanged);
+    window.addEventListener('hashchange', pageChanged);
+    S.timer = setInterval(() => { schedule(); if (S.ui && S.lastRenderPath !== currentPath()) pageChanged(); }, 800);
   }
 
   function detach() {
@@ -1565,7 +1679,8 @@
     window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('scroll', schedule, true);
     window.removeEventListener('resize', schedule);
-    window.removeEventListener('popstate', render);
+    window.removeEventListener('popstate', pageChanged);
+    window.removeEventListener('hashchange', pageChanged);
     clearInterval(S.timer);
   }
 
@@ -1652,22 +1767,24 @@
   }
 
   async function savePop() {
-    if (!S.pop) return;
+    if (!S.pop) return false;
     const ta = S.ui.$('.pop-note');
     const popState = S.pop;
     const extra = BL.hooks.collect ? BL.hooks.collect(popState) : { fields: {} };
     const blocked = BL.hooks.blockSave?.();
-    if (blocked) { toast(blocked); return; }
+    if (blocked) { toast(blocked); return false; }
     const note = ta.value.trim();
     // Annotations (measurements, drawings, alignment, CSS, element actions) can stand on their own.
     if (!note && !extra.hasContent) {
       ta.classList.add('need');
       ta.placeholder = 'Describe the change, or add an annotation first';
       ta.focus();
-      return;
+      return false;
     }
     const { el, item } = popState;
     const type = S.popType;
+    // CSS changes that clash with another saved note are settled first. Cancel keeps the note open and saves nothing.
+    if (BL.hooks.settleConflicts && !(await BL.hooks.settleConflicts(popState, extra, item?.id, note))) return false;
     if (extra.commit) extra.commit();
     closePop();
 
@@ -1678,7 +1795,7 @@
       if (it && extra.onSaved) await extra.onSaved(it);
       render();
       toast('Note updated');
-      return;
+      return true;
     }
 
     ensureBatch();
@@ -1705,8 +1822,8 @@
       const fresh = findItem(it.id);
       if (fresh) { fresh.hasShot = true; await saveBatch(); }
     }
+    return true;
   }
-
   function focusItem(id) {
     const it = findItem(id);
     if (!it) return;
@@ -1729,6 +1846,7 @@
     const gone = findItem(id);
     if (gone && BL.hooks.onItemDeleted) BL.hooks.onItemDeleted(gone);
     S.batch.items = S.batch.items.filter((i) => i.id !== id);
+    if (BL.hooks.afterItemDeleted) BL.hooks.afterItemDeleted();
     chrome.storage.local.remove([shotKey(id), shotKey(id) + ':markup']);
     if (!S.batch.items.length) S.batch = null;
     await saveBatch();
@@ -1789,6 +1907,8 @@
   // has been exported with Export Screenshots (that is the only time a file path is known).
   async function refreshExport() {
     const $ = S.ui.$;
+    // Saved Product Mappings are compared with their lists first, so the report can say when one may be stale.
+    try { await BL.hooks.beforeExport?.(); } catch { /* the report is still written */ }
     const jobs = shotJobs();
     const saved = jobs.filter((j) => j.it[j.field]);
     const btn = $('[data-act="export-shots"]');
@@ -1905,9 +2025,9 @@
   });
 
   Object.assign(BL, {
-    S, send, hook, uid, query, clip, plural, code, bp, label, cssPath, describe, detectIssues, findSection, sectionLine,
+    S, send, runtimeAlive, orphaned, hook, uid, query, clip, plural, code, bp, label, cssPath, describe, detectIssues, findSection, sectionLine,
     routeGuess, bestSource, modeOf, inspectReact, decodeModule, isStableClass, stylingOf, cssRulesFor, splitTop, rgba, hex, fromUI, openPop, closePop,
-    setPicking, cursorStyle, render, saveBatch, savePrefs, ensureBatch, findItem, currentPath, toast, frames, loadImg,
+    setPicking, cursorStyle, render, saveBatch, patchItem, savePrefs, savePop, ensureBatch, findItem, currentPath, toast, frames, loadImg,
     TYPES, typeLabel, shotKey, placePop, whereShort, drawHL, hideHL, setPopType, INK,
   });
 

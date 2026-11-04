@@ -23,7 +23,9 @@
     figma: '', variant: null, match: null, move: null, align: {}, alignInfo: {}, snap: { x: 0, y: 0 }, measures: [], colors: [],
     marks: [], marksDirty: false, edits: new Map(), els: [], el: null, item: null, committed: false, auto: false,
     parked: new Map(), cleared: false, missing: [], missingEdited: false, alignEl: null, alignUi: { mode: 'guides', method: 'edges', memo: {}, ref: null, h: '', v: '' },
-    cssRule: null, cssAdded: [],
+    cssRule: null, cssAdded: [], fieldsOpen: null, partsDraft: {},
+    card: null, cardDirty: false, cardCheck: null, cardUi: null, cardSlot: null,
+    mapping: null, mapDirty: false, mapCheck: null, mapRm: false, mapEdit: false, cardFields: false, shopCheck: null, shopBusy: false,
   });
   let P = emptyPop();
   const touched = new WeakMap(); // el -> { prop: { v, p } } inline styles we overwrote for previews
@@ -37,6 +39,7 @@
   const OV = { host: null, img: null, state: { dataUrl: null, opacity: 50, width: 0, x: 0, y: 0, diff: false, visible: true } };
   let sheet = null;
   let activeTool = null;
+  let toolboxOpen = false; // the Toolbox actions are collapsed until Toolbox is pressed
   let visibleMeasureIndex = null;
 
   // ------------------------------------------------------------------ helpers
@@ -52,6 +55,8 @@
   const here = () => BL.currentPath();
   const mine = (el) => !!S.ui && (el === S.ui.host || S.ui.host.contains(el));
   const itemsHere = () => (S.batch?.items || []).filter((i) => i.path === here());
+  // Annotation outlines are off by default so they never cover the page's own borders, shadows and colors.
+  const outlinesOn = () => S.prefs.marks === 'full';
   const bpNow = () => BL.bp(window.innerWidth);
   const toast = (m) => BL.toast(m);
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
@@ -202,8 +207,11 @@
   // touches what has been typed. Saving still requires a description when nothing is recorded.
   const PH_NONE = 'No changes detected. Describe what you\u2019d like changed.';
   const PH_SOME = 'Optional: Add any additional details about your changes.';
+  // A note's saved Product Mapping (a snapshot made by library.js). It counts as note content on its own.
+  const mapped = (it) => !!(it && it.productMapping && globalThis.BluelineLibrary?.isMapping?.(it.productMapping));
   function hasRecordedChanges() {
     rememberElement();
+    if (P.mapDirty ? !!mapNow() : mapped(S.pop?.item)) return true;
     const edit = (r) => (r.tweaks ? Object.values(r.tweaks) : []).length || r.textEdit || r.hide || r.hidden || r.match || r.move || Object.keys(r.align || {}).length || r.alignEl?.x || r.alignEl?.y || (r.measures || []).length;
     return !!(P.marks.some((m) => !m.auto) || P.colors.length || P.variant || [...P.edits.values()].some(edit) || P.missing.some((m) => (m.rec.tweaks || []).length || m.rec.textEdit || m.rec.hidden || m.rec.match || m.rec.move || (m.rec.align || []).length || m.rec.alignEl?.x || m.rec.alignEl?.y || (m.rec.measures || []).length));
   }
@@ -225,7 +233,7 @@
       for (const t of Object.values(P.tweaks).filter((x) => !x.snap)) {
         const where = t.rule ? (t.rule.key === 'element' ? 'this element' : t.rule.matched || t.rule.selector) : '';
         const was = t.declared === false ? 'added' : showVal(t.prop, t.from);
-        rows.push(`<div class="chg" data-prop="${esc(t.prop)}"${where ? ` data-rule="${esc(where)}"` : ''}><span><code>${esc(t.prop)}</code>: <span class="chg-from">${esc(was)}</span> → <b class="chg-to">${esc(showVal(t.prop, t.to))}</b>${t.token ? ` <span class="sub">≈ ${esc(t.token.replace(/`/g, ''))}</span>` : ''}</span>${where ? `<em class="chg-rule" title="${esc(t.rule.key === 'element' ? 'Set on this element only' : `In ${t.rule.selector || where} (${t.rule.source || ''}${t.rule.context ? `, ${t.rule.context}` : ''})`)}">${esc(where)}</em>` : ''}<button class="icon" data-x="css-rm" data-prop="${esc(t.prop)}" title="${t.declared === false ? `Remove ${esc(t.prop)}` : `Put ${esc(t.prop)} back to ${esc(t.from)}`}" aria-label="Undo ${esc(t.prop)} change">✕</button></div>`);
+        rows.push(`<div class="chg${t.inactive ? ' off' : ''}" data-prop="${esc(t.prop)}"${where ? ` data-rule="${esc(where)}"` : ''}><span><code>${esc(t.prop)}</code>: <span class="chg-from">${esc(was)}</span> → <b class="chg-to">${esc(showVal(t.prop, t.to))}</b>${t.token ? ` <span class="sub">≈ ${esc(t.token.replace(/`/g, ''))}</span>` : ''}${t.inactive ? ` <span class="chg-inactive" title="A conflict with another note was settled in favor of the other value. This value stays saved here but isn\u2019t previewed or exported for those screen sizes.">inactive${t.inactive.bps?.length && t.inactive.bps.length < 3 ? ` on ${esc(t.inactive.bps.join(', '))}` : ''}</span>` : ''}</span>${where ? `<em class="chg-rule" title="${esc(t.rule.key === 'element' ? 'Set on this element only' : `In ${t.rule.selector || where} (${t.rule.source || ''}${t.rule.context ? `, ${t.rule.context}` : ''})`)}">${esc(where)}</em>` : ''}<button class="icon" data-x="css-rm" data-prop="${esc(t.prop)}" title="${t.declared === false ? `Remove ${esc(t.prop)}` : `Put ${esc(t.prop)} back to ${esc(t.from)}`}" aria-label="Undo ${esc(t.prop)} change">✕</button></div>`);
       }
       if (P.hide) rows.push('<div class="chg"><span>Hidden (preview)</span><button class="icon" data-x="hide" title="Show it again" aria-label="Show the element again">✕</button></div>');
       for (const a of alignFields()) rows.push(`<div class="chg"><span>Aligned ${esc(a.edge)} to guide ${esc(a.guide)} (${rnd(a.shift)}px)</span><button class="icon" data-x="align-clear" data-g="${esc(a.guideId)}" title="Undo this alignment" aria-label="Undo alignment">✕</button></div>`);
@@ -295,7 +303,7 @@
   // independent: showing the element again brings the display edit back).
   function paintCss(el, r) {
     if (!el || !r) return;
-    for (const t of cssOrder(Object.values(r.tweaks || {}))) setInline(el, t.prop, t.to);
+    for (const t of cssOrder(Object.values(r.tweaks || {}).filter((x) => !offAt(x, bpNow())))) setInline(el, t.prop, t.to);
     if (r.hide) setInline(el, 'display', 'none');
   }
 
@@ -313,7 +321,7 @@
     const live = on && appliesHere(it);
     const els = targetsOf(it);
     for (const el of els) {
-      for (const t of cssOrder(it.tweaks || [])) { if (live) setInline(el, t.prop, t.to); else restoreInline(el, t.prop); }
+      for (const t of cssOrder(it.tweaks || [])) { if (!live) restoreInline(el, t.prop); else if (!offAt(t, bpNow())) setInline(el, t.prop, t.to); }
       if (it.hidden) { if (live) setInline(el, 'display', 'none'); else restoreInline(el, 'display'); }
     }
     // A text change belongs to the note's own element only, never to whichever element is found first.
@@ -327,13 +335,38 @@
   // Saved notes' previews are refreshed regularly. The note being edited is left out (its saved values are out of
   // date while it is open), and its live CSS, hide and alignment previews are put back on top, so another note on
   // the same element can't overwrite what is being edited.
+  // ---- CSS conflicts between notes (see "CSS conflicts" further down). They are settled when a note is saved, per
+  // element, CSS property and overlapping screen size. A value that lost stays in its note, marked
+  // `inactive: { bps }` on that one change: it is not previewed and not exported for those screen sizes, and nothing
+  // else in either note is touched.
+  const ALL_BPS = ['mobile', 'tablet', 'desktop'];
+  const bpsOf = (x) => (x.bps && x.bps.length ? x.bps : ALL_BPS);
+  const offAt = (t, bp) => !!t.inactive && (t.inactive.bps || ALL_BPS).includes(bp);
+  // The screen sizes at which a saved change still applies: its note's sizes, less the ones it lost.
+  const liveBps = (item, t) => bpsOf(item).filter((b) => !offAt(t, b));
+
   function applyAllPreviews(forceOff) {
+    // A pending refresh or a closing note can run after Blueline was turned off: nothing is painted then.
+    if (!S.active) forceOff = true;
     const on = !forceOff && S.prefs.previews !== false;
     const open = S.pop ? P.item?.id : null;
-    for (const it of S.batch?.items || []) if (hasPreview(it) && (forceOff || it.id !== open)) applyItemPreview(it, on);
+    // Two passes, so notes that share an element and property never undo each other: everything is cleared first
+    // (a clear also puts the page's own value back), then every note that applies here is painted again.
+    const list = (S.batch?.items || []).filter((it) => hasPreview(it) && (forceOff || it.id !== open));
+    for (const it of list) applyItemPreview(it, false);
+    if (on) for (const it of list) if (appliesHere(it)) applyItemPreview(it, true);
     if (!S.pop || forceOff) return;
     rememberElement();
     for (const [el, r] of P.edits) paintCss(el, r);
+  }
+
+  // Turns "Hide my live edits" off again (a change made or saved now should be visible).
+  function showPreviews() {
+    if (S.prefs.previews !== false) return;
+    S.prefs.previews = true;
+    BL.savePrefs();
+    applyAllPreviews();
+    updateToolbar();
   }
 
   function revertLive() {
@@ -458,6 +491,7 @@
     for (const [el, r] of P.edits) applyRecord(el, r);
     const cur = P.edits.get(P.el) || emptyPop();
     for (const key of EDIT_KEYS) P[key] = cur[key];
+    applyAllPreviews(); // undoing restored shared properties: saved notes on these elements are painted again
     visibleMeasureIndex = P.measures.length ? Math.min(s.visibleMeasureIndex ?? P.measures.length - 1, P.measures.length - 1) : null;
     syncAlignUi();
     loadCompose();
@@ -747,25 +781,8 @@
 
   // ------------------------------------------------------------------ CSV + price sheet
 
-  function parseCSV(text) {
-    const first = text.split(/\r?\n/, 1)[0] || '';
-    const delim = [',', '\t', ';'].map((d) => [d, first.split(d).length]).sort((a, b) => b[1] - a[1])[0][0];
-    const rows = [];
-    let row = [];
-    let cell = '';
-    let inQ = false;
-    for (let i = 0; i < text.length; i++) {
-      const c = text[i];
-      if (inQ) {
-        if (c === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else inQ = false; } else cell += c;
-      } else if (c === '"') inQ = true;
-      else if (c === delim) { row.push(cell); cell = ''; }
-      else if (c === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
-      else if (c !== '\r') cell += c;
-    }
-    if (cell || row.length) { row.push(cell); rows.push(row); }
-    return rows.filter((r) => r.some((x) => x.trim()));
-  }
+  // Shared with the Product Library (library.js), which loads before this file.
+  const parseCSV = globalThis.BluelineLibrary.parseCSV;
 
   function sheetFromRows(rows) {
     if (!rows.length) return { error: 'The file is empty.' };
@@ -838,6 +855,8 @@
     .addnote:hover { background: #1A33C7; }
     .addnote.on { background: #16A34A; }
     .addnote kbd { margin-left: auto; opacity: .8; font-size: 11px; }
+    .xb.plib { display: flex; align-items: center; gap: 8px; width: 100%; margin: 6px 0 0; padding: 10px 12px; border: 0; border-radius: 9px; background: #1E7A3E; color: #fff; font-weight: 650; font-size: 13px; line-height: normal; min-height: 38px; text-align: left; cursor: pointer; box-sizing: border-box; }
+    .xb.plib:hover { background: #176B34; } .xb.plib[hidden] { display: none; }
     .hintline { font-size: 11.5px; color: #6B7183; margin-top: -2px; }
     .panel .pop { position: static; width: auto; flex: 1 1 auto; min-height: 0; overflow: auto; border: 0; border-radius: 0; box-shadow: none; padding: 10px 12px 0; gap: 8px; }
     .pop > * { flex-shrink: 0; }
@@ -910,9 +929,13 @@
     .sub { font-size: 11.5px; color: #6B7183; font-weight: 400; }
     .xin { width: 100%; border: 1px solid #D9DCE4; border-radius: 6px; padding: 4px 6px; font-size: 12px; background: #fff; color: #1E2230; }
     .xin:focus { outline: none; border-color: ${INK}; box-shadow: 0 0 0 3px rgba(43,78,255,.15); }
-    .st { display: grid; grid-template-columns: 96px 22px 1fr 22px auto; gap: 3px; align-items: center; margin-top: 4px; }
+    .st { display: grid; grid-template-columns: 22px minmax(0, 1fr) 22px; gap: 3px; align-items: center; margin-top: 5px; min-width: 0; }
+    .st-h { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 6px; min-width: 0; }
+    .st-h > label { flex: 1 1 70px; min-width: 0; }
+    .st-h .xc { flex: 0 1 auto; flex-wrap: wrap; justify-content: flex-end; }
+    .st .sv { min-width: 0; width: 100%; }
     .st label { font-size: 11px; color: #6B7183; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .st .st-note { grid-column: 1 / 6; font-size: 10.5px; color: #6B7183; }
+    .st .st-note { grid-column: 1 / -1; overflow-wrap: anywhere; font-size: 10.5px; color: #6B7183; }
     .st .badge { font-size: 10px; padding: 0 4px; border-radius: 4px; background: #EEF2FF; color: #1A33C7; margin-left: 3px; font-family: system-ui, sans-serif; }
     .st.added label { color: #1A33C7; }
     .st .xin:disabled { background: #F4F5F8; color: #6B7183; }
@@ -923,8 +946,10 @@
     .css-utils-list .chip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
     .css-props-h { margin-top: 8px; }
     .css-add { margin-top: 6px; }
-    .css-add-box { margin-top: 4px; }
-    .css-add-res { display: flex; flex-direction: column; max-height: 180px; overflow: auto; margin-top: 3px; border: 1px solid #E3E6EE; border-radius: 6px; }
+    /* The property search is a popup anchored to its button: fixed, so it is never cut off by the panel, opening upward when there is no room below. */
+    .css-add-box { position: fixed; z-index: 7; display: flex; flex-direction: column; gap: 4px; box-sizing: border-box; padding: 6px; background: #fff; border: 1px solid #D9DCE4; border-radius: 8px; box-shadow: 0 10px 28px rgba(30,34,48,.25); overflow: hidden; }
+    .css-add-box[hidden] { display: none; }
+    .css-add-res { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: auto; border: 1px solid #E3E6EE; border-radius: 6px; }
     .css-add-res:empty { display: none; }
     .css-add-opt { text-align: left; padding: 4px 8px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; border: 0; background: none; color: #1F2433; cursor: pointer; }
     .css-add-opt:hover, .css-add-opt:focus-visible, .css-add-opt.first { background: #F5F7FF; }
@@ -933,7 +958,29 @@
     .st .xin.ch { background: #FFFBEA; border-color: #F0C95A; }
     .st .nb { width: 22px; height: 24px; border: 1px solid #D9DCE4; border-radius: 5px; font-size: 13px; line-height: 1; color: #4A5063; }
     .st .nb:hover { background: #F5F7FF; }
-    .st .tok { grid-column: 3 / 6; font-size: 11px; color: #1A33C7; }
+    .st .parts { grid-column: 1 / -1; min-width: 0; border-left: 2px solid #E2E5EC; padding: 1px 0 1px 6px; margin: 1px 0 1px 3px; }
+    .st .pf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 3px 6px; }
+    .st .pf label { display: block; font-size: 10px; line-height: 1.2; color: #6B7183; margin-bottom: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .st .pf .pfi { display: flex; gap: 2px; align-items: center; }
+    .st .pf { min-width: 0; }
+    .st .pf.wide { grid-column: 1 / -1; }
+    .st .pf.wide .pfi { max-width: calc(50% - 3px); }
+    .st .pf .pfi .xin { flex: 1 1 0; width: 0; min-width: 0; padding: 2px 4px; font-size: 11px; height: 22px; }
+    .st .pf .pfi select.xin { padding: 2px 2px; }
+    .st .pf .pst { flex: none; width: 16px; height: 22px; border: 1px solid #D9DCE4; border-radius: 4px; font-size: 11px; line-height: 1; color: #4A5063; padding: 0; }
+    .st .pf .pst:hover { background: #F5F7FF; }
+    .st .pf .pvsw { width: 22px; height: 22px; padding: 0; border: 1px solid #D9DCE4; border-radius: 4px; flex: none; }
+    .st .pf.chk .pfi { height: 22px; }
+    .st .pv.need { border-color: #D92D20; background: #FFF5F4; }
+    .chg.off > span { opacity: .6; text-decoration: line-through; text-decoration-color: rgba(30,34,48,.35); }
+    .chg-inactive { font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #B54708; background: #FFF4E5; border-radius: 3px; padding: 0 4px; margin-left: 4px; text-decoration: none; display: inline-block; }
+    .st .req { color: #D92D20; text-decoration: none; font-weight: 700; }
+    .st .parts-msg { font-size: 10.5px; color: #6B7183; margin-top: 2px; }
+    .st .parts-msg:empty { display: none; }
+    .st .parts-msg.bad { color: #B42318; }
+    .st .parts-key { font-size: 9.5px; color: #8A90A2; margin-top: 2px; }
+    .st .st-fields[aria-pressed="true"] { background: #EEF1FF; border-color: ${INK}; }
+    .st .tok { grid-column: 2 / -1; font-size: 11px; color: #1A33C7; overflow-wrap: anywhere; }
     .xc { display: flex; gap: 3px; align-items: center; }
     .xc input[type=color] { width: 24px; height: 24px; padding: 0; border: 1px solid #D9DCE4; border-radius: 4px; background: none; }
     .x-strips { display: flex; flex-direction: column; gap: 4px; }
@@ -958,21 +1005,29 @@
     .gd .tag { position: absolute; background: ${GUIDE}; color: #fff; border-radius: 3px; padding: 1px 5px; pointer-events: auto; cursor: grab; font: 600 10px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
     .gd.x .tag { top: 8px; left: 4px; } .gd.y .tag { left: 8px; top: 4px; }
     .gd .tag button { color: #fff; opacity: .85; margin-left: 4px; font-size: 10px; }
-    .mk { position: fixed; border: 2px dashed ${INK}; border-radius: 3px; pointer-events: none; }
-    .mk.bug { border-color: ${GUIDE}; }
-    .mk.badge-only { border-color: transparent; }
-    .mk.hot { border-style: solid; background: rgba(43,78,255,.12); }
-    .mk.region { background: rgba(43,78,255,.06); }
+    /* Outlines sit just outside the element (outline + offset, no border or fill), so its own border, shadow and colors stay visible. */
+    .mk { position: fixed; outline: 1px dashed rgba(43,78,255,.55); outline-offset: 3px; border-radius: 3px; pointer-events: none; }
+    .mk.bug { outline-color: rgba(229,35,157,.6); }
+    .mk.badge-only { outline-color: transparent; }
+    .mk.nopin .bd { display: none; }
+    .mk.hot { outline-style: solid; outline-color: rgba(43,78,255,.7); }
+    .mk.region { background: rgba(43,78,255,.04); }
     .mk .bd { position: absolute; width: 22px; height: 22px; border-radius: 50%; background: ${INK}; color: #fff; font: 700 11px/22px -apple-system, Segoe UI, sans-serif; text-align: center; pointer-events: auto; cursor: pointer; box-shadow: 0 0 0 2px #fff, 0 2px 6px rgba(30,34,48,.3); }
     .mk.bug .bd { background: ${GUIDE}; }
     .mk .bd:hover { transform: scale(1.12); }
-    .selb { position: fixed; border: 2px solid ${INK}; background: rgba(43,78,255,.1); border-radius: 3px; pointer-events: none; }
+    .pmk { position: fixed; pointer-events: none; }
+    .pmb { position: absolute; right: 6px; max-width: calc(100% - 12px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: auto; cursor: pointer; font: 600 11px/1.5 -apple-system, Segoe UI, sans-serif; padding: 1px 9px; border-radius: 11px; background: #1E7A3E; color: #fff; border: 0; box-shadow: 0 0 0 2px #fff, 0 2px 6px rgba(30,34,48,.28); opacity: .94; }
+    .pmb:hover, .pmb:focus-visible { opacity: 1; } .pmb:focus-visible { outline: 3px solid #1E1E1E; outline-offset: 2px; }
+    .pmb.attn { background: #E0A400; color: #3D2A00; }
+    .pmb.pend { background: #FFF9E6; color: #5C3B00; box-shadow: 0 0 0 2px #B7791F, 0 2px 6px rgba(30,34,48,.28); border: 2px dashed #B7791F; padding: 0 8px; }
+    .x-pmbox.quiet .pmb { display: none; }
+    .selb { position: fixed; outline: 1px solid rgba(43,78,255,.6); outline-offset: 3px; border-radius: 3px; pointer-events: none; }
     .sm { position: fixed; border: 1.5px dashed ${WARM}; background: rgba(240,138,28,.1); pointer-events: none; border-radius: 2px; }
     .dr { position: fixed; border: 2px solid ${INK}; background: rgba(43,78,255,.12); pointer-events: none; border-radius: 3px; }
     .dr.set { border-style: dashed; }
     .dr .sz { position: absolute; right: 0; bottom: 100%; margin-bottom: 3px; background: ${INK}; color: #fff; padding: 1px 5px; border-radius: 3px; font: 600 10px/1.5 ui-monospace, Menlo, monospace; }
-    .hl2 { position: fixed; pointer-events: none; border: 2px solid ${WARM}; background: rgba(240,138,28,.08); border-radius: 2px; }
-    .hl2.ink { border-color: ${INK}; background: rgba(43,78,255,.08); }
+    .hl2 { position: fixed; pointer-events: none; outline: 1px solid rgba(240,138,28,.7); outline-offset: 3px; border-radius: 2px; }
+    .hl2.ink { outline-color: rgba(43,78,255,.6); }
     .hl2 .hl-tag { background: ${WARM}; }
     .hl2.ink .hl-tag { background: ${INK}; }
     .x-bar { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #1E2230; color: #fff; padding: 7px 8px 7px 14px; border-radius: 9px; display: flex; gap: 10px; align-items: center; font-size: 12.5px; pointer-events: none; box-shadow: 0 8px 24px rgba(30,34,48,.3); z-index: 3; max-width: min(560px, 60vw); }
@@ -994,6 +1049,31 @@
     .xmodal { position: fixed; inset: 0; background: rgba(30,34,48,.45); display: flex; align-items: center; justify-content: center; padding: 24px; pointer-events: auto; z-index: 4; }
     .xsheet { width: min(560px, 100%); max-height: 100%; overflow: auto; background: #fff; border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 24px 60px rgba(30,34,48,.3); }
     .xsheet header { display: flex; justify-content: space-between; align-items: center; cursor: grab; user-select: none; }
+    .cf-modal { z-index: 6; }
+    .cf-sheet { width: min(720px, 100%); }
+    .cf-sheet > header { cursor: default; }
+    .cf-sheet > header b { font-size: 15px; font-weight: 700; color: #B42318; }
+    .cf-groups { display: flex; flex-direction: column; gap: 10px; overflow: auto; max-height: 56vh; padding: 2px; }
+    .cf-group { border: 1px solid #F0C95A; border-left: 4px solid ${WARM}; background: #FFFCF5; border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
+    .cf-group > header { display: flex; flex-wrap: wrap; gap: 2px 18px; cursor: default; }
+    .cf-group > header b, .cf-size b { font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: #6B7183; font-weight: 700; margin-right: 4px; }
+    .cf-row { border-top: 1px dashed #E8D9A8; padding-top: 7px; display: flex; flex-direction: column; gap: 5px; }
+    .cf-row:first-of-type { border-top: 0; padding-top: 0; }
+    .cf-size { font-size: 12px; }
+    .cf-row.done .cf-size::after { content: " \\2713"; color: #15803D; font-weight: 700; }
+    .cf-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .cf-opt { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 7px 9px 7px 28px; border: 1.5px solid #D9DCE4; border-radius: 8px; background: #fff; cursor: pointer; min-width: 0; }
+    .cf-opt input { position: absolute; left: 8px; top: 9px; margin: 0; }
+    .cf-opt:hover { border-color: #9AA3C7; }
+    .cf-opt:has(input:checked) { border-color: ${INK}; background: #EEF1FF; box-shadow: 0 0 0 1px ${INK}; }
+    .cf-opt:focus-within { outline: 2px solid ${INK}; outline-offset: 2px; }
+    .cf-t { font-weight: 650; font-size: 12.5px; }
+    .cf-who { font-size: 11px; color: #6B7183; font-weight: 600; }
+    .cf-txt { font-size: 11.5px; color: #4A5063; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .cf-val { margin-top: 2px; font-size: 11.5px; word-break: break-all; background: #F2F4F8; border-radius: 4px; padding: 1px 5px; align-self: flex-start; }
+    .cf-sheet > footer { display: flex; align-items: center; gap: 8px; }
+    .cf-left { flex: 1; font-size: 12px; color: #6B7183; }
+    @media (max-width: 560px) { .cf-opts { grid-template-columns: 1fr; } }
     .sh-out { font: 12px/1.5 ui-monospace, Menlo, monospace; background: #FAFBFC; border: 1px solid #E2E5EC; border-radius: 8px; padding: 8px; white-space: pre-wrap; max-height: 260px; overflow: auto; }
     .stephead { display: flex; align-items: center; gap: 7px; font-weight: 650; font-size: 12.5px; color: #1E2230; margin-top: 2px; }
     .stepn { width: 18px; height: 18px; border-radius: 50%; background: #1E2230; color: #fff; font-size: 11px; line-height: 18px; text-align: center; flex: none; }
@@ -1022,7 +1102,7 @@
     .chg .icon { width: 22px; height: 22px; line-height: 22px; flex: none; }
     .sampled-colors:not(:empty)::before { content: "Sampled colors (reference)"; display: block; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #6B7183; margin-bottom: 3px; }
     .bp-row { flex-wrap: wrap; }
-    .selb.cur { background: rgba(43,78,255,.18); box-shadow: 0 0 0 2px rgba(43,78,255,.35); }
+    .selb.cur { outline-width: 2px; outline-color: rgba(43,78,255,.75); }
     .tchip.cur { box-shadow: inset 0 0 0 1.5px ${INK}; }
     .tchip.missing { background: #F2F3F7; color: #6B7183; }
     .sel-sum { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -1039,8 +1119,49 @@
     .al-element .xlabel { min-width: 70px; }
     .al-ref { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .al-ref.set { color: #15803D; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
-    .refb { position: fixed; border: 2px dashed #16A34A; background: rgba(22,163,74,.07); border-radius: 3px; pointer-events: none; }
+    .refb { position: fixed; outline: 1px dashed rgba(22,163,74,.7); outline-offset: 3px; border-radius: 3px; pointer-events: none; }
     .refb .hl-tag { background: #16A34A; }
+    .card-box .card-line { font-size: 12px; margin: 4px 0; overflow-wrap: anywhere; }
+    .card-state { font-weight: 600; font-size: 11.5px; padding: 1px 7px; border-radius: 10px; background: #EEF1F7; color: #4A5063; }
+    .card-state.ok { background: #E3F6EA; color: #137A3B; }
+    .card-state.warn { background: #FFF1DB; color: #9A5B00; }
+    .card-state.bad { background: #FDE7E7; color: #B3261E; }
+    .map-sec { margin-top: 4px; }
+    .map-choose { width: 100%; padding: 9px 12px; font-size: 13px; font-weight: 700; }
+    .map-choose:disabled { opacity: .45; cursor: not-allowed; }
+    .xb.card-find { width: 100%; padding: 10px 12px; font-size: 13.5px; }
+    .xb.pri { background: #2B4EFF; border-color: #2B4EFF; color: #fff; } .xb.pri:hover { background: #1A33C7; } .xb.pri:disabled { opacity: .45; }
+    .xb.go { background: #1E7A3E; border-color: #1E7A3E; color: #fff; font-weight: 700; padding: 7px 12px; } .xb.go:hover { background: #176B34; }
+    /* Red = remove / delete (the confirming button is solid), green = approve, blue = primary, plain = secondary. */
+    .xb.danger { color: #B42318; border-color: #E8B4AE; } .xb.danger:hover { background: #FEECEC; }
+    .xb.danger.solid, .ghost.danger.solid { background: #B42318; border-color: #B42318; color: #fff; font-weight: 700; } .xb.danger.solid:hover { background: #912018; }
+    .map-card { margin-top: 4px; padding: 8px 9px; border: 1px solid #E2E5EC; border-radius: 8px; background: #FAFBFD; }
+    .map-card.attn { border-color: #EBC25A; background: #FFFCF3; }
+    .map-top { display: flex; gap: 9px; align-items: flex-start; }
+    .map-img { flex: none; width: 44px; height: 44px; border: 1px solid #E2E5EC; border-radius: 6px; background: #fff; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+    .map-img img { width: 100%; height: 100%; object-fit: contain; }
+    .map-main { min-width: 0; display: flex; flex-direction: column; gap: 1px; overflow-wrap: anywhere; font-size: 12px; }
+    .map-notes { margin: 3px 0 2px 16px; padding: 0; }
+    .disc { all: unset; cursor: pointer; display: inline-block; margin-top: 6px; font-size: 11.5px; font-weight: 600; color: #1A33C7; } .disc::before { content: '▸ '; } .disc[aria-expanded="true"]::before { content: '▾ '; }
+    .disc:hover { text-decoration: underline; } .disc:focus-visible { outline: 2px solid #1E1E1E; outline-offset: 2px; border-radius: 3px; }
+    .map-id { font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; overflow-wrap: anywhere; }
+    .map-f { display: flex; flex-direction: column; gap: 2px; margin-top: 5px; font-size: 11.5px; font-weight: 600; color: #4A5063; }
+    .map-in { display: flex; gap: 4px; } .map-in .xin { flex: 1; min-width: 0; }
+    .map-ed { font-weight: 600; font-style: normal; font-size: 10.5px; background: #E3EAFF; color: ${INK}; padding: 0 5px; border-radius: 8px; }
+    .mic { width: 30px; height: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; }
+    .mic.on { background: #D92D20; border-color: #D92D20; color: #fff; }
+    .mic-row { display: flex; align-items: center; gap: 8px; margin: 2px 0 10px; }
+    .bp-row { margin-top: 10px; }
+    .card-warn { font-size: 11.5px; color: #9A5B00; background: #FFF6E5; border-radius: 6px; padding: 4px 7px; margin: 4px 0; }
+    .card-prop, .card-saved { margin-top: 6px; }
+    .card-parts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+    .card-parts .xb { font-size: 11px; padding: 2px 7px; }
+    .cardb { position: fixed; pointer-events: none; outline: 2px dashed #0E9F8E; outline-offset: 2px; background: rgba(14,159,142,.07); border-radius: 3px; }
+    .cardb .hl-tag { background: #0E9F8E; }
+    .cardb.broad { outline-color: ${WARM}; background: rgba(240,138,28,.08); }
+    .cardb.broad .hl-tag { background: ${WARM}; }
+    .cardb.slot { outline-style: solid; outline-color: ${INK}; background: rgba(43,78,255,.08); }
+    .cardb.slot .hl-tag { background: ${INK}; }
     .startrow { display: flex; flex-direction: column; gap: 5px; }
     .sbtns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
     .sbtn { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 8px 10px; border: 1px solid #D9DCE4; border-radius: 8px; text-align: left; background: #fff; }
@@ -1065,7 +1186,7 @@
 
   const LAYERS_HTML = `
     <div class="x-layers">
-      <div class="x-sim"></div><div class="x-guides"></div><div class="x-marksbox"></div>
+      <div class="x-sim"></div><div class="x-guides"></div><div class="x-marksbox"></div><div class="x-pmbox"></div>
       <svg class="x-svg"><defs><marker id="xa" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="${INK}"/></marker></defs><g class="x-marks"></g><g class="x-arrows"></g><g class="x-meas"></g></svg>
       <div class="dr" hidden><span class="sz"></span></div>
       <div class="hl2" hidden><span class="hl-tag"></span></div>
@@ -1080,7 +1201,7 @@
       <div class="xrow"><span class="xlabel">Offset x, y</span><input class="xin" type="number" data-ov="x"><input class="xin" type="number" data-ov="y"></div>
       <label class="opt"><input type="checkbox" data-ov="diff"> Difference mode (matching pixels go black)</label>
       <label class="opt"><input type="checkbox" data-ov="visible"> Show overlay</label>
-      <div class="xrow"><button class="xb" data-x="ov-clear">Remove image</button></div>
+      <div class="xrow"><button class="xb danger" data-x="ov-clear">Remove image</button></div>
       <div class="sub">Drag this box by its title. ↑ ↓ in the offset fields nudge 1px (Shift: 10px).</div>
     </div>
     <div class="xmodal" data-m="sheet" hidden><div class="xsheet">
@@ -1088,7 +1209,7 @@
       <p class="sub">Compares a CSV against live storefront prices. Nothing is written to the store.</p>
       <div class="xrow"><label class="xb xb-file">Choose CSV… <input type="file" accept=".csv,.tsv,text/csv" data-x="sh-file" hidden></label><span class="sh-name sub"></span></div>
       <div class="sh-sum sub"></div>
-      <div class="xrow"><button class="primary" data-x="sh-check">Check live prices</button><button class="ghost" data-x="sh-clear">Remove sheet</button></div>
+      <div class="xrow"><button class="primary" data-x="sh-check">Check live prices</button><button class="ghost danger" data-x="sh-clear">Remove sheet</button></div>
       <pre class="sh-out" hidden></pre>
     </div></div>
   `;
@@ -1111,11 +1232,10 @@
   `;
 
   const TOP_HTML = `
-    <div class="xrow"><button class="xb" data-x="dictate" title="Speak your note instead of typing it">Speak your note</button></div>
+    <div class="xrow mic-row"><button class="xb mic" data-x="dictate" aria-label="Speak your note" aria-pressed="false" title="Speak your note instead of typing it"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2"/></svg></button><span class="sub mic-note" aria-live="polite"></span></div>
     <div class="xrow bp-row"><span class="xlabel" title="Which screen sizes this change is for. Choosing one doesn\u2019t resize the page.">Screen size</span><div class="chips" role="group" aria-label="Screen size">
-      <button class="chip" data-bp="desktop" aria-pressed="false" title="990px and wider">Desktop</button><button class="chip" data-bp="tablet" aria-pressed="false" title="750 to 989px wide">Tablet</button>
-      <button class="chip" data-bp="mobile" aria-pressed="false" title="Phones, under 750px wide">Mobile</button><button class="chip" data-bp="all" aria-pressed="false" title="All screen sizes">All</button></div></div>
-    <div class="sub bp-note">Records the screen size the change is for. It doesn\u2019t resize the page.</div>
+      <button class="chip" data-bp="all" aria-pressed="false" title="All screen sizes">All</button><button class="chip" data-bp="desktop" aria-pressed="false" title="990px and wider">Desktop</button><button class="chip" data-bp="tablet" aria-pressed="false" title="750 to 989px wide">Tablet</button>
+      <button class="chip" data-bp="mobile" aria-pressed="false" title="Phones, under 750px wide">Mobile</button></div></div>
   `;
 
   // Icons use the same stroke weight and dimensions across all tool CTAs.
@@ -1159,13 +1279,13 @@
         <button type="button" class="xb" data-draw="pen" title="Draw freehand lines">&#9998; Pen</button>
         <button type="button" class="xb" data-draw="text" title="Place a text annotation on the page">T Text</button>
       </div>
-      <div class="xrow"><button class="xb" data-x="draw-edit" title="Select an arrow, then drag an endpoint or its body">Edit drawings</button><button class="xb" data-x="draw-delete" title="Delete the selected arrow">Delete selected arrow</button></div>
+      <div class="xrow"><button class="xb" data-x="draw-edit" title="Select an arrow, then drag an endpoint or its body">Edit drawings</button><button class="xb danger" data-x="draw-delete" title="Delete the selected arrow">Delete selected arrow</button></div>
       <div class="xrow tool-color-row">
         <span class="sub">Color</span>
         <div class="dots">${DRAW_COLORS.map((c) => `<button type="button" class="dot" data-dc="${c}" style="background:${c}" title="Use ${c} for new drawings" aria-label="Drawing color ${c}"></button>`).join('')}</div>
         <label class="tool-custom-color" title="Choose any annotation color"><input type="color" class="draw-custom" aria-label="Custom drawing color" value="${GUIDE}"><span>Custom</span></label>
       </div>
-      <div class="xrow tool-footer-row"><span class="sub draw-sum"></span><span style="flex:1"></span><button class="xb" data-x="draw-undo" title="Remove the most recent drawing in this note">Remove last</button><button class="xb" data-x="draw-clear" title="Remove all drawn marks from this note">Clear</button></div>
+      <div class="xrow tool-footer-row"><span class="sub draw-sum"></span><span style="flex:1"></span><button class="xb danger" data-x="draw-undo" title="Remove the most recent drawing in this note">Remove last</button><button class="xb danger" data-x="draw-clear" title="Remove all drawn marks from this note">Clear</button></div>
       <div class="sub">Choose a shape, then draw on the page. Esc stops drawing. Color applies to new marks.</div>
     </div>
 
@@ -1216,7 +1336,7 @@
           <div class="xrow"><span class="xlabel">Vertical</span><div class="chips" role="group" aria-label="Vertical placement">
             <button class="chip" data-al-v="" aria-pressed="true">None</button><button class="chip" data-al-v="above" aria-pressed="false">Above</button><button class="chip" data-al-v="middle" aria-pressed="false" title="Center it vertically on the reference">Middle</button><button class="chip" data-al-v="below" aria-pressed="false">Below</button></div></div>
         </div>
-        <div class="xrow"><button class="xb" data-x="al-clear" hidden title="Remove the element alignment from all selected elements">Remove alignment</button></div>
+        <div class="xrow"><button class="xb danger" data-x="al-clear" hidden title="Remove the element alignment from all selected elements">Remove alignment</button></div>
         <div class="sub al-status"></div>
       </div>
     </div>
@@ -1250,7 +1370,9 @@
   `;
 
   const LINK_HTML = `
-    <details class="xd" data-d="link"><summary>Figma link &amp; product variant</summary>
+    <details class="xd" data-d="card"><summary>Product Mapping <span class="sub card-sum"></span></summary>
+      <div class="card-box"><div class="card-body"></div></div></details>
+    <details class="xd" data-d="link"><summary>Figma link</summary>
       <input class="xin figma-in" placeholder="Figma frame link (optional)" style="margin-top:4px">
       <div class="shop-only" hidden><input class="xin var-q" placeholder="Find a product or variant (read-only)" style="margin-top:6px"><div class="var-res"></div></div></details>
   `;
@@ -1346,6 +1468,12 @@
     root.querySelector('.x-top').innerHTML = TOP_HTML;
     root.querySelector('.x-more').innerHTML = MORE_HTML;
     root.querySelector('.x-link').innerHTML = LINK_HTML;
+    // Opening "Product card" starts the proposal at once; closing hides its highlight.
+    root.addEventListener('toggle', (e) => {
+      const d = e.target;
+      if (!S.pop || !d || !d.matches || !d.matches('[data-d="card"]')) return;
+      if (d.open && !P.card && !P.cardUi && P.el) cardStart(); else { renderCard(); renderMarks(); }
+    }, true);
     const body = root.querySelector('.body');
     root.querySelector('.x-step2').innerHTML = '<div class="stephead"><span class="stepn">3</span>Describe</div>';
     const add = mk('<button class="addnote" data-x="add-note" title="Open a new note. You can attach it to an element, or keep it as a general note"><span class="an-label">＋ Add note</span></button>');
@@ -1353,8 +1481,11 @@
       <button class="sbtn" data-x="start-select" title="Click an element on the page to attach a note to it (Alt+P)"><b>Select element</b><span>Click it on the page</span></button>
       <button class="sbtn" data-x="start-area" title="Drag a rectangle over an element, several elements, or an empty spot. Blueline finds the elements inside it"><b>Select area</b><span>Drag a rectangle</span></button></div>
       <div class="sub">Tip: Shift+click to select an element. Shift+drag to select an area.</div></div>`);
+    const libBtn = mk('<button class="xb plib" data-x="lib-home" hidden title="Open your Product Library">Product Library</button>');
     body.insertBefore(add, body.firstChild);
-    add.after(startRow);
+    add.after(libBtn);
+    libBtn.after(startRow);
+    syncLibBtn();
     body.appendChild(root.querySelector('.x-tools'));
     const tools = root.querySelector('.bar .tools');
     tools.insertBefore(mk(`<button class="icon hd-undo" data-x="undo" title="Undo the last annotation change (${UNDO_KEY})" aria-label="Undo" disabled>${UNDO_ICON}</button>`), tools.firstChild);
@@ -1369,6 +1500,8 @@
     makeDraggable(root.querySelector('.xsheet'), root.querySelector('.xsheet header'), { translate: true });
     root.addEventListener('click', onClick);
     root.addEventListener('input', onInput);
+    root.addEventListener('keydown', onPartKey);
+    root.querySelector('.pop').addEventListener('scroll', () => placeAddBox(), { passive: true });
     root.addEventListener('change', onChange);
     root.addEventListener('keydown', onUIKey);
     root.querySelector('.pop-foot').before(mk('<div class="pop-spacer" aria-hidden="true"></div>'));
@@ -1398,6 +1531,7 @@
   function attachGlobal() {
     if (attached) return;
     attached = true;
+    trackPointer(false);
     PTR.concat(SWALLOW).forEach((t) => window.addEventListener(t, onEvt, true));
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('keyup', onKeyUp, true);
@@ -1409,6 +1543,7 @@
   function detachGlobal() {
     if (!attached) return;
     attached = false;
+    trackPointer(true);
     PTR.concat(SWALLOW).forEach((t) => window.removeEventListener(t, onEvt, true));
     window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('keyup', onKeyUp, true);
@@ -1429,9 +1564,11 @@
     const g = guidesHere().length;
     q('[data-x="guides"] b').textContent = g ? `Guide lines (${g} on this page)` : 'Add guide lines';
     const mt = q('[data-x="marks"]');
-    const outlines = S.prefs.marks !== 'badges';
+    const outlines = outlinesOn();
     mt.setAttribute('aria-pressed', String(outlines));
-    mt.title = outlines ? 'Outlines on: each noted element has an outline. Click to show numbered badges only (drawings in the open note stay visible).' : 'Outlines off: only numbered badges show. Click to outline each noted element again.';
+    const outlineLabel = outlines ? 'Hide outlines' : 'Show outlines';
+    mt.setAttribute('aria-label', outlineLabel);
+    mt.title = outlines ? 'Hide outlines. Saved notes have a thin outline on the page; hiding them keeps CSS changes unobscured. Numbered badges stay, and the element you are editing is always outlined.' : 'Show outlines (off by default). Adds a thin outline to the elements of saved notes. Numbered badges always show, and the element you are editing is always outlined.';
     syncUndo();
     q('[data-x="g-show"]').textContent = S.prefs.guidesHidden ? 'Show all' : 'Hide all';
     renderGuideList();
@@ -1693,6 +1830,7 @@
 
   function onKey(e) {
     if (!S.active) return;
+    if (e.key === 'Escape' && BL.libraryUi?.L?.open) return; // the Product Library window (including choosing a product) handles its own Esc
     if (e.key === 'Escape' && T.shiftSel && !T.shiftSel.cancelled) {
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -1718,6 +1856,14 @@
       if (T.pick) endPick(null);
       else if (D.tool) stopDrawing();
       else setAnnotate(false);
+      return;
+    }
+    // Product card: Esc dismisses a card proposal, and never clears the note's own selection while the card is being
+    // worked on (that is what made "Save note" say nothing was selected after a card was confirmed).
+    if (e.key === 'Escape' && S.pop && !typingIn(e) && (P.cardUi || (cardOpen() && (P.card || e.composedPath().includes(cardBox()))))) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (P.cardUi) { P.cardUi = null; renderCard(); renderMarks(); }
       return;
     }
     // With nothing in progress, Esc clears the open note's selection (one undo step; the note, its text and
@@ -1754,6 +1900,13 @@
     const show = !!el && T.shiftHeld && shiftReady() && !T.shiftSel?.moved && !typingFocus(moved);
     if (show) { drawHl2(el, true); T.shiftHover = true; } else if (T.shiftHover) { T.shiftHover = false; if (!(A.on || T.pick)) drawHl2(null); }
   }
+  // The pointer's last position is remembered from the moment the script loads, so pressing Shift on a page that
+  // was just refreshed (with the pointer resting over an element) outlines it without a mouse move first.
+  const seedPointer = (e) => { T.lastPt = { x: e.clientX, y: e.clientY }; };
+  function trackPointer(on) {
+    window[on ? 'addEventListener' : 'removeEventListener']('pointermove', seedPointer, { capture: true, passive: true });
+  }
+  trackPointer(true);
   function shiftHoverAtPointer() {
     if (!T.lastPt) return;
     shiftHover(pointTarget(T.lastPt.x, T.lastPt.y));
@@ -2026,7 +2179,7 @@
     const oldEdits = new Map([...(P.parked || []), ...P.edits]);
     revertLive();
     P.tweaks = {}; P.hide = false; P.textEdit = null; P.align = {}; P.alignInfo = {}; P.snap = { x: 0, y: 0 };
-    P.move = null; P.match = null; P.measures = []; P.variant = null;
+    P.move = null; P.match = null; P.measures = []; P.variant = null; P.cardUi = null;
     P.auto = !!t.auto;
     S.pop.page = false;
     if (t.region) { P.els = []; P.el = null; S.pop.region = t.region; S.pop.el = null; S.pop.els = []; }
@@ -2045,6 +2198,7 @@
   // ------------------------------------------------------------------ compose lifecycle
 
   hooks.onPopOpen = (el, item) => {
+    toolboxOpen = false;
     P = emptyPop();
     ruleModels.clear();
     clearUndo();
@@ -2063,6 +2217,10 @@
       P.hide = !!item.hidden;
       P.figma = item.figma || '';
       P.variant = item.variant || null;
+      P.card = savedCard(item);
+      P.mapping = item.productMapping && libApi()?.isMapping(item.productMapping) ? clone(item.productMapping) : null;
+      P.mapCheck = mapChecks.get(item.id) || null;
+      if (P.mapping) setTimeout(mapRecheck, 0);
       P.match = item.match || null;
       P.measures = (item.measures || []).slice();
       P.colors = (item.colors || []).slice();
@@ -2131,11 +2289,13 @@
     pop.style.visibility = '';
     varIdx = null;
     q('.figma-in').value = P.figma;
-    q('.shop-only').hidden = BL.modeOf(S.page) !== 'shopify';
+    q('.shop-only').hidden = true; // the read-only variant search moved into Product card; a variant saved on an older note still shows and exports
     q('.var-res').textContent = '';
     q('.var-q').value = '';
     q('.pop-el').textContent = P.el ? BL.label(P.el) : '';
     renderSel();
+    renderCard();
+    if (T.openCardSection) { T.openCardSection = false; const cb = cardBox(); if (cb) cb.open = true; } // opened from a "Mapped" marker
     renderElementEditor();
     syncChips();
     closeAddProp();
@@ -2155,6 +2315,306 @@
     ul.hidden = !issues.length;
     renderAnn();
   }
+
+  // ------------------------------------------------------------------ Product card (Product Mapping, M2)
+  // The "Product card" section of the Describe step. It builds on the element already selected: it proposes the
+  // product card around it (cards.js), outlines the proposal, lets the user step to a parent or back down, and saves
+  // the confirmed card's identity on the note (`productCard`, or `productMapping.card` when the note has a mapping).
+  // The user's own selection is never changed, nothing is saved until the note is, and a saved card is never moved to
+  // another element without the user confirming it.
+  const cardsApi = () => globalThis.BluelineCards;
+  const cardBox = () => q('[data-d="card"]');
+  const cardOpen = () => !!cardBox()?.open;
+  const savedCard = (it) => { const c = it?.productMapping?.card?.v ? it.productMapping.card : it?.productCard?.v ? it.productCard : null; return c ? JSON.parse(JSON.stringify(c)) : null; };
+  const cardCur = () => { const u = P.cardUi; return u ? (u.kind === 'cands' ? u.list[u.i] : u.chain[u.i]) || null : null; };
+  const cardTarget = () => cardCur() || (P.cardCheck && P.cardCheck.el && P.cardCheck.el.isConnected ? P.cardCheck.el : null);
+  const CARD_STATE = { confirmed: ['ok', '\u2713 Confirmed'], hidden: ['warn', '\u25CF Hidden on the page'], changed: ['warn', '\u26A0 Needs confirmation'], ambiguous: ['warn', '\u26A0 Can\u2019t tell which card'], 'not-found': ['bad', '\u2715 Not found'], unchecked: ['', 'Saved without details'] };
+  let cardSlotT = 0;
+
+  function cardPos(el) {
+    const C = cardsApi();
+    const g = C.group(el);
+    const sec = C.sectionOf(el).heading;
+    return `${esc(BL.label(el))} \u00b7 ${g.count > 1 ? `card ${g.index} of ${g.count}` : 'single element'}${sec ? ` in \u201c${esc(sec)}\u201d` : ''}`;
+  }
+
+  function renderCard() {
+    const box = cardBox();
+    if (!box) return;
+    const C = cardsApi();
+    const body = box.querySelector('.card-body');
+    const sum = box.querySelector('.card-sum');
+    if (!C) { body.textContent = 'Card detection did not load. Reload the page.'; return; }
+    if (P.cardUi && P.cardUi.kind === 'propose' && P.cardUi.base !== P.el) P.cardUi = null; // the selection moved on
+    if (P.card && !P.cardCheck) P.cardCheck = C.evaluate(P.card);
+    const st = P.card ? P.cardCheck : null;
+    const [tone, text] = st ? CARD_STATE[st.state] || ['', st.state] : ['', ''];
+    sum.textContent = P.card ? `· ${text.replace(/^[^A-Za-z]+/, '').toLowerCase()}` : '';
+    let html = '';
+    const findFirst = !mapNow() && !P.card; // the required first step leads: Find Product Card, then Choose Product
+    const cardAct = () => {
+      let a = '';
+      const u = P.cardUi;
+      if (!P.el && !u) a += '<div class="sub" style="margin-top:6px">Select an element first (Shift-click it on the page). Blueline will suggest the product card around it.</div>';
+      else if (!u) a += `<div class="xbtns" style="margin-top:6px"><button class="xb ${P.card ? '' : 'go card-find'}" data-x="card-start">${P.card ? 'Pick a different card' : 'Find Product Card'}</button></div>`;
+      return a;
+    };
+    if (findFirst) html += cardAct() + mapHtml(); else html += mapHtml();
+    if (P.card) {
+      const c = P.card;
+      const where = `${c.index && c.count ? `card ${c.index} of ${c.count}` : 'card'}${c.section?.heading ? ` in “${esc(c.section.heading)}”` : ''}`;
+      html += `<div class="card-saved"><div class="card-line"><span class="card-state ${tone}">${esc(text)}</span> <span>${where}</span>${P.cardDirty && !P.mapDirty ? ' <span class="sub">Not saved yet</span>' : ''}</div>`;
+      if (st && st.state !== 'confirmed' && st.reasons.length) html += `<div class="sub">${esc(st.reasons.join('; '))}.</div>`;
+      const canPick = st && (st.state === 'changed' || st.state === 'ambiguous') && st.candidates.length;
+      html += `<div class="xbtns"><button class="xb" data-x="card-check">Check card</button>${canPick ? '<button class="xb" data-x="card-cands">Choose from the cards found</button>' : ''}<button class="xb danger" data-x="card-clear">Clear card</button></div>`;
+      const parts = (c.slots || []).map((sl, i) => ({ sl, i })).filter(({ sl }) => sl.role !== 'text').slice(0, 8);
+      if (parts.length && st && (st.state === 'confirmed' || st.state === 'hidden')) {
+        html += `<button class="disc" data-x="card-fields" aria-expanded="${!!P.cardFields}">Detected fields (${parts.length})</button>`;
+        if (P.cardFields) html += `<div class="card-parts">${parts.map(({ sl, i }) => `<button class="xb" data-x="card-slot" data-i="${i}" title="Show this part on the page">${esc(sl.role === 'compare-price' ? 'struck-through price' : sl.role)}${sl.text && sl.role !== 'image' ? ` “${esc(sl.text)}”` : ''}</button>`).join('')}</div>`;
+      }
+      html += '</div>';
+    }
+    const u = P.cardUi;
+    if (!findFirst) html += cardAct();
+    if (u && u.kind === 'propose') {
+      const el = u.chain[u.i];
+      const broad = u.broad[u.i];
+      const msg = u.i === u.at ? (u.confidence === 'explicit' ? 'Marked as a product card on the page.' : u.confidence === 'single' ? 'Possible product card (nothing similar beside it to compare with).' : 'Likely product card.') : u.at < 0 ? 'No product card was found around this element. Step up to choose a container.' : 'Not the suggested card.';
+      html += `<div class="card-prop"><div class="sub">${msg}</div><div class="card-line">${cardPos(el)}</div>${broad ? '<div class="card-warn">This holds several cards or a whole section of the page. Only confirm it if that is what you mean.</div>' : ''}<div class="xbtns"><button class="xb" data-x="card-up"${u.i >= u.chain.length - 1 ? ' disabled' : ''}>↑ Parent</button><button class="xb" data-x="card-down"${u.i <= 0 ? ' disabled' : ''}>↓ Child</button><button class="xb on" data-x="card-ok">${broad ? 'Confirm anyway' : 'Confirm card'}</button><button class="xb" data-x="card-cancel">Cancel</button></div></div>`;
+    } else if (u) {
+      html += `<div class="card-prop"><div class="sub">Candidate ${u.i + 1} of ${u.list.length}. Choose the card this note was about.</div><div class="card-line">${cardPos(u.list[u.i])}</div><div class="xbtns"><button class="xb" data-x="card-prev"${u.i <= 0 ? ' disabled' : ''}>◀</button><button class="xb" data-x="card-next"${u.i >= u.list.length - 1 ? ' disabled' : ''}>▶</button><button class="xb on" data-x="card-ok">Use this card</button><button class="xb" data-x="card-cancel">Cancel</button></div></div>`;
+    }
+    body.innerHTML = html;
+    const mm = mapNow();
+    if (mm) sum.textContent = `${sum.textContent ? sum.textContent + ' ' : ''}· mapped`;
+  }
+
+  function cardStart() {
+    const C = cardsApi();
+    if (!C || !P.el) return;
+    const p = C.propose(P.el);
+    P.cardUi = { kind: 'propose', base: P.el, chain: p.chain, i: p.at >= 0 ? p.at : 0, at: p.at, confidence: p.confidence, broad: p.broad };
+    renderCard(); renderMarks();
+  }
+  function cardStep(d) {
+    const u = P.cardUi;
+    if (!u) return;
+    const n = u.kind === 'cands' ? u.list.length : u.chain.length;
+    u.i = Math.max(0, Math.min(n - 1, u.i + d));
+    renderCard(); renderMarks();
+  }
+  function cardConfirm() {
+    const C = cardsApi();
+    const el = cardCur();
+    if (!C || !el) return;
+    P.card = C.describe(el);
+    P.cardDirty = true; P.cardUi = null; P.cardCheck = C.evaluate(P.card);
+    renderCard(); renderMarks();
+    toast(P.item ? 'Card set. Update the note to keep it.' : 'Card set. Save the note to keep it.');
+  }
+  function cardClear() { P.card = null; P.cardDirty = true; P.cardUi = null; P.cardCheck = null; renderCard(); renderMarks(); }
+  function cardRecheck() { const C = cardsApi(); if (C && P.card) { P.cardCheck = C.evaluate(P.card); renderCard(); renderMarks(); } }
+  function cardCandidates() {
+    const st = P.cardCheck;
+    if (!st || !st.candidates.length) return;
+    P.cardUi = { kind: 'cands', base: P.el, list: [...(st.el ? [st.el] : []), ...st.candidates.filter((e) => e !== st.el)], i: 0 };
+    renderCard(); renderMarks();
+  }
+  function cardShowSlot(i) {
+    const C = cardsApi();
+    const el = C && P.card && P.cardCheck?.el ? C.slotElement(P.cardCheck.el, P.card.slots?.[i]) : null;
+    if (!el) { toast('That part is not on the page right now.'); return; }
+    P.cardSlot = el; renderMarks();
+    clearTimeout(cardSlotT);
+    cardSlotT = setTimeout(() => { P.cardSlot = null; if (S.pop) renderMarks(); }, 1800);
+  }
+
+
+  // ------------------------------------------------------------------ Product mapping (M3)
+  // The "Product" part of the Product card section. Choosing a product opens the Product Library window in selection
+  // mode (library-ui.js), which reads the saved lists and returns a mapping; the note keeps it as `productMapping` (a
+  // snapshot from library.js) once saved. Nothing here writes to the Library. Page-specific values (title, image,
+  // prices, link) are `overrides` on the mapping. A reopened mapping is compared with the list record it came from and
+  // warned about, never refreshed silently.
+  const libApi = () => globalThis.BluelineLibrary;
+  const clone = (x) => JSON.parse(JSON.stringify(x));
+  const pageKey = () => (location.protocol === 'file:' ? location.href.split(/[?#]/)[0] : location.origin);
+  const hostOf = (s) => (s ? String(s).replace(/^https?:\/\//, '') : 'no store');
+  const centsText = (c) => (Number.isInteger(c) ? (c / 100).toFixed(2) : '');
+  let mapSeq = 0;
+
+  const mapNow = () => (P.mapping && libApi()?.isMapping(P.mapping) ? P.mapping : null);
+  async function mapListOf(m) {
+    const Lb = libApi();
+    const idx = await Lb.loadIndex(chrome.storage.local);
+    const has = idx.libs.some((l) => l.store === (m.list?.store || '') && l.campaign === m.list?.id);
+    return has ? Lb.loadLibrary(chrome.storage.local, m.list.store || '', m.list.id) : null;
+  }
+
+  // Compare the saved mapping with its list (read-only). Async; the result is cached for the note and shown in the section.
+  async function mapRecheck() {
+    const Lb = libApi();
+    const m = mapNow();
+    if (!Lb || !m) { P.mapCheck = null; return; }
+    const seq = ++mapSeq;
+    let res;
+    try { res = Lb.mappingCheck(await mapListOf(m), m); }
+    catch { res = { state: 'unknown', notes: ['Couldn’t compare with the list right now.'] }; }
+    if (seq !== mapSeq || !S.pop) return;
+    P.mapCheck = res;
+    if (P.item) mapChecks.set(P.item.id, res);
+    renderCard();
+  }
+  // Results by note id, so the (synchronous) Change Report and the page markers can use them for notes checked this session.
+  const mapChecks = new Map();
+  async function checkAllMappings() {
+    const Lb = libApi();
+    if (!Lb) return;
+    for (const it of S.batch?.items || []) {
+      if (!mapped(it)) continue;
+      mapChecks.set(it.id, Lb.mappingCheck(await mapListOf(it.productMapping), it.productMapping));
+    }
+    renderMarks();
+  }
+  hooks.beforeExport = checkAllMappings;
+
+  // The mapped product as a compact summary. Everything about changing it lives in the Product Mapping window.
+  function mapHtml() {
+    const Lb = libApi();
+    if (!Lb) return '';
+    const m = mapNow();
+    if (!m) return `<div class="map-sec"><button class="xb pri map-choose" data-x="map-start"${P.card ? '' : ' disabled title="Find and confirm the product card first"'}>Choose Product</button>${P.card ? '' : '<div class="sub">Find and confirm the product card first.</div>'}</div>`;
+    const ev = Lb.effectiveValues(m);
+    const ms = Lb.mappingStatus(m);
+    const v = m.variant;
+    const cur = m.approved?.currency || undefined;
+    const money = (c) => (Number.isInteger(c) ? Lb.fmt(c, cur) : null);
+    const chk = P.mapCheck;
+    const opt = v ? (v.options || []).map((o) => o.value).filter(Boolean).join(' / ') || v.variantTitle || '' : '';
+    const img = ev.image && /^https?:/i.test(ev.image) ? `<img src="${esc(ev.image)}" alt="" loading="lazy">` : '';
+    const prices = [money(ev.regularCents) ? `Regular ${money(ev.regularCents)}` : 'Regular price not approved', money(ev.promoCents) ? `Sale ${money(ev.promoCents)}` : ''].filter(Boolean).join(' · ');
+    const attn = ms.identity === 'pending' || (chk && chk.state !== 'current' && chk.state !== 'unknown');
+    let h = `<div class="map-sec"><div class="map-card${attn ? ' attn' : ''}"><div class="map-top"><span class="map-img">${img}</span><div class="map-main"><b>${esc(ev.title || m.product.name || m.product.key)}</b><div class="sub">${[opt, m.product.sku ? `SKU ${esc(m.product.sku)}` : ''].filter(Boolean).join(' · ')}</div><div class="sub">${esc(prices)}</div><div class="sub">${esc(m.list?.name || m.list?.id || '')}${m.list?.store ? ` · ${esc(hostOf(m.list.store))}` : ''}</div></div></div>`;
+    h += `<div class="card-line"><span class="card-state ${ms.approval.tone}">${esc(ms.approval.label)}</span></div>`;
+    if (chk && chk.state === 'changed') h += '<div class="card-warn">The list changed since this was mapped. Open Product Mapping to review it.</div>';
+    else if (chk && (chk.state === 'list-missing' || chk.state === 'product-missing')) h += `<div class="card-warn">${chk.notes.map(esc).join(' ')}</div>`;
+    h += `<div class="xbtns"><button class="xb pri" data-x="map-start">${ms.identity === 'pending' ? 'Review & Approve' : 'Edit Product Mapping'}</button>${P.mapRm ? '<span class="sub">Remove the saved mapping? This takes effect now.</span><button class="xb danger solid" data-x="map-remove-ok">Remove Mapping</button><button class="xb" data-x="map-remove-no">Keep</button>' : '<button class="xb danger" data-x="map-remove">Remove Mapping</button>'}</div>`;
+    return h + '</div></div>';
+  }
+
+  // ---- the Product Mapping window: the one place a mapping is changed, approved and saved
+  // Opens from a green marker on the page (no note editor), or from the open note's Product Mapping section. Saving
+  // writes the whole mapping at once and nothing else: other note content and any unsaved edits in an open editor are
+  // neither saved nor discarded. (A brand-new note has no saved copy to write into, so it is created with the mapping.)
+  // Same content regardless of key order (storage may hand keys back in another order).
+  const canon = (x) => (Array.isArray(x) ? x.map(canon) : x && typeof x === 'object' ? Object.fromEntries(Object.keys(x).filter((k) => x[k] !== undefined).sort().map((k) => [k, canon(x[k])])) : x);
+  const sameJson = (a, b) => JSON.stringify(canon(a ?? null)) === JSON.stringify(canon(b ?? null));
+  const diffKeys = (a, b) => [...new Set([...Object.keys(a || {}), ...Object.keys(b || {})])].filter((k) => !sameJson(a?.[k], b?.[k])).join(', ') || 'unknown';
+  let mapBusy = false;
+
+  async function mapOpen() {
+    const ui = BL.libraryUi;
+    if (mapBusy) return;
+    if (!libApi() || !ui?.openMapping) { toast('The Product Library did not load. Reload the page.'); return; }
+    const editor = !!S.pop;
+    const my = P;
+    const it = editor ? (P.item ? BL.findItem(P.item.id) : null) : null;
+    const saved = mapNow();
+    const card = P.card ? clone(P.card) : null;
+    if (!card) { toast('Confirm the card first.'); return; }
+    mapBusy = true;
+    const res = await ui.openMapping({
+      saved: saved ? clone(saved) : null, card, autoPick: saved ? null : 'product', context: 'note',
+      getCheck: () => (P === my ? P.mapCheck : null),
+      onPending: (draft) => { T.pmPending = draft && it ? { id: it.id, title: libApi().effectiveValues(draft).title || draft.product.name || draft.product.key } : null; renderPm(); },
+      save: (next) => mapPersist({ id: it?.id || null, next, card: my.card, editor: true, my }),
+    }).finally(() => { mapBusy = false; });
+    if (!S.pop || P !== my) return;
+    renderCard(); renderAnn();
+    if (res.action === 'saved') toast('Mapping saved.');
+  }
+
+  // From a green marker: the saved note's mapping, with no note editor involved.
+  async function mapOpenFor(id) {
+    const ui = BL.libraryUi;
+    const it = BL.findItem(id);
+    if (mapBusy || !it || !mapped(it)) return;
+    if (!ui?.openMapping) { toast('The Product Library did not load. Reload the page.'); return; }
+    const saved = clone(it.productMapping);
+    mapBusy = true;
+    const res = await ui.openMapping({
+      saved, card: saved.card?.v ? clone(saved.card) : null, context: 'marker',
+      getCheck: () => mapChecks.get(id) || null,
+      onPending: (draft) => { T.pmPending = draft ? { id, title: libApi().effectiveValues(draft).title || draft.product.name || draft.product.key } : null; renderPm(); },
+      save: (next) => mapPersist({ id, next, card: saved.card, editor: false }),
+      openNote: () => {},
+    }).finally(() => { mapBusy = false; });
+    renderPm();
+    if (res.action === 'saved') { toast('Mapping saved.'); checkAllMappings().catch(() => {}); }
+    if (res.action === 'note') { const cur = BL.findItem(id); if (cur) hooksFocus(cur); }
+  }
+
+  // Writes the mapping and nothing else. Returns { ok, mapping } or { ok: false, error }; on failure the saved copy is put back.
+  async function mapPersist({ id, next, card, editor, my }) {
+    const out = clone(next);
+    if (card) out.card = clone(card);
+    // A new note exists nowhere yet: save it (with the mapping) the ordinary way.
+    if (editor && !id) {
+      const was = { mapping: my.mapping, dirty: my.mapDirty, check: my.mapCheck };
+      my.mapping = out; my.mapDirty = true;
+      let ok = false;
+      try { ok = await BL.savePop(); } catch { ok = false; }
+      if (!ok) { my.mapping = was.mapping; my.mapDirty = was.dirty; my.mapCheck = was.check; return { ok: false, error: 'The note could not be saved. Check the note, then try again.' }; }
+      return { ok: true, mapping: out };
+    }
+    // Written straight into the stored note (see BL.patchItem) and read back: a mismatch is a failure, never a success.
+    const r = await BL.patchItem(id, (n) => { n.productMapping = out; delete n.productCard; n.updatedAt = Date.now(); },
+      (got) => (!got.productMapping ? 'The mapping was not stored.' : !sameJson(got.productMapping, out) ? `The stored mapping differs from what was saved (${diffKeys(got.productMapping, out)}).` : null));
+    if (!r.ok) return { ok: false, error: `Couldn’t save the mapping (${r.error}).` };
+    mapChecks.set(id, { state: 'current', notes: [] });
+    if (editor && my && my.item && my.item.id === id) { my.mapping = clone(out); my.mapDirty = false; my.cardDirty = false; my.mapCheck = { state: 'current', notes: [] }; my.shopCheck = null; my.mapRm = false; }
+    BL.render();
+    return { ok: true, mapping: out };
+  }
+
+  function mapTouch() { P.mapDirty = true; P.mapRm = false; renderCard(); renderAnn(); syncPlaceholder(); }
+  // Removing a saved mapping takes effect at once (the person confirmed it): the note stays, with the card as its own
+  // card; other note text and unsaved CSS edits in the editor are untouched. A failure keeps the saved mapping.
+  async function mapRemove() {
+    const my = P;
+    P.mapRm = false;
+    const it = P.item ? BL.findItem(P.item.id) : null;
+    const hadSaved = !!(it && mapped(it));
+    if (!hadSaved) { P.mapping = null; P.mapCheck = null; P.shopCheck = null; P.mapDirty = true; renderCard(); renderAnn(); syncPlaceholder(); return; }
+    const id = it.id;
+    const card = (P.card && clone(P.card)) || (it.productMapping.card?.v ? clone(it.productMapping.card) : null);
+    const r = await BL.patchItem(id, (n) => { delete n.productMapping; if (card) n.productCard = card; else delete n.productCard; n.updatedAt = Date.now(); },
+      (got) => (got.productMapping ? 'The browser did not keep the removal.' : null));
+    if (!r.ok) {
+      if (P === my) { renderCard(); renderAnn(); }
+      toast(`Couldn’t remove the mapping (${r.error}). The saved mapping is unchanged.`);
+      return;
+    }
+    mapChecks.delete(id);
+    if (T.pmPending?.id === id) T.pmPending = null;
+    if (P === my) { P.mapping = null; P.mapDirty = false; P.mapCheck = null; P.shopCheck = null; P.cardDirty = false; if (card) P.card = clone(card); renderCard(); renderAnn(); syncPlaceholder(); }
+    BL.render();
+    toast('Mapping removed. The note, its text and CSS edits are unchanged.');
+  }
+
+  // The "Product Library" button under + Add note: only when at least one saved list exists.
+  let libCount = 0;
+  async function syncLibBtn() {
+    const b = q('[data-x="lib-home"]');
+    const Lb = libApi();
+    if (!b || !Lb) return;
+    let n = 0;
+    try { n = (await Lb.loadIndex(chrome.storage.local)).libs.length; } catch { n = 0; }
+    libCount = n;
+    const el = q('[data-x="lib-home"]');
+    if (el) el.hidden = n < 1;
+  }
+  hooks.onLibraryLists = (n) => { libCount = n; const el = q('[data-x="lib-home"]'); if (el) el.hidden = n < 1; };
 
   function detectIssuesSafe(el) { try { return BL.detectIssues(el); } catch { return []; } }
 
@@ -2260,6 +2720,7 @@
 
   hooks.onPopClose = () => {
     if (T.speech) T.speech.stop();
+    closeAddProp();
     if (editing) finishEdit(false);
     if (T.pick) endPick(null);
     stopDrawing();
@@ -2273,6 +2734,7 @@
     const panel = q('.panel');
     if (panel) panel.classList.remove('composing');
     P = emptyPop();
+    renderMarks();
     ruleModels.clear();
     clearUndo();
     activeTool = null;
@@ -2343,6 +2805,212 @@
     renderSim();
     info.textContent = `${ruleSel ? `The change goes to the rule ${s.sel}: ` : ''}${matches(s.els.length)} for ${s.sel}${s.root ? ` inside ${BL.label(s.root)}` : ''}. Highlighted in orange. The preview shows on this element only.${s.els.length > 150 ? ' That is a lot. Is the selector too broad?' : ''}${sr && !sr.reliable ? ` (The changes were made in ${sr.rule.matched || sr.rule.selector}, which ${sr.rule.utility ? 'is a utility class' : 'isn\u2019t on the page now or has a condition that can\u2019t be checked'}, so a similar-element selector is used.)` : ''}`;
     sum.textContent = `${P.scope === 'group' ? 'group' : 'everywhere'} · ${s.els.length}`;
+  }
+
+  // ------------------------------------------------------------------ structured CSS values (multi-part properties)
+  // A property-aware layer over the plain value text: border, margin, padding, border-radius, box-shadow and
+  // linear-gradient values get one field per component. Each family has parse(value) -> parts | null (null: syntax
+  // the fields can't represent, so only the raw text applies), compose(parts) -> { value } | { error }, and the
+  // fields to show. The saved change is still the one plain value string, so saved notes don't change, and a value
+  // is only rewritten when a field is edited. Raw CSS stays available in the row's own text input.
+
+  // Splits at the top level only (not inside parentheses or quotes), on whitespace or commas.
+  function cssTokens(value, comma) {
+    const out = [];
+    let cur = '', depth = 0, quote = '';
+    for (const ch of String(value ?? '')) {
+      if (quote) { cur += ch; if (ch === quote) quote = ''; continue; }
+      if (ch === '"' || ch === "'") { quote = ch; cur += ch; continue; }
+      if (ch === '(') depth++; else if (ch === ')') depth = Math.max(0, depth - 1);
+      if (!depth && (comma ? ch === ',' : /\s/.test(ch))) { if (cur.trim()) out.push(cur.trim()); cur = ''; continue; }
+      cur += ch;
+    }
+    if (cur.trim()) out.push(cur.trim());
+    return out;
+  }
+  const CSS_WIDE = /^(inherit|initial|unset|revert|revert-layer)$/i;
+  const isLen = (t) => /^[-+]?(\d*\.)?\d+([a-z%]+)?$/i.test(t) || /^(calc|min|max|clamp)\(/i.test(t) || /^(thin|medium|thick|auto)$/i.test(t);
+  const isVar = (t) => /^var\(/i.test(t);
+  const BORDER_STYLES = ['none', 'hidden', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'];
+  const supportsCss = (prop, value) => { try { return CSS.supports(prop, value); } catch { return true; } };
+
+  const borderFamily = {
+    label: 'Border',
+    fields: () => [
+      { k: 'width', label: 'Width', num: true, req: true, ph: 'required' },
+      { k: 'style', label: 'Style', kind: 'select', req: true, opts: BORDER_STYLES },
+      { k: 'color', label: 'Color', kind: 'color', ph: 'currentColor' },
+    ],
+    parse(value) {
+      const v = String(value ?? '').trim();
+      if (!v) return { width: '', style: '', color: '' };
+      if (CSS_WIDE.test(v)) return null;
+      const parts = { width: '', style: '', color: '' };
+      for (const t of cssTokens(v)) {
+        if (BORDER_STYLES.includes(t.toLowerCase())) { if (parts.style) return null; parts.style = t; }
+        else if (isVar(t)) { if (!parts.style && !parts.width) parts.width = t; else if (!parts.color) parts.color = t; else return null; }
+        else if (isLen(t)) { if (parts.width) return null; parts.width = t; }
+        else if (supportsCss('color', t)) { if (parts.color) return null; parts.color = t; }
+        else return null;
+      }
+      if (!parts.style && parts.width && isVar(parts.width) && !parts.color) return null; // a lone var(): can't tell what it is
+      return parts;
+    },
+    // Width and style are both needed: an omitted width would be CSS's thick default (medium).
+    compose(p) {
+      // `none` and `hidden` draw nothing, so they need no width.
+      const need = [!String(p.width || '').trim() && !/^(none|hidden)$/i.test(p.style || '') && 'width', !p.style && 'style'].filter(Boolean);
+      if (need.length) return { error: need.length === 2 ? 'Width and style are required.' : need[0] === 'style' ? 'Style is required: without it the border isn’t drawn.' : 'Width is required: without it the border would default to a thick “medium”.', need };
+      if (/^\s*-/.test(p.width)) return { error: 'Width can’t be negative.', need: ['width'] };
+      return { value: [p.width, p.style, p.color].filter(Boolean).join(' ') };
+    },
+  };
+
+  // margin, padding, border-radius: one to four values, collapsed the way CSS reads them. A blank side takes the
+  // value CSS gives it (right = top, bottom = top, left = right), so optional sides can stay empty.
+  function fourFamily(label, keys, names) {
+    const expand = (list) => (list.length === 1 ? [list[0], list[0], list[0], list[0]] : list.length === 2 ? [list[0], list[1], list[0], list[1]] : list.length === 3 ? [list[0], list[1], list[2], list[1]] : list);
+    return {
+      label,
+      fields: () => keys.map((k, i) => ({ k, label: names[i], num: true, req: i === 0, ph: i === 0 ? 'required' : 'default' })),
+      parse(value) {
+        const v = String(value ?? '').trim();
+        if (!v) return Object.fromEntries(keys.map((k) => [k, '']));
+        if (CSS_WIDE.test(v) || v.includes('/')) return null;
+        const list = cssTokens(v);
+        if (list.length < 1 || list.length > 4) return null;
+        const all = expand(list);
+        return Object.fromEntries(keys.map((k, i) => [k, all[i]]));
+      },
+      compose(p) {
+        const [a, b, c, d] = keys.map((k) => (p[k] || '').trim());
+        if (!a) return { error: `${names[0]} is required.`, need: [keys[0]] };
+        const r = b || a, bt = c || a, l = d || r;
+        const out = l === r ? (bt === a ? (r === a ? [a] : [a, r]) : [a, r, bt]) : [a, r, bt, l];
+        return { value: out.join(' ') };
+      },
+    };
+  }
+
+  const shadowFamily = {
+    label: 'Box shadow',
+    fields: () => [
+      { k: 'x', label: 'X offset', num: true, req: true, ph: 'required' },
+      { k: 'y', label: 'Y offset', num: true, req: true, ph: 'required' },
+      { k: 'blur', label: 'Blur', num: true, ph: 'optional' },
+      { k: 'spread', label: 'Spread', num: true, ph: 'optional' },
+      { k: 'color', label: 'Color', kind: 'color', ph: 'currentColor' },
+      { k: 'inset', label: 'Inset', kind: 'check' },
+    ],
+    parse(value) {
+      const v = String(value ?? '').trim();
+      const blank = { x: '', y: '', blur: '', spread: '', color: '', inset: '' };
+      if (!v || v.toLowerCase() === 'none') return blank;
+      if (CSS_WIDE.test(v) || cssTokens(v, true).length > 1) return null; // several shadows: raw only
+      const parts = { ...blank };
+      const lens = [];
+      for (const t of cssTokens(v)) {
+        if (t.toLowerCase() === 'inset') { if (parts.inset) return null; parts.inset = 'inset'; }
+        else if (isLen(t) && !/^(thin|medium|thick|auto)$/i.test(t)) lens.push(t);
+        else if (isVar(t) && lens.length < 2) lens.push(t);
+        else if (!parts.color && (isVar(t) || supportsCss('color', t))) parts.color = t;
+        else return null;
+      }
+      if (lens.length < 2 || lens.length > 4) return null;
+      [parts.x, parts.y, parts.blur = '', parts.spread = ''] = lens;
+      return parts;
+    },
+    compose(p) {
+      const need = ['x', 'y'].filter((k) => !(p[k] || '').trim());
+      if (need.length) return { error: 'Horizontal and vertical offsets are required.', need };
+      const blur = (p.blur || '').trim() || ((p.spread || '').trim() ? '0' : '');
+      return { value: [p.inset ? 'inset' : '', p.x, p.y, blur, p.spread, p.color].map((x) => String(x || '').trim()).filter(Boolean).join(' ') };
+    },
+  };
+
+  const ANGLE = /^[-+]?(\d*\.)?\d+(deg|grad|rad|turn)$/i;
+  const gradientFamily = {
+    label: 'Linear gradient',
+    fields: (p) => {
+      const out = [{ k: 'dir', label: 'Direction', num: true, unit: 'deg', zeroUnit: true, step: 5, ph: 'to right, 90deg', wide: true }];
+      for (let i = 0; i < (+p.n || 2); i++) out.push({ k: `c${i}`, label: `Stop ${i + 1} color`, kind: 'color', req: true, ph: 'required', rm: (+p.n || 2) > 2 ? i : undefined }, { k: `p${i}`, label: `Stop ${i + 1} position`, num: true, unit: '%', ph: 'optional' });
+      return out;
+    },
+    parse(value) {
+      const v = String(value ?? '').trim();
+      if (!v) return { dir: '', n: '2', c0: '', p0: '', c1: '', p1: '' };
+      const m = v.match(/^linear-gradient\(/i);
+      if (!m) return null;
+      let depth = 0, end = -1;
+      for (let i = m[0].length - 1; i < v.length; i++) { if (v[i] === '(') depth++; else if (v[i] === ')') { depth--; if (!depth) { end = i; break; } } }
+      if (end !== v.length - 1) return null; // more after the gradient (other background layers)
+      const args = cssTokens(v.slice(m[0].length, end), true);
+      const parts = { dir: '' };
+      if (args.length && (/^to\s/i.test(args[0]) || ANGLE.test(args[0]))) parts.dir = args.shift();
+      else if (args.length && /^(in|from)\s/i.test(args[0])) return null;
+      if (args.length < 2) return null;
+      parts.n = String(args.length);
+      for (let i = 0; i < args.length; i++) {
+        const toks = cssTokens(args[i]);
+        const pos = [];
+        while (toks.length > 1 && /^[-+]?(\d*\.)?\d+(%|[a-z]+)$|^calc\(/i.test(toks[toks.length - 1]) && pos.length < 2) pos.unshift(toks.pop());
+        if (!toks.length || (toks.length === 1 && /^[-+]?(\d*\.)?\d+(%|[a-z]+)$/i.test(toks[0]) && !pos.length)) return null; // a color hint
+        parts[`c${i}`] = toks.join(' ');
+        parts[`p${i}`] = pos.join(' ');
+      }
+      return parts;
+    },
+    compose(p) {
+      const n = +p.n || 2;
+      const need = [];
+      const stops = [];
+      for (let i = 0; i < n; i++) {
+        const c = (p[`c${i}`] || '').trim();
+        if (!c) need.push(`c${i}`);
+        stops.push([c, (p[`p${i}`] || '').trim()].filter(Boolean).join(' '));
+      }
+      if (need.length) return { error: 'Every color stop needs a color.', need };
+      return { value: `linear-gradient(${[(p.dir || '').trim(), ...stops].filter(Boolean).join(', ')})` };
+    },
+  };
+
+  const boxFam = (label) => fourFamily(label, ['top', 'right', 'bottom', 'left'], ['Top', 'Right', 'Bottom', 'Left']);
+  const COMPOSITES = {
+    border: borderFamily, 'border-top': borderFamily, 'border-right': borderFamily, 'border-bottom': borderFamily, 'border-left': borderFamily,
+    margin: boxFam('Margin'), padding: boxFam('Padding'),
+    'border-radius': fourFamily('Border radius', ['tl', 'tr', 'br', 'bl'], ['Top left', 'Top right', 'Bottom right', 'Bottom left']),
+    'box-shadow': shadowFamily, background: gradientFamily, 'background-image': gradientFamily,
+  };
+  const compositeFor = (prop) => COMPOSITES[prop] || null;
+  // Composes parts for a property and checks the result is valid CSS: { value } or { error, need }.
+  const PLAIN_NUM = /^[-+]?(\d*\.)?\d+$/;
+  // A bare number in a length field means the field's default unit (4 -> 4px, a stop position 40 -> 40%). A bare 0
+  // stays 0, except for angles. Anything else (units, keywords, var(), calc()) is kept as typed.
+  function withUnit(f, v) {
+    const t = String(v ?? '').trim();
+    if (!f.num || !PLAIN_NUM.test(t)) return t;
+    if (+t === 0 && !f.zeroUnit) return t;
+    return `${t}${f.unit || 'px'}`;
+  }
+  // The next value when stepping a numeric field: keeps the unit, starts from 0 in the default unit when blank.
+  function stepNum(f, v, dir, big) {
+    const t = String(v ?? '').trim();
+    const m = t === '' ? ['', '0', ''] : t.match(/^([-+]?(?:\d*\.)?\d+)([a-z%]*)$/i);
+    if (!m) return t; // var(), calc(), keywords: not stepped
+    const unit = m[2] || (t === '' || PLAIN_NUM.test(t) ? f.unit || 'px' : '');
+    const base = /^(em|rem|ch|ex)$/i.test(unit) ? 0.125 : f.step || 1;
+    const next = Math.round((+m[1] + dir * base * (big ? 10 : 1)) * 1000) / 1000;
+    return `${next}${unit}`;
+  }
+  function composeCss(prop, raw) {
+    const fam = compositeFor(prop);
+    if (!fam) return { error: 'No fields for this property.' };
+    const parts = { ...raw };
+    for (const f of fam.fields(parts)) if (f.num && f.k in parts) parts[f.k] = withUnit(f, parts[f.k]);
+    const res = fam.compose(parts);
+    res.parts = parts;
+    if (res.value !== undefined && !supportsCss(prop, res.value)) return { error: `“${res.value}” isn’t valid CSS for ${prop}. Check each field, or edit the CSS directly.`, need: [] };
+    return res;
   }
 
   // ------------------------------------------------------------------ element properties (Edit CSS)
@@ -2493,7 +3161,7 @@
     const where = rule.key === 'element' ? 'Changes for this element only, not tied to a stylesheet rule.'
       : rule.missing ? 'This rule isn’t on the page now (the page or its stylesheets changed). Its saved changes are kept and still previewed on this element.'
         : `${rule.selector !== rule.matched ? `Selector ${rule.selector} · ` : ''}${rule.source.label}${rule.context ? ` · ${rule.context}` : ''}. Matches this element${model.count > 1 ? `; ${model.count} rules do. Which one wins for each property isn’t checked` : ''}.${rule.uncertain ? ' Its condition can’t be checked here, so it may not apply right now.' : ''}`;
-    const blocked = model.blocked ? ` ${plural(model.blocked, 'stylesheet')} from another site couldn’t be read, so ${model.blocked === 1 ? 'its' : 'their'} rules aren’t listed.` : '';
+    const blocked = model.blocked ? ` ${plural(model.blocked, 'stylesheet')} from another site can’t be inspected, so ${model.blocked === 1 ? 'its' : 'their'} rules aren’t listed.` : '';
     info.textContent = where + blocked;
 
     // Rows: the rule's own declarations, then properties added to it.
@@ -2513,7 +3181,7 @@
     const nothing = !model.count && !model.element.decls.length;
     empty.hidden = rows.length > 0;
     empty.textContent = nothing
-      ? 'No stylesheet rule matches this element directly. Its look may be inherited from a parent or come from a stylesheet that can’t be read. Use + Add CSS property to set a value on this element only.'
+      ? `No directly matching CSS rule found. ${model.blocked ? `${plural(model.blocked, 'stylesheet')} can’t be inspected, so the styling may come from ${model.blocked === 1 ? 'it' : 'them'}. ` : ''}It may also be inherited from a parent element. Use + Add CSS property to change this element only.`
       : rule.key === 'element' ? 'No properties on this element yet. Use + Add CSS property.' : 'This rule has no properties to show. Use + Add CSS property.';
     const cs = getComputedStyle(P.el);
     for (const r of rows) {
@@ -2522,8 +3190,9 @@
       const reserved = RESERVED[r.prop];
       const cur = mine ? t.to : r.from;
       const computed = cs.getPropertyValue(r.prop).trim();
-      const note = [r.important ? '!important' : '', r.added ? `added to this ${rule.key === 'element' ? 'element' : 'rule'}${computed ? ` · now ${clip(computed, 40)}` : ''}` : '', r.legacy ? 'saved before rules were recorded' : '', r.match ? 'from Match style (computed values)' : '', t && !t.snap && !mine ? `changed under ${tweakKey(t) === 'element' ? 'this element' : t.rule.matched || t.rule.selector}; editing here moves it` : '', reserved || ''].filter(Boolean).join(' · ');
-      const row = mk(`<div class="st${r.added ? ' added' : ''}" data-prop="${esc(r.prop)}" data-from="${esc(r.from)}" data-base="${esc(computed)}" data-key="${esc(rule.key)}"${r.added ? ' data-added="1"' : ''}><label title="${esc(r.prop)}">${esc(r.prop)}</label><button class="nb" data-x="st-dec" aria-label="Decrease ${esc(r.prop)}"${reserved ? ' disabled' : ''}>−</button><input class="xin sv" value="${esc(cur)}" placeholder="${esc(r.added ? computed || 'value' : '')}" spellcheck="false" aria-label="${esc(r.prop)}"${reserved ? ' disabled' : ''}><button class="nb" data-x="st-inc" aria-label="Increase ${esc(r.prop)}"${reserved ? ' disabled' : ''}>+</button><span class="xc">${isColorProp(r.prop) && !reserved ? '<input type="color" class="sw" aria-label="Pick a color"><button class="xb" data-x="st-drop" title="Sample a color from the screen" aria-label="Eyedropper">◉</button>' : ''}${r.added ? `<button class="icon" data-x="css-row-rm" title="Remove ${esc(r.prop)} from this rule" aria-label="Remove added property ${esc(r.prop)}">✕</button>` : ''}</span><div class="tok" hidden></div>${note ? `<div class="st-note">${esc(note)}</div>` : ''}</div>`);
+      const note = [r.important ? '!important' : '', r.added ? `added to this ${rule.key === 'element' ? 'element' : 'rule'}${computed ? ` · now ${clip(computed, 40)}` : ''}` : '', r.legacy ? 'saved before rules were recorded' : '', r.match ? 'from Match style (computed values)' : '', mine && t.inactive ? 'inactive: another note\u2019s value is used' : '', t && !t.snap && !mine ? `changed under ${tweakKey(t) === 'element' ? 'this element' : t.rule.matched || t.rule.selector}; editing here moves it` : '', reserved || ''].filter(Boolean).join(' · ');
+      const row = mk(`<div class="st${r.added ? ' added' : ''}" data-prop="${esc(r.prop)}" data-from="${esc(r.from)}" data-base="${esc(computed)}" data-key="${esc(rule.key)}"${r.added ? ' data-added="1"' : ''}><div class="st-h"><label title="${esc(r.prop)}">${esc(r.prop)}</label><span class="xc">${isColorProp(r.prop) && !reserved ? '<input type="color" class="sw" aria-label="Pick a color"><button class="xb" data-x="st-drop" title="Sample a color from the screen" aria-label="Eyedropper">◉</button>' : ''}${r.added ? `<button class="icon" data-x="css-row-rm" title="Remove ${esc(r.prop)} from this rule" aria-label="Remove added property ${esc(r.prop)}">✕</button>` : ''}</span></div><button class="nb" data-x="st-dec" aria-label="Decrease ${esc(r.prop)}"${reserved ? ' disabled' : ''}>−</button><input class="xin sv" value="${esc(cur)}" placeholder="${esc(r.added ? computed || 'value' : '')}" spellcheck="false" aria-label="${esc(r.prop)}"${reserved ? ' disabled' : ''}><button class="nb" data-x="st-inc" aria-label="Increase ${esc(r.prop)}"${reserved ? ' disabled' : ''}>+</button><div class="tok" hidden></div>${compositeFor(r.prop) && !reserved ? '<div class="parts" hidden></div>' : ''}${note ? `<div class="st-note">${esc(note)}</div>` : ''}</div>`);
+      if (compositeFor(r.prop) && !reserved) row.querySelector('.xc').insertAdjacentHTML('afterbegin', `<button class="xb st-fields" data-x="st-fields" aria-pressed="true" title="Show or hide separate fields for ${esc(r.prop)}">Fields</button>`);
       box.appendChild(row);
       refreshRow(row);
     }
@@ -2541,6 +3210,96 @@
     tok.textContent = t && t.token ? `≈ ${t.token}` : '';
     const sw = row.querySelector('.sw');
     if (sw) sw.value = toHex(input.value || row.dataset.from || row.dataset.base);
+    if (!row._partsEdit) renderParts(row);
+  }
+
+  // Separate fields for a multi-part value, kept in step with the row's text input (which stays the raw CSS).
+  function renderParts(row, given) {
+    const box = row.querySelector('.parts');
+    const fam = compositeFor(row.dataset.prop);
+    if (!box || !fam) return;
+    const toggle = row.querySelector('.st-fields');
+    // One Fields section is open at a time (an accordion): P.fieldsOpen names it.
+    const open = P.fieldsOpen === rowId(row);
+    toggle?.setAttribute('aria-pressed', String(open));
+    toggle?.setAttribute('aria-expanded', String(open));
+    box.hidden = !open;
+    if (!open) return;
+    // Entries that couldn't be applied yet (a missing required field) come back when the section is opened again.
+    const raw = row.querySelector('.sv').value;
+    const draft = !given && P.partsDraft[rowId(row)];
+    const usedDraft = !!draft && draft.raw === raw;
+    const parts = given || (usedDraft ? draft.parts : fam.parse(raw));
+    if (!parts) {
+      box.innerHTML = `<div class="parts-msg">This value uses syntax the fields can’t show (for example several layers or shadows). Edit it as CSS above.</div>`;
+      return;
+    }
+    const field = (f) => {
+      const val = parts[f.k] ?? '';
+      const id = esc(f.k);
+      const label = `<label>${esc(f.label)}${f.req ? ' <abbr class="req" title="Required">*</abbr>' : ''}</label>`;
+      let input;
+      if (f.kind === 'select') {
+        const opts = ['', ...f.opts, ...(val && !f.opts.includes(val) ? [val] : [])];
+        input = `<select class="xin pv" data-k="${id}"${f.req ? ' aria-required="true"' : ''}>${opts.map((o) => `<option value="${esc(o)}"${o === val ? ' selected' : ''}>${o ? esc(o) : 'Choose…'}</option>`).join('')}</select>`;
+      } else if (f.kind === 'check') input = `<input type="checkbox" class="pv" data-k="${id}"${val ? ' checked' : ''}>`;
+      else input = `${f.num ? `<button class="pst" data-x="part-step" data-dir="-1" tabindex="-1" aria-label="Decrease ${esc(f.label)}">−</button>` : ''}<input class="xin pv${f.num ? ' num' : ''}" data-k="${id}" value="${esc(val)}" placeholder="${esc(f.ph || '')}" spellcheck="false" aria-label="${esc(f.label)}${f.req ? ' (required)' : ''}"${f.req ? ' aria-required="true"' : ''}>${f.num ? `<button class="pst" data-x="part-step" data-dir="1" tabindex="-1" aria-label="Increase ${esc(f.label)}">+</button>` : ''}${f.kind === 'color' ? `<input type="color" class="pvsw" aria-label="Pick ${esc(f.label)}${val ? '' : ' (currently the text color)'}" title="${val ? '' : 'Not set: the border uses the text color (currentColor), shown here'}" value="${val ? toHex(val) : toHex(getComputedStyle(P.el).color)}">` : ''}`;
+      return `<div class="pf${f.req ? ' req' : ''}${f.kind === 'check' ? ' chk' : ''}${f.wide ? ' wide' : ''}">${label}<span class="pfi">${input}${f.rm !== undefined ? `<button class="icon" data-x="part-rm" data-i="${f.rm}" title="Remove this stop" aria-label="Remove stop ${f.rm + 1}">✕</button>` : ''}</span></div>`;
+    };
+    box.innerHTML = `<div class="pf-grid">${fam.fields(parts).map(field).join('')}</div>${fam === gradientFamily ? '<button class="xb" data-x="part-add">+ Add color stop</button>' : ''}<div class="parts-msg" aria-live="polite"></div><div class="parts-key"><abbr class="req">*</abbr> required. Other fields can stay empty. The CSS above is the exact value.</div>`;
+    box._parts = parts;
+    box._fields = fam.fields(parts);
+    if (usedDraft) partsEdit(row);
+  }
+  const rowId = (row) => `${row.dataset.key}|${row.dataset.prop}`;
+  // Opens one row's Fields section and closes every other; opening the open one closes it.
+  function toggleFields(row, want) {
+    const id = rowId(row);
+    P.fieldsOpen = (want ?? P.fieldsOpen !== id) ? id : null;
+    for (const r of qa('.style-rows .st')) renderParts(r);
+  }
+
+  function readParts(row) {
+    const box = row.querySelector('.parts');
+    const parts = { ...(box._parts || {}) };
+    for (const inp of box.querySelectorAll('.pv')) parts[inp.dataset.k] = inp.type === 'checkbox' ? (inp.checked ? 'inset' : '') : inp.value;
+    return parts;
+  }
+
+  // A field was edited: compose the value, and apply it only when it is complete and valid CSS.
+  const fam0 = (prop) => compositeFor(prop);
+  function partsEdit(row, fromBlur) {
+    const prop = row.dataset.prop;
+    const box = row.querySelector('.parts');
+    const res = composeCss(prop, readParts(row));
+    const msg = box.querySelector('.parts-msg');
+    for (const inp of box.querySelectorAll('.pv')) inp.classList.remove('need');
+    const id = rowId(row);
+    if (res.error) {
+      P.partsDraft[id] = { raw: row.querySelector('.sv').value, parts: readParts(row) };
+      msg.textContent = res.error;
+      msg.classList.add('bad');
+      for (const k of res.need || []) box.querySelector(`.pv[data-k="${k}"]`)?.classList.add('need');
+      // A border that was added in this edit and is no longer complete leaves the preview altogether: no stale
+      // earlier value, no implicit width. A border the page or a saved note already had is left as it is.
+      const own = P.tweaks[prop];
+      if (fam0(prop) === borderFamily && (res.need || []).length && row.dataset.added === '1' && own && !own.snap && tweakKey(own) === row.dataset.key) {
+        const input = row.querySelector('.sv');
+        input.value = '';
+        P.partsDraft[id] = { raw: '', parts: readParts(row) };
+        row._partsEdit = true;
+        try { styleInput(row, ''); } finally { row._partsEdit = false; }
+      }
+      return;
+    }
+    delete P.partsDraft[id];
+    msg.textContent = '';
+    msg.classList.remove('bad');
+    const input = row.querySelector('.sv');
+    if (fromBlur) for (const inp of box.querySelectorAll('.pv.num')) { const shown = res.parts[inp.dataset.k]; if (shown !== undefined && shown !== inp.value) inp.value = shown; }
+    input.value = res.value;
+    row._partsEdit = true;
+    try { styleInput(row, res.value); } finally { row._partsEdit = false; }
   }
 
   function styleInput(row, raw) {
@@ -2572,7 +3331,8 @@
       if (added) P.cssAdded = P.cssAdded.filter((a) => !(a.key === key && a.prop === prop));
     }
     restoreInline(P.el, prop);
-    paintCss(P.el, P);
+    showPreviews();
+    applyAllPreviews(); // saved notes on this element come back under this note's values
     refreshRow(row);
     realign();
     renderElementEditor();
@@ -2590,7 +3350,7 @@
     record();
     restoreInline(P.el, prop);
     delete P.tweaks[prop];
-    paintCss(P.el, P);
+    applyAllPreviews();
     buildStyleRows();
     updateScope();
     realign();
@@ -2602,7 +3362,7 @@
     const { prop, key } = row.dataset;
     const t = rowTweak(row);
     record();
-    if (t) { delete P.tweaks[prop]; restoreInline(P.el, prop); paintCss(P.el, P); }
+    if (t) { delete P.tweaks[prop]; restoreInline(P.el, prop); applyAllPreviews(); }
     P.cssAdded = P.cssAdded.filter((a) => !(a.key === key && a.prop === prop));
     buildStyleRows();
     updateScope();
@@ -2660,22 +3420,58 @@
     const res = propResults(query);
     box.innerHTML = res.length
       ? res.map((r, i) => `<button type="button" class="css-add-opt${i === 0 ? ' first' : ''}" role="option" data-x="css-add-pick" data-prop="${esc(r.prop)}">${esc(r.prop)}${r.custom ? ' <span class="sub">custom property</span>' : ''}</button>`).join('')
-      : `<div class="sub" style="padding:4px 8px">${query.trim().startsWith('--') ? (validCustom(query.trim()) ? 'Already in this rule.' : 'A custom property name is -- followed by letters, digits, - or _.') : 'No matching property, or it’s already in this rule.'}</div>`;
+      : `<div class="sub" style="padding:4px 8px">${query.trim().startsWith('--') ? (validCustom(query.trim()) ? 'Already in this rule.' : 'A custom property name is -- followed by letters, digits, - or _.') : /gradient|\(|^(url|calc|var|rgb|hsl)/i.test(query.trim()) ? 'No matching CSS property. Gradients and other functions are values: add background-image or background, then edit its value.' : 'No matching property, or it’s already in this rule.'}</div>`;
+    placeAddBox();
   }
   function openAddProp() {
-    const boxEl = q('.css-add-box');
-    holdPosition(q('[data-x="css-add"]'), () => { boxEl.hidden = false; });
+    q('[data-x="css-add"]').scrollIntoView({ block: 'nearest' }); // only does anything when the button is partly out of view
+    q('.css-add-box').hidden = false;
+    window.addEventListener('pointerdown', addOutside, true);
     const input = q('.css-add-q');
     input.value = '';
     renderAddResults();
+    placeAddBox(true);
     input.focus({ preventScroll: true });
   }
-  function closeAddProp() { const b = q('.css-add-box'); if (b) b.hidden = true; }
+  // A press anywhere outside the property search (also on the page) closes it.
+  const addOutside = (e) => { if (!e.composedPath().includes(q('.css-add'))) closeAddProp(); };
+  function closeAddProp() { const b = q('.css-add-box'); if (b) b.hidden = true; window.removeEventListener('pointerdown', addOutside, true); }
+  // Keeps the open property list fully inside the window: below the button when it fits, otherwise above it, with
+  // the list scrolling inside its own height. Closed when the button is scrolled out of the note's view.
+  function placeAddBox(opening = false) {
+    const box = q('.css-add-box');
+    const btn = q('[data-x="css-add"]');
+    if (!box || box.hidden || !btn) return;
+    const pr = q('.pop').getBoundingClientRect();
+    let br = btn.getBoundingClientRect();
+    if (br.bottom < pr.top || br.top > pr.bottom) {
+      if (!opening) { closeAddProp(); return; }
+      btn.scrollIntoView({ block: 'nearest' });
+      br = btn.getBoundingClientRect();
+    }
+    const cr = q('.css-add').getBoundingClientRect();
+    const m = 8;
+    const res = box.querySelector('.css-add-res');
+    box.style.maxHeight = '';
+    res.style.maxHeight = 'none';
+    const head = box.offsetHeight - res.offsetHeight;
+    const want = head + Math.min(res.scrollHeight + 2, 240);
+    const below = innerHeight - br.bottom - m - 4;
+    const above = br.top - m - 4;
+    const down = want <= below || below >= above;
+    const room = Math.max(90, down ? below : above);
+    const width = Math.min(cr.width, innerWidth - 2 * m);
+    Object.assign(box.style, { left: `${Math.max(m, Math.min(cr.left, innerWidth - width - m))}px`, width: `${width}px`, maxHeight: `${room}px`, top: down ? `${br.bottom + 4}px` : 'auto', bottom: down ? 'auto' : `${innerHeight - br.top + 4}px` });
+    res.style.maxHeight = '';
+    box.classList.toggle('up', !down);
+  }
   function addCssProp(prop) {
     if (!P.el || !prop || RESERVED[prop]) return;
     const model = cssModel(P.el);
     const rule = currentRule(model, missingRuleEntries(model));
     if (!qa('.style-rows .st').some((r) => r.dataset.prop === prop)) P.cssAdded = [...P.cssAdded, { key: rule.key, prop }];
+    // A property that has separate fields opens them (and closes any other section).
+    if (compositeFor(prop)) P.fieldsOpen = `${rule.key}|${prop}`;
     closeAddProp();
     holdPosition(q('[data-x="css-add"]'), () => buildStyleRows());
     const input = qa('.style-rows .st').find((r) => r.dataset.prop === prop)?.querySelector('.sv');
@@ -2697,7 +3493,7 @@
       delete P.tweaks[prop];
     }
     P.cssAdded = [];
-    paintCss(P.el, P);
+    applyAllPreviews();
     buildStyleRows();
     updateScope();
     buildAlignRows();
@@ -2714,7 +3510,7 @@
     const used = new Set(b.guides.map((g) => g.name));
     let name = 'A';
     for (let c = 65; c < 91; c++) { name = String.fromCharCode(c); if (!used.has(name)) break; }
-    b.guides.push({ id: BL.uid(), name, axis, pos: axis === 'x' ? scrollX + innerWidth / 2 : scrollY + innerHeight / 2, path: here(), vw: innerWidth, vh: innerHeight });
+    b.guides.push({ id: BL.uid(), name, axis, pos: axis === 'x' ? scrollX + innerWidth / 2 : scrollY + innerHeight / 2, origin: location.protocol === 'file:' ? 'file://' : location.origin, path: here(), vw: innerWidth, vh: innerHeight });
     S.prefs.guidesHidden = false;
     BL.saveBatch();
     renderAnn();
@@ -2779,7 +3575,7 @@
     const gs = guidesHere();
     box.innerHTML = gs.length ? gs.map((g) => {
       const info = P.alignInfo[g.id];
-      return `<div class="strip" style="flex-wrap:wrap;margin-top:4px"><b>Guide ${esc(g.name)} · ${g.axis === 'x' ? 'vertical' : 'horizontal'} ${Math.round(g.pos)}px</b><button class="xb" data-x="g-del" data-id="${esc(g.id)}" title="Delete this guide and clear its alignment assignments">✕ Delete guide</button><select class="xin align-edge" data-g="${esc(g.id)}" aria-label="Edge for guide ${esc(g.name)}">${EDGES[g.axis].map(([k, l]) => `<option value="${k}"${P.align[g.id] === k ? ' selected' : ''}>${l}</option>`).join('')}</select><button class="xb" data-x="align-go" data-g="${esc(g.id)}" title="Align the active instance to this guide">Align to guide</button>${info ? `<span class="sub">${esc(BL.label(P.el))}: ${P.align[g.id]} aligned · ${rnd(info.shift)}px</span><button class="xb" data-x="align-clear" data-g="${esc(g.id)}" title="Undo this instance's alignment to this guide">Undo alignment</button>` : ''}</div>`;
+      return `<div class="strip" style="flex-wrap:wrap;margin-top:4px"><b>Guide ${esc(g.name)} · ${g.axis === 'x' ? 'vertical' : 'horizontal'} ${Math.round(g.pos)}px</b><button class="xb danger" data-x="g-del" data-id="${esc(g.id)}" title="Delete this guide and clear its alignment assignments">✕ Delete guide</button><select class="xin align-edge" data-g="${esc(g.id)}" aria-label="Edge for guide ${esc(g.name)}">${EDGES[g.axis].map(([k, l]) => `<option value="${k}"${P.align[g.id] === k ? ' selected' : ''}>${l}</option>`).join('')}</select><button class="xb" data-x="align-go" data-g="${esc(g.id)}" title="Align the active instance to this guide">Align to guide</button>${info ? `<span class="sub">${esc(BL.label(P.el))}: ${P.align[g.id]} aligned · ${rnd(info.shift)}px</span><button class="xb" data-x="align-clear" data-g="${esc(g.id)}" title="Undo this instance's alignment to this guide">Undo alignment</button>` : ''}</div>`;
     }).join('') : '<div class="sub">Create a guide above, drag it into position, choose an element and edge, then click Align to guide.</div>';
     if (!P.el && gs.length) box.insertAdjacentHTML('beforeend', '<div class="sub">Select an element first to align it.</div>');
   }
@@ -3223,10 +4019,70 @@
     return { left, top, width: rg.w, height: rg.h };
   }
 
-  function renderMarks() {
+  // Marks for the saved notes and the editing selection, then the "Mapped" markers on product cards.
+  function renderMarks() { renderNoteMarks(); renderPm(); }
+
+  // "Mapped" markers: a small chip on the card a saved note has mapped to a product. Only a card that is confirmed on
+  // the page right now gets one (a changed, ambiguous or missing card is never guessed at), and only the chip takes
+  // clicks, so the page and element picking behave as before. The overlay lives in Blueline's own panel: it is gone
+  // when Blueline is closed and the page's HTML is never changed.
+  const pmEval = new Map(); // note id -> { state, el }
+  function pmRefresh() {
+    const C = cardsApi();
+    pmEval.clear();
+    if (C) {
+      for (const it of S.batch?.items || []) {
+        if (!mapped(it) || it.path !== here()) continue;
+        const card = it.productMapping.card?.v ? it.productMapping.card : null;
+        if (!card) continue;
+        try { const r = C.evaluate(card); pmEval.set(it.id, { state: r.state, el: r.state === 'confirmed' ? r.el : null }); } catch { /* no marker */ }
+      }
+    }
+    renderPm();
+  }
+  const pmAttention = (it) => {
+    const Lb = libApi();
+    const chk = mapChecks.get(it.id);
+    return !!Lb && (Lb.mappingStatus(it.productMapping).identity === 'pending' || (!!chk && chk.state !== 'current' && chk.state !== 'unknown'));
+  };
+  function renderPm() {
+    const box = q('.x-pmbox');
+    if (!box) return;
+    const Lb = libApi();
+    box.classList.toggle('quiet', !!S.picking);
+    const specs = [];
+    for (const it of S.batch?.items || []) {
+      const ev = pmEval.get(it.id);
+      if (!Lb || !ev || !ev.el || !ev.el.isConnected || !mapped(it)) continue;
+      const m = it.productMapping;
+      const title = Lb.effectiveValues(m).title || m.product.name || m.product.key;
+      const pend = T.pmPending && T.pmPending.id === it.id ? T.pmPending : null; // a replacement being edited in the Product Mapping window
+      specs.push({ k: `pm:${it.id}`, id: it.id, el: ev.el, title: pend ? pend.title : title, sku: m.variant?.sku || m.product.sku || '', attn: !pend && pmAttention(it), pend: !!pend });
+    }
+    reconcile(box, (s) => s.k, specs,
+      () => mk('<div class="pmk"><button class="pmb" data-x="pm-open"></button></div>'),
+      (n, s) => {
+        const r = s.el.getBoundingClientRect();
+        const off = r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth || (r.width === 0 && r.height === 0);
+        n.style.display = off ? 'none' : '';
+        Object.assign(n.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+        const b = n.querySelector('.pmb');
+        b.dataset.id = s.id;
+        b.classList.toggle('attn', s.attn);
+        b.classList.toggle('pend', s.pend);
+        const short = s.title.length > 24 ? `${s.title.slice(0, 23)}…` : s.title;
+        b.textContent = s.pend ? `Proposed · ${short} · not saved` : `${s.attn ? 'Mapped · check' : 'Mapped'} · ${short}`;
+        const label = s.pend ? `Proposed: ${s.title}. Not saved yet. The saved mapping is unchanged.` : `Mapped to ${s.title}${s.sku ? `, SKU ${s.sku}` : ''}.${s.attn ? ' Needs attention.' : ''} Open Product Mapping.`;
+        b.title = label; b.setAttribute('aria-label', label);
+        b.style.top = `${Math.min(Math.max(6, 6 - r.top), Math.max(6, r.height - 28))}px`;
+      });
+  }
+
+  function renderNoteMarks() {
     const box = q('.x-marksbox');
     if (!box) return;
-    const badgesOnly = S.prefs.marks === 'badges';
+    const badgesOnly = !outlinesOn();
+    box.classList.toggle('quiet', badgesOnly);
     const specs = [];
     const slotOf = new Map();
     (S.batch?.items || []).forEach((it, idx) => {
@@ -3235,7 +4091,9 @@
       if (it.kind === 'region') { specs.push({ k: `${it.id}:r`, num: idx + 1, id: it.id, cls: `${cls} region`, rect: regionRect(it) }); return; }
       // The note being edited shows its current selection, so a removed element's outline goes at once.
       const els = S.pop && P.item?.id === it.id ? P.els : targetsOf(it);
-      els.forEach((el, i) => { const n = slotOf.get(el) || 0; slotOf.set(el, n + 1); specs.push({ k: `${it.id}:${i}`, num: idx + 1, id: it.id, cls, el, slot: n }); });
+      // A mapped note whose card is confirmed on the page has the green Mapped marker there; its numbered pin would only repeat it.
+      const cardEl = mapped(it) ? pmEval.get(it.id)?.el : null;
+      els.forEach((el, i) => { const n = slotOf.get(el) || 0; slotOf.set(el, n + 1); specs.push({ k: `${it.id}:${i}`, num: idx + 1, id: it.id, cls: cardEl && (cardEl === el || cardEl.contains(el)) ? `${cls} nopin` : cls, el, slot: n }); });
     });
     reconcile(box, (s) => s.k, specs,
       () => mk('<div class="mk"><button class="bd" data-x="mk-open"></button></div>'),
@@ -3248,8 +4106,8 @@
         const bd = n.querySelector('.bd');
         bd.textContent = String(s.num);
         bd.dataset.id = s.id;
-        bd.style.left = `${Math.max(4, Math.min(innerWidth - 26, r.left - 11 + (s.slot || 0) * 25)) - r.left - 2}px`;
-        bd.style.top = `${Math.max(4, r.top - 11) - r.top - 2}px`;
+        bd.style.left = `${Math.max(4, Math.min(innerWidth - 26, r.left - 11 + (s.slot || 0) * 25)) - r.left}px`;
+        bd.style.top = `${Math.max(4, r.top - 11) - r.top}px`;
       });
     // the element alignment reference, while the Align panel shows it
     const rf = S.pop && shownTool() === 'align' && P.alignUi.mode === 'element' && P.alignUi.ref?.el?.isConnected ? P.alignUi.ref.el : null;
@@ -3260,6 +4118,26 @@
       const r = rf.getBoundingClientRect();
       Object.assign(rb.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
       rb.querySelector('.hl-tag').classList.toggle('below', r.top < 24);
+    }
+    // product card: the proposal, the saved card while its section is open, and a part shown for a moment
+    const ct = [];
+    if (S.pop && cardOpen()) {
+      const t = cardTarget();
+      const u = P.cardUi;
+      const stt = P.cardCheck && P.card ? P.cardCheck.state : '';
+      if (t) ct.push({ k: 'card', el: t, cls: u && u.kind === 'propose' && u.broad[u.i] ? 'broad' : '', tag: u ? (u.kind === 'propose' ? (u.i === u.at ? 'Likely product card' : 'Card (proposed)') : 'Card candidate') : stt === 'changed' ? 'Suggested card (confirm it)' : 'Product card' });
+    }
+    if (S.pop && P.cardSlot && P.cardSlot.isConnected) ct.push({ k: 'slot', el: P.cardSlot, cls: 'slot', tag: 'Part' });
+    for (const n of [...box.querySelectorAll('.cardb')]) if (!ct.some((c) => c.k === n.dataset.k)) n.remove();
+    for (const c of ct) {
+      let n = box.querySelector(`.cardb[data-k="${c.k}"]`);
+      if (!n) { n = mk(`<div class="cardb" data-k="${c.k}"><span class="hl-tag"></span></div>`); box.appendChild(n); }
+      const r = c.el.getBoundingClientRect();
+      n.className = `cardb ${c.cls}`;
+      Object.assign(n.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+      const tg = n.querySelector('.hl-tag');
+      tg.textContent = c.tag;
+      tg.classList.toggle('below', r.top < 24);
     }
     // selection boxes while composing
     const sb = [];
@@ -3302,7 +4180,7 @@
     const list = [];
     // "Outlines: off" hides other notes' drawings, never the marks being drawn or edited now.
     // Saved notes show their selection with outlines and badges; their area-selection boxes are left off.
-    if (S.prefs.marks !== 'badges') for (const it of itemsHere()) { if (S.pop?.item?.id === it.id) continue; (it.marks || []).forEach((m) => { if (!m.auto) list.push(m); }); }
+    for (const it of itemsHere()) { if (S.pop?.item?.id === it.id) continue; (it.marks || []).forEach((m) => { if (!m.auto) list.push(m); }); }
     // The dragged area's box marks an empty-area note on the page. When the drag selected elements, their
     // outlines already show the selection, so the box is kept for the marked-up screenshot but not drawn here.
     (P.marks || []).forEach((m) => { if (!m.auto || !P.els.length) list.push(m); });
@@ -3350,8 +4228,8 @@
       t.textContent = pos.replace('-', ' ');
       g.appendChild(t);
     };
-    if (S.prefs.marks !== 'badges') for (const it of itemsHere()) if (it.move) draw(BL.query(it.el.selector), BL.query(it.move.to.selector), it.move.position);
-    if (S.prefs.marks !== 'badges') for (const it of itemsHere()) for (const edit of it.elementEdits || []) if (edit.move) draw(BL.query(edit.el.selector), BL.query(edit.move.to.selector), edit.move.position);
+    for (const it of itemsHere()) if (it.move) draw(BL.query(it.el.selector), BL.query(it.move.to.selector), it.move.position);
+    for (const it of itemsHere()) for (const edit of it.elementEdits || []) if (edit.move) draw(BL.query(edit.el.selector), BL.query(edit.move.to.selector), edit.move.position);
     if (S.pop) { rememberElement(); for (const [el, r] of P.edits) if (r.move) draw(el, r.move.toEl, r.move.position); }
   }
 
@@ -3388,13 +4266,20 @@
     const bits = [`${uiType(it)} · ${where}`];
     if (it.also?.length) bits.push(`+${it.also.length} more`);
     if (it.marks?.some((m) => !m.auto)) bits.push('drawn on');
+    if (mapped(it)) { const ev = pmEval.get(it.id); bits.push(ev && ev.state !== 'confirmed' && ev.state !== 'hidden' ? 'mapped \u00b7 card needs confirmation' : pmAttention(it) ? 'mapped \u00b7 needs attention' : 'mapped'); }
     if (it.path !== here()) bits.unshift(it.path);
     return bits.join(' · ');
   }
 
+  let pmSig = '';
   hooks.afterRender = () => {
     applyPanelPos();
     updateToolbar();
+    syncLibBtn();
+    pmRefresh();
+    // Compare each mapped note with its list once per change (async), so markers and the notes list can show what needs attention.
+    const sig = (S.batch?.items || []).filter(mapped).map((it) => `${it.id}:${it.productMapping.mappedAt}:${it.productMapping.variant?.variantId || ''}`).join('|');
+    if (sig !== pmSig) { pmSig = sig; if (sig) checkAllMappings().then(() => { if (S.ui) renderPm(); }).catch(() => {}); }
     renderAnn();
     applyAllPreviews();
     const empty = q('.empty');
@@ -3412,7 +4297,7 @@
       if (note && !it.note) { note.textContent = noteSummary(it) + (isReference(it) ? ' (reference only)' : ''); note.classList.add('auto-note'); }
     }
   };
-  hooks.onSchedule = () => { renderAnn(); applyAllPreviews(); };
+  hooks.onSchedule = () => { renderAnn(); applyAllPreviews(); placeAddBox(); };
 
   // ------------------------------------------------------------------ drawing on the page
 
@@ -3731,15 +4616,19 @@
         </button>
         <div class="measure-actions">
           <button type="button" class="xb" data-x="measure-change" data-i="${i}" ${P.el ? '' : 'disabled'} title="Choose another second element without changing the original selected element">Change target</button>
-          <button type="button" class="xb" data-x="rm-measure" data-i="${i}" title="Remove this measurement from the note">Remove</button>
+          <button type="button" class="xb danger" data-x="rm-measure" data-i="${i}" title="Remove this measurement from the note">Remove</button>
         </div>
       </div>`).join('') : `<div class="sub">${P.els.length >= 3 ? 'No measurements yet. Choose two selected elements above.' : 'No measurements yet.'}</div>`;
   }
 
   function syncToolPanels() {
     if (!S.ui) return;
-    for (const btn of qa('.tool-main')) btn.setAttribute('aria-pressed', String(shownTool() === btn.dataset.tool));
-    for (const p of qa('[data-tool-panel]')) p.hidden = p.dataset.toolPanel !== shownTool();
+    for (const btn of qa('.tool-main')) {
+      const on = shownTool() === btn.dataset.tool && (btn.dataset.tool !== 'elements' || toolboxOpen);
+      btn.setAttribute('aria-pressed', String(on));
+      if (btn.dataset.tool === 'elements') btn.setAttribute('aria-expanded', String(on));
+    }
+    for (const p of qa('[data-tool-panel]')) p.hidden = p.dataset.toolPanel !== shownTool() || (p.dataset.toolPanel === 'elements' && !toolboxOpen);
     const mb = q('[data-x="tb-measure"]');
     if (mb) {
       if (!mb.dataset.readyTitle) mb.dataset.readyTitle = mb.title;
@@ -3775,7 +4664,9 @@
   function activateTool(name) {
     const next = name === 'elements' || activeTool === name ? null : name;
     if (next !== 'draw') stopDrawing();
-    holdPosition(q('.tool-ribbon'), () => { activeTool = next; syncToolPanels(); });
+    // Toolbox: pressing it opens or closes its actions; pressing it while another tool is open switches to it, open.
+    const open = name === 'elements' ? (activeTool ? true : !toolboxOpen) : toolboxOpen;
+    holdPosition(q('.tool-ribbon'), () => { activeTool = next; toolboxOpen = open; syncToolPanels(); });
   }
 
   function renderStrips() {
@@ -3790,7 +4681,7 @@
     if (P.match) rows.push(`<div class="strip"><span>Match <b>${esc(P.match.label)}</b>: ${P.match.diffs.length} difference${P.match.diffs.length === 1 ? '' : 's'}</span><span><button class="xb" data-x="match-apply">Preview</button>${rm('rm-match')}</span></div>`);
     if (P.textEdit) rows.push(`<div class="strip"><span>Text: “${esc(clip(P.textEdit.before, 24))}” → “${esc(clip(P.textEdit.after, 24))}”</span>${rm('rm-text')}</div>`);
     const samples = q('.sampled-colors');
-    samples.innerHTML = P.colors.map((c, i) => `<div class="strip"><span><span class="swatch" style="background:${esc(c)}"></span>${esc(c)}</span><button class="xb" data-x="color-copy" data-i="${i}" title="Copy this hex color">Copy</button><button class="xb" data-x="color-remove" data-i="${i}" title="Remove this sampled color">Remove</button></div>`).join('');
+    samples.innerHTML = P.colors.map((c, i) => `<div class="strip"><span><span class="swatch" style="background:${esc(c)}"></span>${esc(c)}</span><button class="xb" data-x="color-copy" data-i="${i}" title="Copy this hex color">Copy</button><button class="xb danger" data-x="color-remove" data-i="${i}" title="Remove this sampled color">Remove</button></div>`).join('');
     if (P.variant) {
       const v = P.variant;
       const sr = sheet && v.sku ? sheet.rows.find((r) => r.sku === v.sku) : null;
@@ -3803,7 +4694,10 @@
   // ------------------------------------------------------------------ event delegation
 
   function onClick(e) {
+    // The conflict dialog is closed only by its own buttons (a click on the backdrop would leave Save note waiting).
+    if (e.target.classList && e.target.classList.contains('cf-modal')) return;
     if (e.target.classList && e.target.classList.contains('xmodal')) { e.target.hidden = true; return; }
+    if (q('.css-add-box')?.hidden === false && !e.target.closest('.css-add')) closeAddProp();
     if (e.target.closest('[data-act="side"]')) { sessionPos = null; applyPanelPos(); return; }
     const chip = e.target.closest('[data-bp]');
     if (chip) {
@@ -3844,20 +4738,28 @@
       case 'sheet': openSheet(); break;
       case 'previews': S.prefs.previews = S.prefs.previews === false; BL.savePrefs(); applyAllPreviews(); updateToolbar(); break;
       case 'undo': undoAction(); break;
-      case 'marks': S.prefs.marks = S.prefs.marks === 'badges' ? 'full' : 'badges'; BL.savePrefs(); updateToolbar(); renderAnn(); break;
+      case 'marks': S.prefs.marks = outlinesOn() ? 'badges' : 'full'; BL.savePrefs(); updateToolbar(); renderAnn(); break;
       case 'bar-cancel': if (T.pick) endPick(null); else if (D.tool) stopDrawing(); else if (A.on) setAnnotate(false); break;
       case 'g-v': addGuide('x'); break;
       case 'g-h': addGuide('y'); break;
       case 'g-show': S.prefs.guidesHidden = !S.prefs.guidesHidden; BL.savePrefs(); renderAnn(); updateToolbar(); break;
       case 'g-eye': { const g = (S.batch?.guides || []).find((x2) => x2.id === b.dataset.id); if (g) { g.hidden = !g.hidden; BL.saveBatch(); renderAnn(); renderGuideList(); } break; }
       case 'g-del': removeGuide(b.dataset.id); break;
+      case 'pm-open': {
+        if (S.picking) break;
+        const pid = b.dataset.id;
+        if (S.pop && P.item?.id !== pid) { toast('Save or cancel the note you\u2019re editing first.'); break; }
+        if (S.pop) { mapOpen(); break; }
+        mapOpenFor(pid);
+        break;
+      }
       case 'mk-open': { const it = BL.findItem(b.dataset.id); if (!it) break; if (S.pop) toast('Save or cancel the note you\u2019re editing first.'); else hooksFocus(it); break; }
       case 'sel-clear': clearSelection(); break;
       case 'sel-rm': removeSelected(+b.dataset.i); break;
       case 'sel-rm-missing': removeMissing(+b.dataset.i); break;
       case 'dictate': toggleDictation(); break;
       case 'edittext': startEditText(); break;
-      case 'tb-measure': holdPosition(b, () => { T.measureOpen = true; renderMeasurePanel(); }); startMeasureFlow(); break;
+      case 'tb-measure': holdPosition(b, () => { T.measureOpen = true; toolboxOpen = true; renderMeasurePanel(); }); startMeasureFlow(); break;
       case 'sel-showall': holdPosition(q('.x-sel'), () => { T.selOpen = !T.selOpen; renderSel(); }); break;
       case 'al-pick': pickAlignRef(); break;
       case 'al-clear': clearElementAlign(); break;
@@ -3874,6 +4776,20 @@
       case 'measure-show': visibleMeasureIndex = +b.dataset.i; renderMeasurePanel(); renderAnn(); break;
       case 'measure-change': changeMeasureTarget(+b.dataset.i); break;
       case 'pop-color': dropper((hex) => { record(); P.colors.push(hex); copyText(hex); renderStrips(); toast(`${hex} copied`); }); break;
+      case 'part-step': {
+        const row = b.closest('.st'); const inp = b.parentElement.querySelector('.pv');
+        const f = row.querySelector('.parts')._fields.find((x) => x.k === inp.dataset.k);
+        inp.value = stepNum(f, inp.value, +b.dataset.dir, e.shiftKey);
+        partsEdit(row, true); break;
+      }
+      case 'st-fields': toggleFields(b.closest('.st')); break;
+      case 'part-add': { const row = b.closest('.st'); const parts = readParts(row); parts.n = String((+parts.n || 2) + 1); parts[`c${parts.n - 1}`] = ''; parts[`p${parts.n - 1}`] = ''; renderParts(row, parts); break; }
+      case 'part-rm': {
+        const row = b.closest('.st'); const parts = readParts(row); const n = +parts.n || 2; const at = +b.dataset.i;
+        for (let i = at; i < n - 1; i++) { parts[`c${i}`] = parts[`c${i + 1}`]; parts[`p${i}`] = parts[`p${i + 1}`]; }
+        delete parts[`c${n - 1}`]; delete parts[`p${n - 1}`]; parts.n = String(n - 1);
+        renderParts(row, parts); partsEdit(row); break;
+      }
       case 'st-drop': { const row = b.closest('.st'); dropper((hex) => { row.querySelector('.sv').value = hex; styleInput(row, hex); }); break; }
       case 'st-dec': case 'st-inc': { const row = b.closest('.st'); const inp = row.querySelector('.sv'); styleInput(row, stepVal(row.dataset.prop, inp.value || row.dataset.from || row.dataset.base, x === 'st-inc' ? 1 : -1, e.shiftKey)); inp.value = rowValue(row); break; }
       case 'css-add': if (q('.css-add-box').hidden) openAddProp(); else closeAddProp(); break;
@@ -3899,6 +4815,23 @@
       case 'color-remove': record(); P.colors.splice(+b.dataset.i, 1); renderStrips(); break;
       case 'rm-colors': record(); P.colors = []; renderStrips(); break;
       case 'rm-variant': P.variant = null; renderStrips(); break;
+      case 'card-start': cardStart(); break;
+      case 'card-up': cardStep(1); break;
+      case 'card-down': cardStep(-1); break;
+      case 'card-next': cardStep(1); break;
+      case 'card-prev': cardStep(-1); break;
+      case 'card-ok': cardConfirm(); break;
+      case 'card-cancel': P.cardUi = null; renderCard(); renderMarks(); break;
+      case 'card-clear': cardClear(); break;
+      case 'card-check': cardRecheck(); break;
+      case 'card-cands': cardCandidates(); break;
+      case 'card-slot': cardShowSlot(+b.dataset.i); break;
+      case 'map-start': mapOpen(); break;
+      case 'lib-home': if (BL.libraryUi?.open) BL.libraryUi.open({ existing: true }); break;
+      case 'card-fields': P.cardFields = !P.cardFields; renderCard(); break;
+      case 'map-remove': P.mapRm = true; renderCard(); break;
+      case 'map-remove-no': P.mapRm = false; renderCard(); break;
+      case 'map-remove-ok': mapRemove(); break;
       case 'var-product': pickProduct(b.dataset.handle); break;
       case 'var-variant': pickVariant(+b.dataset.i); break;
       case 'ov-close': q('.xov').hidden = true; setOn('overlay', false); break;
@@ -3926,6 +4859,8 @@
     const t = e.target;
     if (t.classList.contains('draw-custom')) { setDrawingColor(t.value); return; }
     if (t.classList.contains('sv')) { styleInput(t.closest('.st'), t.value); return; }
+    if (t.classList.contains('pv') && t.type !== 'checkbox' && t.tagName !== 'SELECT') { partsEdit(t.closest('.st')); return; }
+    if (t.classList.contains('pvsw')) { const inp = t.parentElement.querySelector('.pv'); inp.value = t.value; partsEdit(t.closest('.st')); return; }
     if (t.classList.contains('css-add-q')) { renderAddResults(); return; }
     if (t.classList.contains('sw')) { const row = t.closest('.st'); row.querySelector('.sv').value = t.value; styleInput(row, t.value); return; }
     if (t.classList.contains('figma-in')) { P.figma = t.value.trim(); return; }
@@ -3933,10 +4868,22 @@
     if (t.dataset.ov) onOverlayInput(t);
   }
 
+  // Up / Down in a numeric field steps it (Shift: ten at a time).
+  function onPartKey(e) {
+    const t = e.target;
+    if (!t.classList?.contains('num') || !t.classList.contains('pv') || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+    e.preventDefault();
+    const row = t.closest('.st');
+    const f = row.querySelector('.parts')._fields.find((x) => x.k === t.dataset.k);
+    t.value = stepNum(f, t.value, e.key === 'ArrowUp' ? 1 : -1, e.shiftKey);
+    partsEdit(row, true);
+  }
+
   function onChange(e) {
     const t = e.target;
     if (t.classList.contains('element-choice')) { holdPosition(q('.element-editor'), () => chooseElement(+t.value)); return; }
     if (t.classList.contains('css-rule')) { chooseRule(t.value); return; }
+    if (t.classList.contains('pv') && (t.type === 'checkbox' || t.tagName === 'SELECT' || t.classList.contains('num'))) { partsEdit(t.closest('.st'), true); return; }
     if (t.name === 'scope') { P.scope = t.value; P.scopeTouched = true; updateScope(); }
     else if (t.classList.contains('grp-sel')) { P.groupIdx = +t.value; P.scope = 'group'; P.scopeTouched = true; updateScope(); }
     else if (t.classList.contains('mv-pos') && P.move) { P.move.position = t.value; renderAnn(); }
@@ -3947,6 +4894,17 @@
 
   function onUIKey(e) {
     const t = e.target;
+    // Enter in a single-line CSS value input commits what is valid and leaves the field; the note stays open and
+    // nothing is saved. Incomplete or invalid values keep their message. Selects, checkboxes and the property
+    // search keep their own Enter.
+    if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.altKey && t.tagName === 'INPUT' && t.type === 'text' && (t.classList.contains('sv') || t.classList.contains('pv'))) {
+      e.preventDefault();
+      e.stopPropagation();
+      const row = t.closest('.st');
+      if (t.classList.contains('sv')) { styleInput(row, t.value); t.value = rowValue(row); } else partsEdit(row, true);
+      t.blur();
+      return;
+    }
     if (t.classList?.contains('sv') && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
       e.preventDefault();
       const row = t.closest('.st');
@@ -3992,11 +4950,17 @@
     r.lang = navigator.language || 'en-US';
     r.onresult = (e) => { for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) ta.value = `${ta.value.replace(/\s*$/, ' ')}${e.results[i][0].transcript.trim()}`.trimStart(); };
     r.onerror = (e) => toast(e.error === 'not-allowed' ? 'The mic is blocked for this site. Allow it in site settings, or use your OS dictation.' : `Dictation stopped: ${e.error}`);
-    r.onend = () => { T.speech = null; setOn('dictate', false); const b = q('[data-x="dictate"]'); if (b) b.textContent = 'Speak your note'; };
+    r.onend = () => { T.speech = null; micState(false); };
     T.speech = r;
     r.start();
-    setOn('dictate', true);
-    const db = q('[data-x="dictate"]'); if (db) db.textContent = 'Listening… tap to stop';
+    micState(true);
+  }
+  // The microphone control: pressed while listening, with its label and a short live note for assistive technology.
+  function micState(on) {
+    setOn('dictate', on);
+    const b = q('[data-x="dictate"]');
+    if (b) { b.setAttribute('aria-pressed', String(!!on)); b.setAttribute('aria-label', on ? 'Stop listening' : 'Speak your note'); b.title = on ? 'Listening. Press to stop' : 'Speak your note instead of typing it'; }
+    const n = q('.mic-note'); if (n) n.textContent = on ? 'Listening\u2026' : '';
   }
 
   function togglePopHide() {
@@ -4116,8 +5080,8 @@
     const info = targetInfo(picked.el);
     P.measures[index] = { label: info.label, selector: info.selector, ...m, summary: measureText(m) };
     visibleMeasureIndex = index;
-    activeTool = null;
-    T.measureOpen = true;
+    activeTool = null; toolboxOpen = true;
+    T.measureOpen = true; toolboxOpen = true;
     syncToolPanels();
     renderAnn();
   }
@@ -4139,7 +5103,7 @@
       if (!first?.el || !S.pop) { renderAnn(); return; }
       before = { page: S.pop.page, cleared: P.cleared };
       setTarget({ els: [first.el] });
-      T.measureOpen = true;
+      T.measureOpen = true; toolboxOpen = true;
       syncToolPanels();
     }
     const done = await startMeasureTo(true);
@@ -4147,7 +5111,7 @@
       setTarget({ els: [] });
       S.pop.page = before.page;
       P.cleared = before.cleared;
-      T.measureOpen = true;
+      T.measureOpen = true; toolboxOpen = true;
       loadCompose();
     }
   }
@@ -4169,7 +5133,7 @@
     if (a !== P.el) return;
     const info = targetInfo(b);
     activeTool = null; // the measurement shows in the Toolbox
-    T.measureOpen = true;
+    T.measureOpen = true; toolboxOpen = true;
     const existing = P.measures.findIndex((m) => m.selector === info.selector);
     if (existing >= 0) {
       visibleMeasureIndex = existing;
@@ -4358,7 +5322,7 @@
     out.textContent = 'Checking…';
     const res = await checkPrices(sheet.rows, (d, n) => { out.textContent = `Checked ${d} of ${n} products…`; });
     const b = BL.ensureBatch();
-    b.priceReport = { file: sheet.name, at: Date.now(), rows: sheet.rows.length, checked: res.checked, mismatches: res.mismatches.slice(0, 40), mismatchCount: res.mismatches.length, missing: res.missing.slice(0, 20), notFound: res.notFound.slice(0, 20), skipped: res.skipped };
+    b.priceReport = { origin: location.protocol === 'file:' ? 'file://' : location.origin, file: sheet.name, at: Date.now(), rows: sheet.rows.length, checked: res.checked, mismatches: res.mismatches.slice(0, 40), mismatchCount: res.mismatches.length, missing: res.missing.slice(0, 20), notFound: res.notFound.slice(0, 20), skipped: res.skipped };
     BL.saveBatch();
     out.textContent = priceReportText(b.priceReport).join('\n');
     BL.render();
@@ -4373,6 +5337,153 @@
     if (r.skipped) L.push(`${r.skipped} rows had no handle and were skipped.`);
     return L;
   }
+
+  // ------------------------------------------------------------------ CSS conflicts between notes
+  // Settled when Save Note is clicked, one CSS change at a time: the same element, the same property, different
+  // values, and at least one screen size where both notes apply. The person picks the value to keep for each; the
+  // value that lost stays in its own note, marked `inactive` for the overlapping sizes only. Nothing else in either
+  // note changes, and the decision is part of the saved data.
+
+  // A note's CSS changes with the elements they apply to (older notes: one set of changes for every element).
+  function cssEdits(it) {
+    if (it.elementEdits) return it.elementEdits.map((e) => ({ sels: [e.el?.selector].filter(Boolean), label: e.el?.label, tweaks: e.tweaks || [] }));
+    const sels = [it.el?.selector, ...(it.also || []).map((a) => a.selector)].filter(Boolean);
+    return it.tweaks?.length ? [{ sels, label: it.el?.label, tweaks: it.tweaks }] : [];
+  }
+  const normVal = (v) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const sameTarget = (a, b) => a === b || (!!BL.query(a) && BL.query(a) === BL.query(b));
+
+  // `fresh` is the note being saved (its collected fields), `freshId` its id when it already exists.
+  function findCssConflicts(fresh, freshId) {
+    const out = [];
+    const mine = cssEdits(fresh);
+    if (!mine.length) return out;
+    for (const other of itemsHere()) {
+      if (other.id === freshId) continue;
+      for (const oe of cssEdits(other)) for (const ot of oe.tweaks) {
+        if (ot.snap) continue;
+        for (const me of mine) {
+          const target = me.sels.find((a) => oe.sels.some((b) => sameTarget(a, b)));
+          if (!target) continue;
+          for (const nt of me.tweaks) {
+            if (nt.snap || nt.prop !== ot.prop || normVal(nt.to) === normVal(ot.to)) continue;
+            const sizes = liveBps(fresh, nt).filter((b) => liveBps(other, ot).includes(b));
+            if (sizes.length) out.push({ id: `c${out.length}`, target, label: me.label || target, prop: nt.prop, sizes, other, otherTweak: ot, freshTweak: nt });
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  const setAside = (t, sizes) => { const have = t.inactive?.bps || []; t.inactive = { bps: ALL_BPS.filter((b) => have.includes(b) || sizes.includes(b)) }; };
+  const sizeWords = (sizes) => (ALL_BPS.every((b) => sizes.includes(b)) ? 'All screen sizes' : ALL_BPS.filter((b) => sizes.includes(b)).map((b) => b[0].toUpperCase() + b.slice(1)).join(' + '));
+
+  // Applies the choices: "existing" sets the new note's value aside, "new" sets the existing note's value aside.
+  // The existing note is looked up again by id (a change made in another tab replaces the saved notes while the
+  // dialog is open); a note that is gone needs no choice.
+  function applyConflictChoices(list, choices) {
+    for (const c of list) {
+      if (choices[c.id] === 'existing') setAside(c.freshTweak, c.sizes);
+      else if (choices[c.id] === 'new') {
+        const it = (S.batch?.items || []).find((i) => i.id === c.other.id);
+        const t = it && cssEdits(it).filter((e) => e.sels.some((x) => sameTarget(x, c.target))).flatMap((e) => e.tweaks).find((x) => x.prop === c.prop && !x.snap);
+        if (t) setAside(t, c.sizes);
+      }
+    }
+  }
+
+  // A set-aside value is only kept while a note that replaced it still applies. When the other note is deleted or
+  // no longer changes that property at those sizes, the value applies again.
+  function reviveSetAside() {
+    let changed = false;
+    const items = S.batch?.items || [];
+    for (const it of items) for (const e of cssEdits(it)) for (const t of e.tweaks) {
+      if (!t.inactive) continue;
+      const keep = (t.inactive.bps || ALL_BPS).filter((b) => items.some((o) => o !== it && o.path === it.path && cssEdits(o).some((oe) => oe.sels.some((s) => e.sels.some((x) => sameTarget(s, x))) && oe.tweaks.some((ot) => !ot.snap && ot.prop === t.prop && bpsOf(o).includes(b) && !offAt(ot, b)))));
+      if (keep.length === (t.inactive.bps || ALL_BPS).length) continue;
+      changed = true;
+      if (keep.length) t.inactive = { bps: keep }; else delete t.inactive;
+    }
+    return changed;
+  }
+
+  // The "CSS Conflict — Action Required" dialog. Resolves with { [conflict id]: 'existing' | 'new' }, or null when
+  // the person cancels (nothing is saved).
+  function conflictDialog(list, freshNote, freshNumber) {
+    return new Promise((resolve) => {
+      const items = S.batch?.items || [];
+      const clipNote = (it) => { const n = it.note ? clip(it.note.replace(/\s+/g, ' '), 70) : noteSummary(it); return `“${esc(n)}”`; };
+      const groups = new Map();
+      for (const c of list) { const k = `${c.target}|${c.prop}`; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(c); }
+      const freshName = freshNumber ? `Note ${freshNumber}` : 'New note';
+      const freshText = freshNote ? `“${esc(clip(freshNote.replace(/\s+/g, ' '), 70))}”` : '<span class="sub">no written description</span>';
+      const cards = [...groups.values()].map((rows) => `<section class="cf-group" aria-label="${esc(rows[0].prop)} on ${esc(rows[0].label)}">
+        <header><span class="cf-target"><b>Target element</b> <code>${esc(rows[0].label)}</code></span><span class="cf-prop"><b>CSS property</b> <code>${esc(rows[0].prop)}</code></span></header>
+        ${rows.map((c) => {
+          const n = items.indexOf(c.other) + 1;
+          const opt = (v, title, who, text, value) => `<label class="cf-opt"><input type="radio" name="${c.id}" value="${v}"><span class="cf-t">${title}</span><span class="cf-who">${who}</span><span class="cf-txt">${text}</span><code class="cf-val">${esc(c.prop)}: ${esc(value)}</code></label>`;
+          return `<div class="cf-row" data-id="${c.id}" role="radiogroup" aria-label="${esc(c.prop)} for ${esc(c.label)}, ${esc(sizeWords(c.sizes))}">
+            <div class="cf-size"><b>Screen size</b> ${esc(sizeWords(c.sizes))}</div>
+            <div class="cf-opts">${opt('existing', 'Keep Existing', `Note ${n}`, clipNote(c.other), c.otherTweak.to)}${opt('new', 'Use New', esc(freshName), freshText, c.freshTweak.to)}</div></div>`;
+        }).join('')}</section>`).join('');
+      const modal = mk(`<div class="xmodal cf-modal"><div class="xsheet cf-sheet" role="alertdialog" aria-modal="true" aria-labelledby="cf-title" aria-describedby="cf-sub">
+        <header><b id="cf-title">CSS Conflict — Action Required</b></header>
+        <p class="sub" id="cf-sub">Notes that set the same property on the same element, at an overlapping screen size, disagree. Choose the value to use for each one. The other value stays in its note, marked inactive, and is left out of the preview and the Change Report.</p>
+        <div class="cf-groups">${cards}</div>
+        <footer><span class="cf-left" aria-live="polite"></span><button class="ghost" data-cf="cancel">Cancel</button><button class="primary" data-cf="ok" disabled>Resolve &amp; Save</button></footer></div></div>`);
+      const root = S.ui.root;
+      const back = root.activeElement;
+      const ok = modal.querySelector('[data-cf="ok"]');
+      const left = modal.querySelector('.cf-left');
+      const choices = () => Object.fromEntries([...modal.querySelectorAll('.cf-row')].map((r) => [r.dataset.id, r.querySelector('input:checked')?.value]));
+      const sync = () => {
+        const pending = Object.values(choices()).filter((v) => !v).length;
+        ok.disabled = pending > 0;
+        left.textContent = pending ? `${plural(pending, 'change')} still to choose` : 'All conflicts resolved';
+        for (const r of modal.querySelectorAll('.cf-row')) r.classList.toggle('done', !!r.querySelector('input:checked'));
+      };
+      const done = (value) => { modal.remove(); if (back?.isConnected) back.focus({ preventScroll: true }); resolve(value); };
+      modal.addEventListener('change', sync);
+      modal.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-cf]');
+        if (b?.dataset.cf === 'cancel') done(null);
+        else if (b?.dataset.cf === 'ok' && !ok.disabled) done(choices());
+      });
+      modal.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(null); return; }
+        if (e.key !== 'Tab') return;
+        const order = [...modal.querySelectorAll('input[type=radio], button:not(:disabled)')];
+        const first = order[0];
+        const last = order[order.length - 1];
+        const at = root.activeElement;
+        if (e.shiftKey && at === first) { e.preventDefault(); last.focus(); } else if (!e.shiftKey && at === last) { e.preventDefault(); first.focus(); }
+      });
+      root.appendChild(modal);
+      sync();
+      modal.querySelector('input[type=radio]')?.focus({ preventScroll: true });
+    });
+  }
+
+  let settling = false;
+  // Called by Save note before anything is saved. Returns false when the person cancels the dialog, true otherwise
+  // (nothing conflicts, or every conflict was resolved and the choices applied to both notes).
+  hooks.settleConflicts = async (ps, extra, id, note) => {
+    if (settling) return false;
+    const list = findCssConflicts(extra.fields, id);
+    if (!list.length) return true;
+    settling = true;
+    try {
+      const choices = await conflictDialog(list, note, id ? (S.batch?.items || []).findIndex((i) => i.id === id) + 1 : 0);
+      if (!choices) return false;
+      applyConflictChoices(list, choices);
+      extra.touchedOthers = true;
+      return true;
+    } finally { settling = false; }
+  };
+
+  // After a note is deleted (before the list is saved), values it had replaced apply again.
+  hooks.afterItemDeleted = () => { reviveSetAside(); };
 
   // ------------------------------------------------------------------ collect / commit
 
@@ -4427,7 +5538,17 @@
       if (recs[0].el.selector !== ps.item.el?.selector) f.el = { ...ps.item.el, ...recs[0].el };
       for (const key of ['scope', 'tweaks', 'textEdit', 'hidden', 'match', 'move', 'align', 'measures']) f[key] = undefined;
     }
-    const hasContent = !!(changeBits(f).length || refBits(f).length);
+    // A card the user set or cleared here is written; otherwise whatever the note already has is left alone. With a
+    // Product Mapping the card is part of it (productMapping.card); without one it is the note's own `productCard`.
+    // The Product mapping (M3) travels with it: removing the mapping keeps the card as the note's own `productCard`.
+    if (P.cardDirty || P.mapDirty) {
+      const card = P.card ? JSON.parse(JSON.stringify(P.card)) : null;
+      const mp = mapNow();
+      if (mp) { f.productMapping = { ...JSON.parse(JSON.stringify(mp)), card }; f.productCard = undefined; }
+      else { f.productMapping = undefined; f.productCard = card || undefined; }
+    }
+    // `f` only holds what the editor collected; a saved Product Mapping stays on the item (Object.assign leaves it alone).
+    const hasContent = !!(changeBits(f).length || refBits(f).length || (P.mapDirty ? !!mapNow() : mapped(ps.item)));
     // Inspect the element as the source has it, without our live previews applied.
     const liveEdits = f.elementEdits || [];
     const around = (fn) => {
@@ -4442,13 +5563,18 @@
       try { const d = around(() => BL.describe(P.els[0], it0.type)); f.el = d.el; f.styling = d.styling; } catch { /* keep the old details */ }
     }
 
-    return {
+    const ret = {
       fields: f, hasContent, around,
       commit: () => { P.committed = true; },
       onSaved: async (it) => {
         rememberHistory(it.id, history);
+        // Saving a note with changes while "Hide my live edits" is on would hide what was just made: show them.
+        if (hasPreview(it)) showPreviews();
         BL.savePrefs();
-        applyItemPreview(it, S.prefs.previews !== false);
+        // Values that a conflict choice set aside (in this note or another) are put back or painted over, and any
+        // that no longer have a note replacing them apply again. Otherwise only this note's previews change.
+        if (reviveSetAside() || ret.touchedOthers) { await BL.saveBatch(); applyAllPreviews(); }
+        else applyAllPreviews();
         if (marksDirty) {
           if (marks.length) { await chrome.storage.local.remove(BL.shotKey(it.id) + ':markup'); it.hasMarkup = false; it.markupPath = undefined; await BL.saveBatch(); await captureMarked(it, marks); }
           else { await chrome.storage.local.remove(BL.shotKey(it.id) + ':markup'); it.hasMarkup = false; it.markupPath = undefined; await BL.saveBatch(); }
@@ -4457,6 +5583,7 @@
         renderAnn();
       },
     };
+    return ret;
   };
 
   // ------------------------------------------------------------------ note content without written text
@@ -4465,7 +5592,7 @@
 
   function editChanges(e) {
     const out = [];
-    const css = (e.tweaks || []).filter((t) => !t.snap).map((t) => t.prop);
+    const css = (e.tweaks || []).filter((t) => !t.snap && liveBps(e, t).length).map((t) => t.prop);
     if (css.length) out.push(`CSS ${css.join(', ')}`);
     if (e.textEdit) out.push(`text → “${clip(e.textEdit.after, 30)}”`);
     if (e.hidden) out.push('remove the element');
@@ -4478,10 +5605,11 @@
 
   function changeBits(it) {
     const out = editChanges(it);
-    for (const e of it.elementEdits || []) out.push(...editChanges(e));
+    for (const e of it.elementEdits || []) out.push(...editChanges({ ...e, bps: it.bps }));
     const drawn = (it.marks || []).filter((m) => !m.auto);
     if (drawn.length) out.push(`drawn on the page: ${marksSummary(drawn)}`);
     if (it.variant) out.push(`wire to variant “${it.variant.title}”`);
+    if (mapped(it)) out.push(`map to product “${clip(it.productMapping.approved?.title || it.productMapping.product.name || it.productMapping.product.key, 40)}”`);
     return out;
   }
 
@@ -4493,18 +5621,21 @@
     return out;
   }
 
-  const isReference = (it) => !it.note && !changeBits(it).length;
+  // CSS changes a conflict choice set aside for every screen size the note covers: kept in the note, never listed as a change.
+  const setAsideAll = (it) => [it, ...(it.elementEdits || []).map((e) => ({ ...e, bps: it.bps }))].some((e) => (e.tweaks || []).some((t) => !t.snap && t.inactive && !liveBps(e, t).length));
+  const isReference = (it) => !it.note && !changeBits(it).length && !setAsideAll(it);
   hooks.isReference = isReference;
 
   hooks.noteFallback = (it) => {
     const ch = changeBits(it);
     const rf = refBits(it);
     if (ch.length) return `**Note:** none written; the change is the annotations below: ${ch.join('; ')}.${rf.length ? ` Context only: ${rf.join(', ')}.` : ''}`;
+    if (setAsideAll(it)) return '**Note:** none written. Its CSS changes were set aside because another note\u2019s values are used instead; nothing to implement for this item.';
     return `**Note:** none written. **Reference only** (${rf.join(', ') || 'annotations'}): the page as it is now; change nothing for this item.`;
   };
 
   // Shown in the note list when no text was written.
-  const noteSummary = (it) => [...changeBits(it), ...refBits(it)].join(' · ') || 'No description';
+  const noteSummary = (it) => [...changeBits(it), ...refBits(it)].join(' · ') || (setAsideAll(it) ? 'CSS set aside (another note\u2019s value is used)' : 'No description');
 
   hooks.popHasWork = () => {
     if (!S.pop) return false;
@@ -4515,6 +5646,9 @@
     return false;
   };
 
+  // The page is changing under the old notes: put the page's own styles back, whichever page they were made for
+  // (their elements may still be there on a single-page app).
+  hooks.beforeRescope = () => { for (const it of S.batch?.items || []) if (hasPreview(it)) applyItemPreview({ ...it, path: here() }, false); };
   hooks.onItemDeleted = (it) => { applyItemPreview(it, false); forgetHistory(it.id); };
   hooks.onClear = () => { applyAllPreviews(true); histories.clear(); historyOrder = []; };
 
@@ -4573,6 +5707,7 @@
     const hasPreview = items.some((i) => edits(i).some((e) => (e.tweaks || []).some((t) => !t.snap && !t.rule) || e.textEdit));
     const hasAlign = items.some((i) => edits(i).some((e) => e.alignEl?.x || e.alignEl?.y || (e.align || []).length));
     if (hasRule || hasPreview) key.push(`Values were previewed live on the selected element only and are the target${hasRule ? '; **added** means the rule didn\u2019t declare that property before' : ''}. **Scope** says where the real change goes. Use existing tokens or classes rather than hardcoding.`);
+    if (items.some((i) => edits(i).some((e) => (e.tweaks || []).some((t) => t.inactive)))) key.push('Where notes asked for different values of the same CSS property, only the value that was chosen is listed. The other value was set aside on purpose; don\u2019t implement it.');
     if (hasAlign) key.push('Alignment is a relationship to a reference element that stays put. Any pixel shift is only a preview: build it with layout (flex or grid, margins, order), not a fixed offset or transform.');
     if (items.some((i) => i.kind === 'region')) key.push('**Region**: empty space where something new goes. Add it, following its neighbours.');
     if (items.some((i) => refBits(i).length)) key.push('Measurements and sampled colors are reference only, not changes. **(reference only)** items need no edits.');
@@ -4632,7 +5767,7 @@
     const corner = CORNER[`${axes.y}|${axes.x}`];
     return `immediately ${sides.join(' and ')} ${target}${corner ? ` (diagonally, off its ${corner} corner)` : ''}, outside its box and touching it${centers.length ? `, and ${centers.join(' and ')} centered on it` : ''}`;
   }
-  const hasCss = (edit) => (edit.tweaks || []).some((t) => !t.snap);
+  const hasCss = (edit) => (edit.tweaks || []).some((t) => !t.snap && liveBps(edit, t).length);
   function elementAlignLines(edits) {
     const groups = new Map();
     for (const edit of edits) for (const axis of ['x', 'y']) {
@@ -4662,6 +5797,7 @@
 
   // CSS changes grouped by the rule they were made in: where it is, then one line per property. "added" means the
   // rule didn't declare the property before; the original value is otherwise the rule's own, as written.
+  const onlyText = (t) => (t.only ? ` (only on ${t.only.join(' and ')}; another note's value is used on the other screen sizes)` : '');
   function cssRuleLines(tweaks) {
     const groups = new Map();
     for (const t of tweaks) { const k = t.rule.key; if (!groups.has(k)) groups.set(k, { rule: t.rule, list: [] }); groups.get(k).list.push(t); }
@@ -4677,27 +5813,29 @@
         r.utility ? 'Utility class: change which utilities the element uses rather than redefining it.' : '',
       ].filter(Boolean);
       L.push(`- ${head}${notes.length ? ` ${notes.join(' ')}` : ''}`);
-      for (const t of list) L.push(`  - ${t.prop}: ${t.declared === false ? 'added' : t.from} → ${t.to}${t.token ? ` (≈ ${t.token})` : ''}${t.important ? ' (the rule declares it !important)' : ''}`);
+      for (const t of list) L.push(`  - ${t.prop}: ${t.declared === false ? 'added' : t.from} → ${t.to}${t.token ? ` (≈ ${t.token})` : ''}${t.important ? ' (the rule declares it !important)' : ''}${onlyText(t)}`);
     }
     return L;
   }
 
   // A selected element with nothing recorded for it: no CSS, text, hide, match, move, alignment or measurement. It
   // stays in the saved note (selection, undo, reopening); the export only leaves out its own instructions.
-  const isEmptyInstance = (e) => !((e.tweaks || []).length || e.textEdit || e.hidden || e.match || e.move || (e.align || []).length || e.alignEl?.x || e.alignEl?.y || (e.measures || []).length);
+  const isEmptyInstance = (e) => !((e.tweaks || []).some((t) => liveBps(e, t).length) || e.textEdit || e.hidden || e.match || e.move || (e.align || []).length || e.alignEl?.x || e.alignEl?.y || (e.measures || []).length);
 
   hooks.promptItem = (it) => {
     const L = [];
     const add = (s) => L.push(`- ${s}`);
     if (it.elementEdits?.length) {
-      const active = it.elementEdits.filter((e) => !isEmptyInstance(e));
-      const idle = it.elementEdits.filter(isEmptyInstance);
+      const edits = it.elementEdits.map((e) => ({ ...e, bps: it.bps }));
+      const active = edits.filter((e) => !isEmptyInstance(e));
+      // An element that is the note's own target is not "also selected".
+      const idle = edits.filter((e) => isEmptyInstance(e) && e.el?.selector !== it.el?.selector);
       if (active.length) {
         if (active.length > 1) add('Each instance has its own changes and Scope; apply only what is recorded under it.');
         L.push(...elementAlignLines(active).map((x) => `- ${x}`));
         for (const edit of active) {
           L.push(`- **Instance ${ref(edit.el.label, edit.el.selector)}**`);
-          const details = hooks.promptItem({ ...edit, scope: { ...edit.scope, chosen: true }, path: it.path });
+          const details = hooks.promptItem({ ...edit, scope: { ...edit.scope, chosen: true }, path: it.path, bps: it.bps });
           L.push(...details.filter((line) => line && line !== '**Author\u2019s annotations**').map((line) => `  ${line}`));
         }
       }
@@ -4710,10 +5848,13 @@
       it.also.forEach((a) => L.push(`  - ${ref(a.label, a.selector)}${a.text ? ` "${a.text}"` : ''} (${a.size})${a.rendered ? `, rendered at ${code(a.rendered)}` : ''}${a.section ? `, in ${code(a.section)}` : ''}`));
     }
     if (showsScope(it)) L.push(...scopeLines(it));
-    const prev = (it.tweaks || []).filter((t) => !t.snap);
+    // Only the changes that are in effect: a value set aside by a conflict choice is left out for the screen sizes
+    // it lost, and for the sizes it still applies at the line says so.
+    const sizes = (t) => { const live = liveBps(it, t); return live.length < bpsOf(it).length ? live : null; };
+    const prev = (it.tweaks || []).filter((t) => !t.snap && liveBps(it, t).length).map((t) => ({ ...t, only: sizes(t) }));
     // Changes saved before rules were recorded (and Match style previews) keep their original line.
     const loose = prev.filter((t) => !t.rule);
-    if (loose.length) add(`Previewed by the author${it.also?.length ? ' (on all selected elements)' : ''}: ${loose.map((t) => `${t.prop} ${t.from} → ${t.to}${t.token ? ` (≈ ${t.token})` : ''}`).join('; ')}`);
+    if (loose.length) add(`Previewed by the author${it.also?.length ? ' (on all selected elements)' : ''}: ${loose.map((t) => `${t.prop} ${t.from} → ${t.to}${t.token ? ` (≈ ${t.token})` : ''}${onlyText(t)}`).join('; ')}`);
     L.push(...cssRuleLines(prev.filter((t) => t.rule)));
     if (it.textEdit) add(`Copy change: “${it.textEdit.before}” → “${it.textEdit.after}”`);
     if (it.hidden) add('Hide this element (previewed hidden by the author); let the layout close up.');
@@ -4734,6 +5875,18 @@
       const v = it.variant;
       add(`Wire to Shopify variant: product ${code(v.handle)}, variant id ${code(v.variantId)} (“${v.title}”${v.sku ? `, SKU ${v.sku}` : ''}, live price $${v.price.toFixed(2)}, ${v.available ? 'in stock' : 'sold out'}). Reference the product or variant by handle or id and render the price with Liquid money filters. Don\u2019t copy the price into the page, and don\u2019t write to the store.`);
     }
+    // Product Mapping: written from the saved snapshot only, so the (synchronous) report never waits on the library.
+    if (it.productMapping) {
+      const lines = globalThis.BluelineLibrary?.mappingReportLines?.(it.productMapping, { check: mapChecks.get(it.id) || null });
+      if (lines) L.push(...lines);
+      else L.push('- A Product Mapping is saved with this note, but the Product Library module did not load. Reload the page and export again.');
+    }
+    // The saved card is checked against the page as it is now, so the report says whether it is still the same card.
+    {
+      const card = it.productMapping?.card?.v ? it.productMapping.card : it.productCard?.v ? it.productCard : null;
+      const C = globalThis.BluelineCards;
+      if (card && C && it.path === here()) L.push(...C.reportLines(card, C.evaluate(card), { nested: mapped(it) }));
+    }
     return L.length ? ['', '**Author\u2019s annotations**', ...L] : [];
   };
 
@@ -4742,7 +5895,7 @@
   BL.toolsApi = {
     elementFields, chooseElement, rememberElement, renderChanges, elKind, previewAlign, realign, layoutRect, holdPosition, restoreElementRecord, visitElement, arrowHit, editArrowPointer, setDrawingColor, applyItemPreview, revertLive, removeGuide, styleInput, togglePopHide, buildAlignRows, emptyPop,
     similarSelector, similar, groupOptions, scopeInfo, tokenHint, spacingClasses, regionContext, measureRects, measureText, parseCSV, sheetFromRows, checkPrices,
-    normForVar, stepVal, normInput, priceReportText, scopeLines, marksSummary, snapTo, autoSelect, pointTarget, startSelect, startArea, T, A, D, getP: () => P, setP: (p) => { P = p; }, setAnnotate, setTarget, makeDraggable,
+    normForVar, stepVal, normInput, compositeFor, composeCss, stepNum, cssTokens, findCssConflicts, applyConflictChoices, reviveSetAside, priceReportText, scopeLines, marksSummary, snapTo, autoSelect, pointTarget, startSelect, startArea, T, A, D, getP: () => P, setP: (p) => { P = p; }, setAnnotate, setTarget, makeDraggable,
   };
 
   if (S.ui) hooks.onMount(S.ui.root);

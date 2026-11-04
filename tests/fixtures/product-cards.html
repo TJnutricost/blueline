@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Product card fixture (structure only, synthetic)</title>
+<style>
+  body { margin: 0; font: 14px/1.4 sans-serif; padding-bottom: 700px; }
+  section { padding: 12px 16px; }
+  nav ul { display: flex; gap: 12px; list-style: none; margin: 0; padding: 8px 16px; }
+  .rail { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .pcard { border: 1px solid #ccc; }
+  .pic { height: 70px; position: relative; background: #eee; }
+  .bdg { position: absolute; top: 4px; left: 4px; font-weight: 700; }
+  .nm { font-weight: 600; font-size: 18px; }
+  .pr { display: flex; gap: 8px; }
+  .reg { text-decoration: line-through; }
+  .go { display: inline-block; padding: 4px 8px; background: #06c; color: #fff; text-decoration: none; }
+  .chips { display: flex; gap: 6px; margin: 6px 0; }
+  .chip { padding: 4px 10px; }
+  .grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .tile { border: 1px solid #ccc; padding: 6px; }
+  .bgimg { height: 50px; background-color: #ddd; background-image: url("data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"); }
+  .opts { margin: 4px 0; padding-left: 16px; }
+  .row { display: flex; gap: 12px; }
+  .row > div { flex: 1; border: 1px solid #ccc; padding: 6px; }
+  .lonecard { border: 1px solid #ccc; padding: 8px; max-width: 280px; }
+  article[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<nav><ul class="links"><li><a href="#a">Home</a></li><li><a href="#b">Shop</a></li><li><a href="#c">About</a></li></ul></nav>
+
+<!-- A: <article> cards with identical placeholder text; nothing on them tells them apart -->
+<section aria-labelledby="h-feat" id="feat">
+  <h2 id="h-feat">Featured</h2>
+  <div class="rail" id="rail-feat">
+    <article class="pcard"><div class="pic">[Product shot]<div class="bdg">[XX% OFF]</div></div><div class="body"><div class="nm">[Product Name]</div><div class="pr"><span>[$Sale]</span><span class="reg">[$Reg]</span></div><a class="go" href="#">Shop Deal</a></div></article>
+    <article class="pcard"><div class="pic">[Product shot]<div class="bdg">[XX% OFF]</div></div><div class="body"><div class="nm">[Product Name]</div><div class="pr"><span>[$Sale]</span><span class="reg">[$Reg]</span></div><a class="go" href="#">Shop Deal</a></div></article>
+    <article class="pcard"><div class="pic">[Product shot]<div class="bdg">[XX% OFF]</div></div><div class="body"><div class="nm">[Product Name]</div><div class="pr"><span>[$Sale]</span><span class="reg">[$Reg]</span></div><a class="go" href="#">Shop Deal</a></div></article>
+  </div>
+</section>
+
+<!-- B: identical placeholder cards that a script can hide (a category filter) -->
+<section aria-labelledby="h-picks" id="picks">
+  <h2 id="h-picks">Picks</h2>
+  <div class="chips"><button class="chip" data-filter="All">All</button><button class="chip" data-filter="A">A</button><button class="chip" data-filter="B">B</button></div>
+  <div class="rail" id="rail-picks">
+    <article class="pcard" data-cat="A"><div class="pic">[Product shot]</div><div class="body"><div class="nm">[Product Name]</div><span>[$Sale]</span> <span class="reg">[$Reg]</span></div></article>
+    <article class="pcard" data-cat="B"><div class="pic">[Product shot]</div><div class="body"><div class="nm">[Product Name]</div><span>[$Sale]</span> <span class="reg">[$Reg]</span></div></article>
+    <article class="pcard" data-cat="A"><div class="pic">[Product shot]</div><div class="body"><div class="nm">[Product Name]</div><span>[$Sale]</span> <span class="reg">[$Reg]</span></div></article>
+    <article class="pcard" data-cat="B"><div class="pic">[Product shot]</div><div class="body"><div class="nm">[Product Name]</div><span>[$Sale]</span> <span class="reg">[$Reg]</span></div></article>
+    <article class="pcard" data-cat="A"><div class="pic">[Product shot]</div><div class="body"><div class="nm">[Product Name]</div><span>[$Sale]</span> <span class="reg">[$Reg]</span></div></article>
+    <article class="pcard" data-cat="B"><div class="pic">[Product shot]</div><div class="body"><div class="nm">[Product Name]</div><span>[$Sale]</span> <span class="reg">[$Reg]</span></div></article>
+  </div>
+</section>
+
+<!-- C: list items, real-looking names (distinct), a background image, nested option rows that carry prices -->
+<section aria-labelledby="h-tiles" id="tiles-sec">
+  <h2 id="h-tiles">Tiles</h2>
+  <ul class="grid" id="tiles">
+    <li class="tile"><a class="tl" href="#"><div class="bgimg"></div></a><h3>Alpha Powder</h3><p class="price">$19.97</p><ul class="opts"><li>S $9.00</li><li>M $10.00</li></ul><button class="add">Add to cart</button></li>
+    <li class="tile"><a class="tl" href="#"><div class="bgimg"></div></a><h3>Beta Capsules</h3><p class="price">$24.97</p><ul class="opts"><li>S $9.00</li><li>M $10.00</li></ul><button class="add">Add to cart</button></li>
+    <li class="tile"><a class="tl" href="#"><div class="bgimg"></div></a><h3>Gamma Oil</h3><p class="price">$15.97</p><ul class="opts"><li>S $9.00</li><li>M $10.00</li></ul><button class="add">Add to cart</button></li>
+  </ul>
+</section>
+
+<!-- D: plain divs with arbitrary classes, no button, no heading tags -->
+<section aria-label="Bundles" id="bundles">
+  <div class="row" id="row-div">
+    <div class="x1"><div class="x2 bgimg"></div><div class="x3">Bundle One</div><div class="x4">$30.00</div></div>
+    <div class="x1"><div class="x2 bgimg"></div><div class="x3">Bundle Two</div><div class="x4">$40.00</div></div>
+  </div>
+</section>
+
+<!-- E: optional Blueline attributes: they name the card and its parts exactly -->
+<section data-blueline-product-section="Explicit zone" id="explicit">
+  <div class="row" id="row-explicit">
+    <div data-blueline-product-card="" data-blueline-slot-id="slot-a"><span data-blueline-product-field="title">Name A</span> <span data-blueline-product-field="sale-price">$5.00</span></div>
+    <div data-blueline-product-card="" data-blueline-slot-id="slot-b"><span data-blueline-product-field="title">Name B</span> <span data-blueline-product-field="sale-price">$6.00</span></div>
+  </div>
+</section>
+
+<!-- F: one card on its own (no siblings to compare with) -->
+<section aria-labelledby="h-lone" id="lone">
+  <h2 id="h-lone">Lone</h2>
+  <div class="lonecard" id="lone-card"><div class="pic">[Product shot]</div><div class="nm">Solo Product</div><span>$12.00</span> <a class="go" href="#">Buy now</a></div>
+</section>
+
+<!-- G: cards whose lower area is itself a pair of product-like parts (two <p> blocks with a price and a button each).
+     The lowest repeated product-like element is a part; the whole card is the <article> around them. -->
+<section aria-labelledby="h-dual" id="dual">
+  <h2 id="h-dual">Dual</h2>
+  <div class="rail" id="rail-dual">
+    <article class="pcard dual"><div class="pic">[Product shot]</div><p class="dpart"><span class="nm">Alpha</span> <span>$10.00</span> <a class="go" href="#">Buy now</a></p><p class="dpart"><span class="nm">Alpha pack</span> <span>$18.00</span> <a class="go" href="#">Buy now</a></p></article>
+    <article class="pcard dual"><div class="pic">[Product shot]</div><p class="dpart"><span class="nm">Beta</span> <span>$11.00</span> <a class="go" href="#">Buy now</a></p><p class="dpart"><span class="nm">Beta pack</span> <span>$19.00</span> <a class="go" href="#">Buy now</a></p></article>
+    <article class="pcard dual"><div class="pic">[Product shot]</div><p class="dpart"><span class="nm">Gamma</span> <span>$12.00</span> <a class="go" href="#">Buy now</a></p><p class="dpart"><span class="nm">Gamma pack</span> <span>$20.00</span> <a class="go" href="#">Buy now</a></p></article>
+  </div>
+</section>
+
+<script>
+  document.querySelectorAll('[data-filter]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var f = b.dataset.filter;
+      document.querySelectorAll('#rail-picks article').forEach(function (a) { a.hidden = !(f === 'All' || a.dataset.cat === f); });
+    });
+  });
+</script>
+</body>
+</html>

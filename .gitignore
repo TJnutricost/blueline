@@ -1,3 +1,6 @@
 # Local-only project notes (never commit)
 /project_status.md
 /BLUELINE_CHAT_HISTORY.md
+
+# Local campaign QA reference files — never commit
+/qa/black-friday-2026/
