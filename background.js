@@ -39,7 +39,7 @@ async function toggle(tab, force) {
     if (!on) return;
     try {
       await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['page-hook.js'], world: 'MAIN' });
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js', 'tools.js'] });
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js', 'library.js', 'cards.js', 'tools.js', 'library-ui.js'] });
     } catch (err) {
       await setActiveFlag(tab.id, false);
       console.warn('Blueline can\u2019t run on this page:', err && err.message);
@@ -74,6 +74,27 @@ async function downloadAll(folder, files = []) {
   return { paths };
 }
 
+
+// Product Library: read-only GET of a store's public storefront JSON. Content scripts are bound by the page's CORS
+// rules; this worker is not, so a store on another origin can be read. Only three public paths are allowed, no
+// cookies or credentials are sent, and nothing is ever written to the store.
+const STORE_PATH = /^\/(products\/[^/]+\.js|search\/suggest\.json|cart\.js)$/;
+async function fetchStoreJson(url) {
+  let u;
+  try { u = new URL(url); } catch { return { error: 'Not a valid address.' }; }
+  const local = ['localhost', '127.0.0.1'].includes(u.hostname);
+  if (!(u.protocol === 'https:' || (u.protocol === 'http:' && local)) || !STORE_PATH.test(u.pathname)) return { error: 'That request isn\u2019t allowed.' };
+  try {
+    const r = await fetch(u.href, { method: 'GET', credentials: 'omit', headers: { Accept: 'application/json' } });
+    if (!r.ok) return { status: r.status, error: `The store answered ${r.status}.` };
+    const text = await r.text();
+    if (text.length > 4_000_000) return { error: 'The response was too large.' };
+    return { json: JSON.parse(text) };
+  } catch (err) {
+    return { error: (err && err.message) || 'The request failed.' };
+  }
+}
+
 chrome.action.onClicked.addListener((tab) => toggle(tab));
 chrome.tabs.onRemoved.addListener((tabId) => { setActiveFlag(tabId, false).catch(() => {}); });
 
@@ -95,6 +116,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         } catch (err) {
           return { error: (err && err.message) || String(err) };
         }
+      case 'blueline:fetch-json':
+        return fetchStoreJson(msg.url);
       case 'blueline:download':
         return downloadAll(msg.folder, msg.files);
       default:

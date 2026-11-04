@@ -55,7 +55,10 @@
       ],
       "js": [
         "content.js",
-        "tools.js"
+        "library.js",
+        "cards.js",
+        "tools.js",
+        "library-ui.js"
       ],
       "run_at": "document_idle"
     }

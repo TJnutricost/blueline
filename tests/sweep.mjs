@@ -16,7 +16,7 @@ if (!urls.length) { console.error('Usage: node sweep.mjs <url> [<url> ...]'); pr
 const CHROME = process.env.CHROME_PATH || ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium'].find((p) => existsSync(p));
 if (!CHROME) { console.error('Chrome not found. Set CHROME_PATH.'); process.exit(2); }
 const src = (f) => readFileSync(join(ext, f), 'utf8');
-const STUB = `window.chrome = { runtime: { getManifest: () => ({ version: 'test' }), sendMessage: async (m) => (m && m.type === 'blueline:hello' ? { active: true } : null), onMessage: { addListener() {} } }, storage: { local: { get: async () => ({}), set: async () => {}, remove: async () => {} }, onChanged: { addListener() {} } } };`;
+const STUB = `window.chrome = { runtime: { id: 'blueline-test', getManifest: () => ({ version: 'test' }), sendMessage: async (m) => (m && m.type === 'blueline:hello' ? { active: true } : null), onMessage: { addListener() {} } }, storage: { local: { get: async () => ({}), set: async () => {}, remove: async () => {} }, onChanged: { addListener() {} } } };`;
 
 const browser = await launch({ executablePath: CHROME });
 for (const url of urls) {
@@ -24,7 +24,7 @@ for (const url of urls) {
   await page.setViewport({ width: 1280, height: 900 });
   try { await page.goto(url, { waitUntil: 'networkidle2', timeout: 45000 }); } catch (e) { console.log(`${url}: load issue (${e.message}), continuing`); }
   await page.evaluate(STUB);
-  for (const f of ['page-hook.js', 'content.js', 'tools.js']) await page.evaluate(src(f));
+  for (const f of ['page-hook.js', 'content.js', 'library.js', 'cards.js', 'tools.js']) await page.evaluate(src(f));
   await page.waitForFunction(() => window.__BL?.toolsApi?.pointTarget && window.__BL.S.ui, { timeout: 10000 });
   const rep = await page.evaluate(async () => {
     const pt = __BL.toolsApi.pointTarget;
