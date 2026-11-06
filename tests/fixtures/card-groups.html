@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Card discovery fixture (several card layouts and look-alike decoys, synthetic)</title>
+<style>
+  body { margin: 0; font: 14px/1.4 sans-serif; padding-bottom: 700px; }
+  nav { display: flex; gap: 14px; padding: 8px 16px; background: #eef; }
+  .hero { padding: 16px; background: #def; } .hero img { width: 160px; height: 60px; background: #ccd; display: block; }
+  section.grp { padding: 12px 16px; }
+  .row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .deal { border: 1px solid #ccc; padding: 6px; min-height: 120px; }
+  .deal .shot { position: relative; height: 50px; background: #eee; }
+  .deal .nm { font-weight: 600; font-size: 17px; }
+  .deal .pr { display: flex; gap: 8px; } .deal .sale { font-weight: 700; font-size: 16px; } .deal .reg { text-decoration: line-through; }
+  .deal .go { display: inline-block; padding: 3px 8px; background: #06c; color: #fff; }
+  ul.bundles { list-style: none; margin: 0; padding: 0; display: flex; gap: 10px; }
+  ul.bundles li { border: 1px solid #aaa; padding: 6px; width: 200px; }
+  ul.bundles img { width: 120px; height: 50px; background: #ddd; display: block; }
+  .tiles { display: flex; gap: 10px; } .tile { border: 1px solid #ccc; padding: 6px; width: 150px; } .tile img { width: 100px; height: 40px; background: #ddd; display: block; }
+  footer { padding: 12px 16px; background: #eee; } .gift { display: inline-block; border: 1px solid #aaa; padding: 6px; margin-right: 8px; }
+</style>
+</head>
+<body>
+
+<nav><a href="/deals">Deals</a> <a href="/best">Best Sellers</a> <a href="/gift">Gift cards</a></nav>
+
+<div class="hero">
+  <img src="/img/hero.jpg" alt="Cyber Monday">
+  <h1>Cyber Monday</h1>
+  <p>Deals from $9.99</p>
+  <a href="/shop">Shop now</a>
+</div>
+
+<!-- 1. Featured Deals: three cards in the designer's markup -->
+<section class="grp" id="s-feat" aria-labelledby="h-feat">
+  <h2 id="h-feat">Featured Deals</h2>
+  <div class="row" id="row-feat">
+    <article class="deal" data-cat="a"><div class="shot">[Product shot 1]</div><div class="nm">[Product Name]</div><div class="pr"><span class="sale">[$Sale]</span><span class="reg">[$Reg]</span></div><a class="go" href="#">Shop Deal</a></article>
+    <article class="deal" data-cat="a"><div class="shot">[Product shot 2]</div><div class="nm">[Product Name]</div><div class="pr"><span class="sale">[$Sale]</span><span class="reg">[$Reg]</span></div><a class="go" href="#">Shop Deal</a></article>
+    <article class="deal" data-cat="b"><div class="shot">[Product shot 3]</div><div class="nm">[Product Name]</div><div class="pr"><span class="sale">[$Sale]</span><span class="reg">[$Reg]</span></div><a class="go" href="#">Shop Deal</a></article>
+  </div>
+</section>
+
+<!-- 2. Best Sellers: the same markup, one card hidden by a filter -->
+<section class="grp" id="s-best" aria-labelledby="h-best">
+  <h2 id="h-best">Best Sellers</h2>
+  <div class="row" id="row-best">
+    <article class="deal" data-cat="a"><div class="shot">[Product shot 4]</div><div class="nm">[Product Name]</div><div class="pr"><span class="sale">[$Sale]</span><span class="reg">[$Reg]</span></div><a class="go" href="#">Shop Deal</a></article>
+    <article class="deal" data-cat="b"><div class="shot">[Product shot 5]</div><div class="nm">[Product Name]</div><div class="pr"><span class="sale">[$Sale]</span><span class="reg">[$Reg]</span></div><a class="go" href="#">Shop Deal</a></article>
+    <article class="deal" data-cat="b" hidden><div class="shot">[Product shot 6]</div><div class="nm">[Product Name]</div><div class="pr"><span class="sale">[$Sale]</span><span class="reg">[$Reg]</span></div><a class="go" href="#">Shop Deal</a></article>
+    <article class="deal" data-cat="a"><div class="shot">[Product shot 7]</div><div class="nm">[Product Name]</div><div class="pr"><span class="sale">[$Sale]</span><span class="reg">[$Reg]</span></div><a class="go" href="#">Shop Deal</a></article>
+  </div>
+</section>
+
+<!-- 3. Bundles: a different layout (a list, real headings and prices); found, but only offered for review -->
+<section class="grp" id="s-bund" aria-labelledby="h-bund">
+  <h2 id="h-bund">Bundles</h2>
+  <ul class="bundles" id="list-bund">
+    <li><img src="/img/b1.jpg" alt=""><h4>Starter Bundle</h4><span class="p">$49.99</span> <button>Add to cart</button></li>
+    <li><img src="/img/b2.jpg" alt=""><h4>Pro Bundle</h4><span class="p">$79.99</span> <button>Add to cart</button></li>
+    <li><img src="/img/b3.jpg" alt=""><h4>Team Bundle</h4><span class="p">$129.99</span> <button>Add to cart</button></li>
+  </ul>
+</section>
+
+<!-- 4. Decoy: category tiles (an image, a heading and a link, but no price) -->
+<section class="grp" id="s-cat" aria-labelledby="h-cat">
+  <h2 id="h-cat">Shop by category</h2>
+  <div class="tiles">
+    <div class="tile"><img src="/img/c1.jpg" alt=""><h3>Protein</h3><a href="/c/protein">Shop</a></div>
+    <div class="tile"><img src="/img/c2.jpg" alt=""><h3>Vitamins</h3><a href="/c/vitamins">Shop</a></div>
+    <div class="tile"><img src="/img/c3.jpg" alt=""><h3>Sleep</h3><a href="/c/sleep">Shop</a></div>
+  </div>
+</section>
+
+<footer>
+  <div class="gift"><img src="/img/g.jpg" alt=""><h4>Gift card</h4>From $25 <a href="/gift/25">Buy</a></div>
+  <div class="gift"><img src="/img/g.jpg" alt=""><h4>Big gift card</h4>From $100 <a href="/gift/100">Buy</a></div>
+</footer>
+
+</body>
+</html>

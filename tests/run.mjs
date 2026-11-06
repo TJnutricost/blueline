@@ -147,7 +147,7 @@ console.log('\n# Point selection: Shift+hover, Shift+click, Select element (fixt
     ['A2 pe:none text: disclaimer', '#a2-disc', 'text', 'a2-disc'],
     ['A2 pe:none text: headline', '#a2-h', 'text', 'a2-h'],
     ['A2 pe:none text: CTA (pe:auto)', '#a2-cta', 'center', 'a2-cta'],
-    ['A2 pe:none text: empty area', '#a2', [0.9, 0.5], 'a2-img'],
+    ['A2 pe:none text: empty area', '#a2', [0.55, 0.5], 'a2-img'],
     ['A3 ::after tint: disclaimer', '#a3-disc', 'text', 'a3-disc'],
     ['A3 ::after tint: headline', '#a3-h', 'text', 'a3-h'],
     ['A4 tint layer: disclaimer', '#a4-disc', 'text', 'a4-disc'],
@@ -4837,7 +4837,7 @@ console.log('\n# Product Mapping M3: product picker, variants, page-specific val
   check('Esc steps back from a product to the list of products', md.open && md.h === 'Choose a product');
   await esc();
   let mm0 = await mdl();
-  check('A second Esc closes the picker and returns to the Product Mapping window (nothing chosen, Map & Save waiting)', mm0.open && /No product is mapped to this card yet/.test(mm0.text) && mm0.cta === 'Map & Save' && mm0.ctaOff === true && mm0.head === 'Product Mapping', JSON.stringify(mm0));
+  check('A second Esc closes the picker and returns to the Product Mapping window (nothing chosen, Map & Save waiting)', mm0.open && /No product is mapped to this card yet/.test(mm0.text) && mm0.cta === 'Map & Save' && mm0.ctaOff === true && mm0.head === 'Card Mapping', JSON.stringify(mm0));
   await esc();
   check('A third Esc closes the window: the note (and its card) is open and unchanged, with no mapping', !(await mdl()).open && !(await modal()).open && await A.evaluate(() => !!__BL.S.pop && !__BL.toolsApi.getP().mapping && !!__BL.toolsApi.getP().card));
   await clk('map-start'); await sleep(500);
@@ -5328,9 +5328,9 @@ console.log('\n# Product Mapping UX: one save action, accurate markers, Product 
   await A.evaluate(() => { __BL.S.ui.root.querySelector('.x-pmbox .pmb').click(); }); await sleep(500);
   await A.evaluate(() => { const i = __BL.S.ui.root.querySelector('.lib-map-body input[data-lib="map-f"][data-f="title"]'); i.value = 'Unsaved title'; i.dispatchEvent(new Event('change', { bubbles: true })); }); await sleep(150);
   m = await mdl();
-  const hd = await A.evaluate(() => { const r = __BL.S.ui.root; const h = r.querySelector('.lib-head').textContent.trim(); const hs = [...r.querySelectorAll('.lib-sheet')].flatMap((x) => [...x.querySelectorAll('.lib-map-h, .lib-head')]).filter((e) => e.getClientRects().length && /Product Mapping/.test(e.textContent)).length; const foot = [...r.querySelectorAll('.lib-map-foot button')].map((b) => b.textContent.trim()); const sv = r.querySelector('[data-x="lib-map-save"]'); const cn = r.querySelector('[data-x="lib-map-cancel"]'); return { h, hs, foot, ctx: r.querySelector('.lib-map-h').textContent.trim(), saveRight: sv.getBoundingClientRect().left > cn.getBoundingClientRect().left, saveBg: getComputedStyle(sv).backgroundColor, saveOn: !sv.disabled, saveVisible: sv.getBoundingClientRect().bottom <= innerHeight + 1 }; });
+  const hd = await A.evaluate(() => { const r = __BL.S.ui.root; const h = r.querySelector('.lib-head').textContent.trim(); const hs = [...r.querySelectorAll('.lib-sheet')].flatMap((x) => [...x.querySelectorAll('.lib-map-h, .lib-head')]).filter((e) => e.getClientRects().length && /Card Mapping/.test(e.textContent)).length; const foot = [...r.querySelectorAll('.lib-map-foot button')].map((b) => b.textContent.trim()); const sv = r.querySelector('[data-x="lib-map-save"]'); const cn = r.querySelector('[data-x="lib-map-cancel"]'); return { h, hs, foot, ctx: r.querySelector('.lib-map-h').textContent.trim(), saveRight: sv.getBoundingClientRect().left > cn.getBoundingClientRect().left, saveBg: getComputedStyle(sv).backgroundColor, saveOn: !sv.disabled, saveVisible: sv.getBoundingClientRect().bottom <= innerHeight + 1 }; });
   check('While editing, the footer is exactly Cancel | Save Mapping, Save is on the right, blue, enabled and in view', JSON.stringify(hd.foot) === JSON.stringify(['Cancel', 'Save Mapping']) && hd.saveRight && hd.saveBg === 'rgb(43, 78, 255)' && hd.saveOn && hd.saveVisible, JSON.stringify(hd));
-  check('"Product Mapping" appears once at the top, and the card position context stays', hd.hs === 1 && /^Card \d+ of \d+/.test(hd.ctx), JSON.stringify(hd));
+  check('"Card Mapping" appears once at the top, and the card position context stays', hd.hs === 1 && hd.h === 'Card Mapping' && /^Card \d+ of \d+/.test(hd.ctx), JSON.stringify(hd));
   await A.keyboard.press('Escape'); await sleep(250);
   check('Esc closes the window at once (no confirmation); the unsaved edit is thrown away and the saved product is back on the badge', !(await mdl()).open && !(await t.item(0)).productMapping.overrides && /^Mapped/.test((await badge()).text) && !(await A.evaluate(() => /Keep editing|Discard/.test(__BL.S.ui.root.querySelector('.lib-sheet').textContent))));
   await A.evaluate(() => { __BL.S.ui.root.querySelector('.x-pmbox .pmb').click(); }); await sleep(500);
@@ -5508,6 +5508,2471 @@ console.log('\n# Product Mapping UX: one save action, accurate markers, Product 
   check('Page errors', A.errors.length === 0, A.errors.join(' | '));
   await A.close();
 }
+
+// ------------------------------------------------------------------ Product Mapping M4: recognising and mapping the card's elements
+console.log('\n# Product Mapping M4: field recognition, suggestions, manual correction, discount, persistence, revalidation (fixtures/product-fields.html)');
+{
+  const A = await open('product-fields.html', { http: true, realStorage: true });
+  const ORIGIN5 = await A.evaluate(() => location.origin);
+  const CSV5 = 'Section,SKU,Product Name,Original Price,Sale Price\nFeatured,ACM400101,Acme ZMA Capsules,$27.97,$19.99\nFeatured,ACM999001,Acme Fish Oil Softgels,$30.97,\nFeatured,ACM200101,Acme Charcoal,$15.99,\nFeatured,ACM100101,Acme Black Seed Oil,$19.97,$14.97\n';
+  const vOf5 = (handle, i = 0) => LibNode.normalizeProduct(PRODUCTS.find((p) => p.handle === handle), ORIGIN5, 'USD').variants[i];
+  let lib5 = { store: ORIGIN5, campaign: 'l-m4-a', name: 'M4 list', smp: { v: 1, imports: [LibNode.importCsv(CSV5, { fileName: 'm4.csv', sha256: 'm4a' })] }, work: LibNode.emptyWork() };
+  for (const [k, h] of [['sku:ACM400101', 'zma'], ['sku:ACM999001', 'fish-oil'], ['sku:ACM200101', 'charcoal'], ['sku:ACM100101', 'black-seed-oil']]) lib5 = LibNode.decide(LibNode.chooseVariant(lib5, k, vOf5(h, 0)), k, 'smp');
+  await A.evaluate((l) => BluelineLibrary.saveLibrary(chrome.storage.local, l, { smpChanged: true }), lib5);
+  const libRaw5 = () => A.evaluate(() => chrome.storage.local.get().then((r) => JSON.stringify(Object.fromEntries(Object.entries(r).filter(([k]) => /^blueline:lib:(smp|work):/.test(k)).sort()))));
+  const libBefore5 = await libRaw5();
+  const t = tools(A);
+
+  // ---- 1. Recognition across structures (reads the page only)
+  const det = (sel, ctx = {}) => A.evaluate((sel, ctx) => {
+    const C = BluelineCards; const el = document.querySelector(sel); const d = C.detectFields(el, ctx);
+    const out = {};
+    for (const k of C.FIELD_KEYS) {
+      const f = d.fields[k];
+      out[k] = { st: f.status, conf: f.confidence, best: f.best ? { text: f.best.text, how: f.best.how, v: f.best.value, tag: f.best.el.tagName.toLowerCase(), inside: el.contains(f.best.el) || f.best.el === el || f.best.el.contains(el), wrapper: !!f.best.wrapper, cardItself: f.best.el === el } : null, n: f.candidates.length, allInside: f.candidates.every((c) => el.contains(c.el) || c.el.contains(el)), texts: f.candidates.map((c) => c.text) };
+    }
+    return out;
+  }, sel, ctx);
+  const G1 = '#grid-sem > li:nth-child(1)'; const G3 = '#grid-sem > li:nth-child(3)'; const D1 = '#rail-des > article:nth-child(1)'; const H1 = '#rows-hor > a:nth-child(1)'; const X1 = '#rows-amb > div:nth-child(1)';
+  const d1 = await det(G1);
+  check('Recognition, conventional markup: all seven fields are found, each with its real value', d1.title.best?.text === 'ZMA Night Formula' && d1.title.best.tag === 'h3' && /zma/.test(d1.image.best?.v.src || '') && d1.sale.best?.v.cents === 2799 && d1.regular.best?.v.cents === 3999 && d1.badge.best?.v.badge.percent === 30 && d1.cta.best?.text === 'Add to cart' && /\/products\/zma$/.test(d1.link.best?.v.href || '') && Object.values(d1).every((f) => f.st === 'suggested'), JSON.stringify(d1).slice(0, 700));
+  check('Recognition: the struck-through <del> is the regular price and the <ins> the sale price, not the other way round', d1.regular.best.tag === 'del' && d1.sale.best.tag === 'ins' && d1.sale.best.how === 'semantic' && d1.regular.best.how === 'semantic');
+  check('Recognition, high confidence only where the evidence is strong (headings, itemprop, del/ins, a cart form)', ['title', 'image', 'sale', 'regular', 'cta'].every((k) => d1[k].conf === 'high'), JSON.stringify(Object.fromEntries(Object.entries(d1).map(([k, v]) => [k, v.conf]))));
+  const dD = await det(D1);
+  check('Recognition, arbitrary designer markup (no classes, placeholder text): title, image, sale, regular, badge and call to action are all proposed', dD.title.best?.text === '[Product Name]' && dD.image.best?.text === '[Product shot 1]' && dD.sale.best?.text === '[$Sale]' && dD.regular.best?.text === '[$Reg]' && dD.badge.best?.text === '[XX% OFF]' && dD.cta.best?.text === 'Shop Deal', JSON.stringify(dD).slice(0, 900));
+  check('Recognition: a placeholder price has no value (never turned into cents) and the struck-through one is the regular price', dD.sale.best.v.cents === null && dD.sale.best.v.placeholder === true && dD.regular.best.v.placeholder === true && dD.badge.best.v.badge.placeholder === true);
+  check('Recognition: the "#" link is offered only as a placeholder link, with lower confidence than a real address', dD.link.best?.v.placeholder === true && dD.link.conf === 'low', JSON.stringify(dD.link));
+  const dH = await det(H1);
+  check('Recognition, a card wholly wrapped in an anchor: the link is that anchor (the card itself); the image is the CSS background; nothing is invented as a call to action', dH.link.best?.cardItself === true && /\/products\/zma$/.test(dH.link.best.v.href) && dH.image.best?.how && /gif|url|data:/.test(dH.image.best.v.src) && dH.cta.st === 'none' && dH.cta.best === null, JSON.stringify(dH).slice(0, 700));
+  check('Recognition, amount-off badge ("Save $5") is a badge, not a price, and a lone unmarked price is only a weak suggestion', dH.badge.best?.v.badge.kind === 'amount' && dH.badge.best.v.badge.cents === 500 && dH.regular.best?.v.cents === 1999 && dH.regular.conf === 'low' && dH.sale.st === 'none');
+  check('Recognition: with the product’s approved sale price in view, the lone price is proposed as the sale price instead', (await det(H1, { promo: true })).sale.best?.v.cents === 1999 && (await det(H1, { promo: true })).regular.st === 'none');
+  const d3 = await det(G3);
+  check('Missing fields are allowed: a card with no regular price or badge shows them as not found, with no element and no candidates', d3.regular.st === 'none' && d3.regular.best === null && d3.regular.n === 0 && d3.badge.st === 'none' && d3.badge.n === 0 && d3.title.st === 'suggested');
+  const dX = await det(X1);
+  check('Ambiguity is visible: two equal stacked images, two unmarked prices and two product links give several candidates and NO chosen element', ['image', 'sale', 'regular', 'link'].every((k) => dX[k].st === 'ambiguous' && dX[k].best === null && dX[k].n >= 2), JSON.stringify(Object.fromEntries(Object.entries(dX).map(([k, v]) => [k, [v.st, v.n]]))));
+  check('Ambiguity affects only the fields that are unclear: the title of that card is still proposed', dX.title.st === 'suggested' && dX.title.best.text === 'Gamma Product');
+  const dR = await det('#rows-res > div:nth-child(1)');
+  check('Responsive duplicates: the visible heading is proposed, the hidden mobile copy is only a candidate; struck <s> is the regular price', dR.title.st === 'suggested' && await A.evaluate(() => { const C = BluelineCards; const f = C.detectFields(document.querySelector('#rows-res > div:nth-child(1)')).fields.title; return getComputedStyle(f.best.el).display !== 'none' && f.candidates.some((c) => getComputedStyle(c.el).display === 'none'); }) && dR.regular.best.tag === 's' && dR.sale.best.v.cents === 1200);
+  const dE = await det('#rows-exp > div:nth-child(1)');
+  check('An optional data-blueline-product-field mark wins over a bigger decoy text; it is never required (the other cards have none)', dE.title.best?.text === 'Explicit Name' && dE.title.best.how === 'explicit' && dE.sale.best?.how === 'explicit' && dE.cta.best?.text === 'Go' && dE.cta.best.how === 'explicit' && d1.title.best.how !== 'explicit');
+  // no cross-card, navigation or page-wide leakage
+  const leak = await A.evaluate(() => {
+    const C = BluelineCards;
+    const cards = [...document.querySelectorAll('#grid-sem > li')];
+    const sets = cards.map((c) => { const f = C.detectFields(c).fields; return Object.values(f).flatMap((x) => x.candidates.map((cand) => cand.el)); });
+    const inside = cards.every((c, i) => sets[i].every((e) => c.contains(e)));
+    const disjoint = sets[0].every((e) => !sets[1].includes(e) && !sets[2].includes(e));
+    const banner = document.querySelector('.banner');
+    const allEls = sets.flat();
+    return { inside, disjoint, banner: allEls.some((e) => banner.contains(e)), texts: allEls.map((e) => e.textContent).join('|').includes('Free shipping') };
+  });
+  check('No leakage: every candidate lies inside its own card; cards share none; the page banner (“Free shipping over $50”, “Shop all sale”) is never a candidate', leak.inside && leak.disjoint && !leak.banner && !leak.texts, JSON.stringify(leak));
+  const pageUnchanged = await A.evaluate(() => { const before = document.body.innerHTML; const C = BluelineCards; for (const c of document.querySelectorAll('#grid-sem > li, #rail-des > article')) C.detectFields(c); return before === document.body.innerHTML; });
+  check('Recognising fields never changes the page', pageUnchanged);
+
+  // ---- 2. References: saving and finding an element again, honestly
+  const refTests = await A.evaluate(() => {
+    const C = BluelineCards; const out = {};
+    const card = document.querySelector('#grid-sem > li:nth-child(2)');
+    const det = C.detectFields(card).fields;
+    const refs = Object.fromEntries(['title', 'sale', 'regular', 'cta', 'badge'].map((k) => [k, C.fieldRef(card, det[k].best.el, k)]));
+    const st = (k) => { const r = C.resolveFieldRef(card, k, refs[k]); return { state: r.state, n: r.candidates.length, el: r.el && r.el.tagName.toLowerCase() }; };
+    out.fresh = Object.fromEntries(Object.keys(refs).map((k) => [k, st(k).state]));
+    // text edits are not structure: a price or title that changes is still the same element
+    card.querySelector('ins').textContent = '$24.99'; card.querySelector('h3 a').textContent = 'Renamed Product';
+    out.afterText = [st('sale').state, st('title').state]; out.newCents = C.fieldValue(C.resolveFieldRef(card, 'sale', refs.sale).el, 'sale').cents;
+    card.querySelector('ins').textContent = '$22.99';
+    // reordered siblings: the element moved, one look-alike exists, and it is offered, not applied
+    const price = card.querySelector('.price'); const del = price.querySelector('del'); const ins = price.querySelector('ins'); price.insertBefore(ins, del);
+    out.moved = { regular: st('regular'), sale: st('sale') };
+    price.insertBefore(del, ins);
+    // a sale ref never lands on the struck-through price
+    const insHtml = ins.outerHTML; ins.remove();
+    out.noStruckSwap = st('sale');
+    price.appendChild(ins);
+    // two look-alikes, neither where the original was
+    ins.remove();
+    const dupA = ins.cloneNode(true); const dupB = ins.cloneNode(true); price.insertBefore(dupA, del); price.appendChild(dupB);
+    out.dup = st('sale');
+    dupA.remove(); dupB.remove(); price.appendChild(ins);
+    // no longer holds a price
+    ins.textContent = 'Sold out';
+    out.invalid = st('sale');
+    ins.textContent = '$22.99';
+    // a different element where it was (another button, other classes); and a different kind of element (a link)
+    const btn = card.querySelector('button'); const form = btn.parentElement; const alt = document.createElement('button'); alt.className = 'other'; alt.textContent = 'Add to cart'; form.replaceChild(alt, btn);
+    out.changed = st('cta');
+    const a = document.createElement('a'); a.textContent = 'Add to cart'; a.href = '#x'; form.replaceChild(a, alt);
+    out.replaced = st('cta');
+    form.replaceChild(btn, a);
+    out.restored = st('cta').state;
+    // the whole card swapped for its neighbour's structure: nothing is ever taken from another card
+    const other = document.querySelector('#grid-sem > li:nth-child(1)');
+    const cross = C.resolveFieldRef(other, 'title', refs.title);
+    out.cross = { state: cross.state, same: cross.el === other.querySelector('h3') };
+    return out;
+  });
+  check('References: every saved element is found again exactly (state ok)', Object.values(refTests.fresh).every((s) => s === 'ok'), JSON.stringify(refTests.fresh));
+  check('References: changed text (a new price, a renamed product) is not a structural change; the new value is read', refTests.afterText.every((s) => s === 'ok') && refTests.newCents === 2499);
+  check('References: reordered siblings are reported as "moved" with ONE look-alike offered, never silently re-assigned', refTests.moved.regular.state === 'moved' && refTests.moved.regular.n === 1 && refTests.moved.regular.el === null && refTests.moved.sale.state === 'moved', JSON.stringify(refTests.moved));
+  check('References: a sale-price reference never remaps to the struck-through price when its own element is gone', refTests.noStruckSwap.state === 'missing', JSON.stringify(refTests.noStruckSwap));
+  check('References: two look-alikes make it ambiguous; an element that no longer holds a price is invalid; a different element in its place is "changed"', refTests.dup.state === 'ambiguous' && refTests.dup.n === 2 && refTests.invalid.state === 'invalid' && refTests.changed.state === 'changed' && refTests.replaced.state === 'missing' && refTests.restored === 'ok', JSON.stringify([refTests.dup, refTests.invalid, refTests.changed, refTests.replaced]));
+  check('References: a reference from one card, resolved in another card, never produces an element in the other card’s place without review', refTests.cross.state !== 'ok' || refTests.cross.same, JSON.stringify(refTests.cross));
+
+  // ---- 3. The window: suggestions, accepting, choosing, picking, clearing, saving
+  const tryClick = (sel) => A.evaluate((sel) => { const b = __BL.S.ui.root.querySelector(sel); if (b) b.click(); return !!b; }, sel);
+  const selQ = (v) => A.evaluate((v) => { const i = __BL.S.ui.root.querySelector('[data-lib="sel-q"]'); i.value = v; i.dispatchEvent(new Event('input', { bubbles: true })); }, v);
+  const mapCard = async (sel, query, key) => {
+    await shiftClick(A, await pointFor(A, sel, 'text'));
+    await A.evaluate(() => { __BL.S.ui.root.querySelector('[data-d="card"]').open = true; }); await sleep(250);
+    await tryClick('[data-x="card-cancel"]'); await sleep(120);
+    await t.click('[data-x="card-start"]'); await sleep(150);
+    await t.click('[data-x="card-ok"]');
+    await sleep(150);
+    await t.click('[data-x="map-start"]');
+    await A.waitForFunction(() => !!__BL.S.ui.root.querySelector('[data-lib="sel-q"]'));
+    await sleep(300);
+    await selQ(query); await sleep(200);
+    await A.evaluate((key) => __BL.S.ui.root.querySelector(`.lib-sel-row[data-key="${key}"]`).click(), key); await sleep(600);
+    await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-sel-use"]').click()); await sleep(400);
+  };
+  const win = () => A.evaluate(() => {
+    const r = __BL.S.ui.root; const m = __BL.libraryUi.L.map; const save = r.querySelector('[data-x="lib-map-save"]');
+    const rows = Object.fromEntries([...r.querySelectorAll('.lib-el')].map((e) => [e.dataset.k, { badge: e.querySelector('.lib-badge')?.textContent.trim(), tone: e.querySelector('.lib-badge')?.className.replace('lib-badge', '').trim(), val: (e.querySelector('.lib-el-v')?.textContent || '').replace(/\s+/g, ' ').trim(), sub: [...e.querySelectorAll('.sub')].map((s) => s.textContent.replace(/\s+/g, ' ').trim()).join(' | '), btns: [...e.querySelectorAll('button')].map((b) => b.textContent.trim()), opts: +((e.querySelector('[data-x="lib-el-choose"]')?.textContent.match(/\((\d+)\)/) || [])[1] || 0) }]));
+    return { open: !!m && !r.querySelector('[data-m="library"]').hidden, rows, n: Object.keys(rows).length, cta: save?.textContent.trim(), ctaOff: save ? save.disabled : null, fields: m?.draft?.fields ? JSON.parse(JSON.stringify(m.draft.fields)) : null, disc: (r.querySelector('.lib-disc')?.textContent || '').replace(/\s+/g, ' ').trim(), discBad: !!r.querySelector('.lib-disc.bad'), heading: [...r.querySelectorAll('.lib-map-body .lib-sel-h4')].map((h) => h.textContent.replace(/\s+/g, ' ').trim()), picking: !!m?.picking, sheetHidden: r.querySelector('[data-m="library"]').hidden, err: r.querySelector('.lib-map-body .lib-vv-notice.bad')?.textContent || '' };
+  });
+  const rowBtn = async (k, x, id) => { await A.evaluate((k, x) => { __BL.S.ui.root.querySelector(`.lib-el[data-k="${k}"] [data-x="${x}"]`).click(); }, k, x); await sleep(250); };
+  const choose = async (k, i) => { await A.evaluate((k) => { __BL.S.ui.root.querySelector(`.lib-el[data-k="${k}"] [data-x="lib-el-choose"]`).click(); }, k); await sleep(150); await A.evaluate((k, i) => { [...__BL.S.ui.root.querySelectorAll(`.lib-el[data-k="${k}"] [data-x="lib-el-use"]`)][i - 1].click(); }, k, i); await sleep(250); };
+  const mSave5 = async () => { await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-map-save"]').click()); await sleep(700); };
+  const cancel5 = async () => { await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-map-cancel"]').click()); await sleep(350); };
+  const itemMap = async (i = 0) => (await t.item(i)).productMapping;
+
+  await mapCard('#grid-sem > li:nth-child(1) h3 a', 'zma', 'sku:ACM400101');
+  let w = await win();
+  check('The window shows a "Page elements in this card" section: one row per field (title, image, sale price, regular price, discount badge, Add to Cart button, product link)', w.open && w.n === 7 && JSON.stringify(Object.keys(w.rows)) === JSON.stringify(['title', 'image', 'sale', 'regular', 'badge', 'cta', 'link']) && w.heading.some((h) => /Page elements in this card/.test(h)), JSON.stringify(w.heading) + Object.keys(w.rows));
+  check('Each row says what it found and whether it is a suggestion: title, prices and badge read from the page, all marked Suggested, none confirmed', w.rows.title.badge === 'Suggested' && /ZMA Night Formula/.test(w.rows.title.val) && /\$27\.99/.test(w.rows.sale.val) && /\$39\.99/.test(w.rows.regular.val) && /30% OFF/.test(w.rows.badge.val) && Object.values(w.rows).every((r) => /^Suggested/.test(r.badge)), JSON.stringify(w.rows).slice(0, 800));
+  check('Suggestions are NOT part of the draft: nothing is stored until accepted', w.fields === null);
+  check('Page values are compared with the approved values separately from the element: the page shows $27.99 but $19.99 is approved; the page title differs from the approved title', /Page shows \$27\.99; approved: \$19\.99/.test(w.rows.sale.sub) && /Page shows \$39\.99; approved: \$27\.97/.test(w.rows.regular.sub) && /Page says “ZMA Night Formula”; approved: “Acme ZMA Capsules”/.test(w.rows.title.sub), JSON.stringify([w.rows.sale.sub, w.rows.regular.sub, w.rows.title.sub]));
+  check('The Add to Cart row says plainly that mapping it wires nothing', /nothing here wires Add to Cart/i.test(w.rows.cta.sub));
+  check('Discount line: approved $27.97 and $19.99 give 29% (28.5% rounds up); the page badge says 30%, so the mismatch is flagged and the badge is not trusted', /29% off/.test(w.disc) && /approved regular \$27\.97, sale \$19\.99/.test(w.disc) && w.discBad && /badge says 30% off but the approved prices give 29%/.test(w.disc), w.disc);
+  // accept one, choose-from-list is covered on the ambiguous card below
+  await rowBtn('title', 'lib-el-accept');
+  w = await win();
+  check('Accepting a suggestion confirms exactly that field: Title is Confirmed, the others are still suggestions, and the draft now holds one assignment', w.rows.title.badge === 'Confirmed' && /^Suggested/.test(w.rows.sale.badge) && Object.keys(w.fields.items).join() === 'title' && w.fields.items.title.state === 'confirmed' && w.fields.items.title.source === 'suggested' && !!w.fields.items.title.ref.fp, JSON.stringify(w.fields));
+  check('Accepting does not rewrite anything on the page and does not save', await A.evaluate(() => document.querySelector('#grid-sem > li:nth-child(1) h3 a').textContent === 'ZMA Night Formula') && !(await t.item(0).catch(() => null)));
+  await rowBtn('link', 'lib-el-clear');
+  w = await win();
+  check('"Clear" records "not on this card" for that field (no element), and Undo returns it to a suggestion', w.rows.link.badge === 'Not on this card' && w.fields.items.link.state === 'unmapped' && !w.fields.items.link.ref && w.rows.link.btns.includes('Undo') && w.rows.link.btns.includes('Pick on page') && !w.rows.link.btns.includes('Accept'));
+  await rowBtn('link', 'lib-el-undo');
+  w = await win();
+  check('Undo removes the decision again: the link is a suggestion and not in the draft', /^Suggested/.test(w.rows.link.badge) && !w.fields.items.link);
+  await rowBtn('link', 'lib-el-clear');
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-el-accept-all"]').click()); await sleep(300);
+  w = await win();
+  check('Accept all suggestions confirms every remaining suggestion at once (but not the one cleared as "not on this card"), and the button disappears', Object.keys(w.fields.items).join() === 'title,image,sale,regular,badge,cta,link' && w.fields.items.link.state === 'unmapped' && ['title', 'image', 'sale', 'regular', 'badge', 'cta'].every((k) => w.fields.items[k].state === 'confirmed') && !(await A.evaluate(() => !!__BL.S.ui.root.querySelector('[data-x="lib-el-accept-all"]'))));
+  await rowBtn('link', 'lib-el-undo');
+  await rowBtn('link', 'lib-el-accept');
+  w = await win();
+  check('After Undo the link can be accepted like any suggestion', w.fields.items.link.state === 'confirmed' && w.rows.link.badge === 'Confirmed');
+
+  // ---- picking on the page: scoped to the card, never activates anything
+  const urlBefore = await A.evaluate(() => location.href);
+  await rowBtn('cta', 'lib-el-pick');
+  let pk = await A.evaluate(() => { const r = __BL.S.ui.root; const mini = r.querySelector('.x-mini'); return { sheetHidden: r.querySelector('[data-m="library"]').hidden, mini: !!mini && !mini.hidden, miniText: mini?.textContent.replace(/\s+/g, ' ').trim(), picking: !!__BL.libraryUi.L.map.picking, open: __BL.libraryUi.L.open, draftCta: __BL.libraryUi.L.map.draft.fields.items.cta.ref.tag }; });
+  check('Pick on page: the window steps aside, the compact Blueline bar says what to click, and the draft is kept', pk.sheetHidden && pk.mini && /Card Mapping/.test(pk.miniText) && /Add to Cart button/i.test(pk.miniText) && pk.picking && pk.open === false, JSON.stringify(pk));
+  const bannerP = await pointFor(A, '.banner a', 'center');
+  await A.mouse.move(bannerP.x, bannerP.y, { steps: 2 });
+  check('Hovering outside the card highlights nothing (the picker is scoped to the selected card)', (await hlRect(A)) === null);
+  await A.mouse.down(); await A.mouse.up(); await sleep(250);
+  pk = await A.evaluate(() => ({ still: !!__BL.libraryUi.L.map.picking, href: location.href, hash: location.hash }));
+  check('Clicking a link outside the card is ignored: still picking, and the page did not navigate', pk.still && pk.href === urlBefore && pk.hash === '');
+  const badgeP = await pointFor(A, '#grid-sem > li:nth-child(1) .badge', 'center');
+  await A.mouse.move(badgeP.x, badgeP.y, { steps: 2 });
+  await A.mouse.down(); await A.mouse.up(); await sleep(300);
+  pk = await A.evaluate(() => ({ still: !!__BL.libraryUi.L.map.picking, href: location.href }));
+  check('Clicking something that cannot be that field (the discount badge for the Add to Cart button) is refused: still picking, nothing navigated', pk.still && pk.href === urlBefore);
+  await A.keyboard.press('Escape'); await sleep(300);
+  w = await win();
+  check('Esc cancels the pick: the window is back, still open, with the draft untouched (Esc did not close the window)', w.open && !w.picking && !w.sheetHidden && w.fields.items.cta.state === 'confirmed' && (await A.evaluate(() => !__BL.S.ui.root.querySelector('.x-mini') || __BL.S.ui.root.querySelector('.x-mini').hidden)));
+  await rowBtn('cta', 'lib-el-clear');
+  await rowBtn('cta', 'lib-el-pick');
+  const btnP = await pointFor(A, '#grid-sem > li:nth-child(1) button.add', 'center');
+  await A.mouse.move(btnP.x, btnP.y, { steps: 2 });
+  const hlB = await hlRect(A);
+  const btnBox = await A.evaluate(() => { const r = document.querySelector('#grid-sem > li:nth-child(1) button.add').getBoundingClientRect(); return { l: r.left, t: r.top, w: r.width, h: r.height }; });
+  check('Hovering inside the card highlights the element that would be chosen (the button)', !!hlB && same(hlB, btnBox), JSON.stringify([hlB, btnBox]));
+  await A.mouse.down(); await A.mouse.up(); await sleep(400);
+  w = await win();
+  const afterPick = await A.evaluate(() => ({ href: location.href, picked: __BL.libraryUi.L.map.draft.fields.items.cta.source, tag: __BL.libraryUi.L.map.draft.fields.items.cta.ref.tag, sel: __BL.libraryUi.L.map.draft.fields.items.cta.ref.sel }));
+  check('Picking the real Add to Cart button assigns it without pressing it (no form submit, no navigation), and returns to the window', afterPick.href === urlBefore && afterPick.picked === 'picked' && afterPick.tag === 'button' && w.open && !w.picking && w.rows.cta.badge === 'Confirmed', JSON.stringify(afterPick));
+  // an unsaved edit survives a pick
+  await A.evaluate(() => { const i = __BL.S.ui.root.querySelector('.lib-map-body input[data-lib="map-f"][data-f="title"]'); i.value = 'Typed before picking'; i.dispatchEvent(new Event('input', { bubbles: true })); }); await sleep(120);
+  await rowBtn('badge', 'lib-el-pick');
+  const bp = await pointFor(A, '#grid-sem > li:nth-child(1) .badge', 'center');
+  await A.mouse.move(bp.x, bp.y, { steps: 2 }); await A.mouse.down(); await A.mouse.up(); await sleep(400);
+  check('A pick keeps the other unsaved edits (a typed page-specific title) in the draft', await A.evaluate(() => __BL.libraryUi.L.map.draft.overrides?.title === 'Typed before picking'));
+  await A.evaluate(() => { const i = __BL.S.ui.root.querySelector('.lib-map-body input[data-lib="map-f"][data-f="title"]'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); }); await sleep(120);
+
+  // ---- saving
+  w = await win();
+  check('Save Mapping is the explicit step: with elements assigned the first mapping offers Map & Save, and nothing was stored before it', w.cta === 'Map & Save' && !w.ctaOff && !(await t.item(0).catch(() => null)));
+  await mSave5();
+  const saved1 = await itemMap(0);
+  check('Map & Save stores the assignments with the mapping: kinds, references and what was seen, with the exact variant id as a string', saved1.variant.variantId === '4444444444' && typeof saved1.variant.variantId === 'string' && Object.keys(saved1.fields.items).join() === 'title,image,sale,regular,badge,cta,link' && saved1.fields.items.sale.ref.tag === 'ins' && saved1.fields.items.sale.detected.cents === 2799 && saved1.fields.v === 1, JSON.stringify(saved1.fields).slice(0, 400));
+  check('Nothing but the mapping was written: the Product Library (imported file, corrections, approvals) is byte-identical, and the approved prices are untouched by what the page shows', (await libRaw5()) === libBefore5 && saved1.approved.regularCents === 2797 && saved1.approved.promoCents === 1999 && !saved1.overrides);
+  check('The saved card identity is kept beside the fields (one mapping, no second store)', saved1.card?.v === 1 && saved1.card.tag === 'li' && !!saved1.card.shape && Object.keys(await A.evaluate(() => chrome.storage.local.get())).filter((k) => /field/i.test(k)).length === 0);
+
+  // ---- reopening: restored and revalidated
+  const reboot5 = async () => { await A.evaluate(() => __BLUELINE_TEST__.api.setActive(false)); await sleep(500); await A.evaluate(() => __BLUELINE_TEST__.api.setActive(true)); await sleep(800); };
+  await reboot5();
+  const stored5a = await A.evaluate(() => chrome.storage.local.get('blueline:batch').then((r) => JSON.stringify(r['blueline:batch'])));
+  await A.evaluate(() => { __BL.S.ui.root.querySelector('.x-pmbox .pmb').click(); }); await sleep(700);
+  w = await win();
+  check('Reopening restores every saved assignment as Confirmed (re-checked against the page) and the window is not "changed"', w.open && Object.values(w.rows).every((r) => r.badge === 'Confirmed') && w.cta === 'Save Mapping' && w.ctaOff === true, JSON.stringify(Object.fromEntries(Object.entries(w.rows).map(([k, v]) => [k, v.badge]))));
+  await cancel5();
+  check('Opening and cancelling changed nothing in storage', (await A.evaluate(() => chrome.storage.local.get('blueline:batch').then((r) => JSON.stringify(r['blueline:batch'])))) === stored5a);
+
+  // ---- the card itself changes: nothing is guessed about its elements
+  await A.evaluate(() => { window.__btn = document.querySelector('#grid-sem > li:nth-child(1) form button'); window.__btn.remove(); });
+  await A.evaluate(() => { __BL.S.ui.root.querySelector('.x-pmbox .pmb').click(); }); await sleep(700);
+  w = await win();
+  check('When the card itself no longer matches what was saved (its Add to Cart button was removed), the window says to confirm the card again and marks every saved element for review: nothing is guessed', Object.values(w.rows).every((r) => r.badge === 'Needs review') && /confirm the card again/.test(w.rows.title.sub) && w.ctaOff === true, JSON.stringify([w.rows.title.badge, w.rows.title.sub]));
+  await cancel5();
+  await A.evaluate(() => { document.querySelector('#grid-sem > li:nth-child(1) form').appendChild(window.__btn); });
+
+  // ---- page-specific overrides stay separate from elements, and drive the discount
+  await A.evaluate(() => { __BL.S.ui.root.querySelector('.x-pmbox .pmb').click(); }); await sleep(700);
+  await A.evaluate(() => { for (const [f, v] of [['regularCents', '39.99'], ['promoCents', '27.99']]) { const i = __BL.S.ui.root.querySelector(`.lib-map-body input[data-lib="map-f"][data-f="${f}"]`); i.value = v; i.dispatchEvent(new Event('input', { bubbles: true })); } }); await sleep(200);
+  w = await win();
+  check('A page-specific price override drives the discount at once ($39.99 / $27.99 = 30%), the badge agrees, and Save is available', /30% off/.test(w.disc) && /includes this page’s price override/.test(w.disc) && !w.discBad && /The page badge agrees/.test(w.disc) && w.ctaOff === false, w.disc);
+  check('Correcting a value is separate from the element: the sale price row still points at the same element and now matches the approved value', w.rows.sale.badge === 'Confirmed' && !/approved:/.test(w.rows.sale.sub) && !/approved:/.test(w.rows.regular.sub));
+  await mSave5();
+  const saved2 = await itemMap(0);
+  check('Saved: the override is on the mapping only. The approved prices, the variant id, the assignments and the whole Product Library are unchanged', saved2.overrides.regularCents === 3999 && saved2.overrides.promoCents === 2799 && saved2.approved.regularCents === 2797 && saved2.approved.promoCents === 1999 && saved2.variant.variantId === '4444444444' && JSON.stringify(saved2.fields) === JSON.stringify(saved1.fields) && (await libRaw5()) === libBefore5);
+  const rep2 = await t.prompt();
+  check('The report states the discount from the effective prices ($39.99 / $27.99 = 30%) and notes the page-specific override; the page’s badge agrees so no mismatch is raised', /Discount: 30% off, from approved regular \$39\.99 and sale \$27\.99 \(includes this page’s price override\)\. The page badge agrees/.test(rep2) && !/Mismatch/.test(rep2), rep2.slice(rep2.indexOf('Discount') - 50, rep2.indexOf('Discount') + 300));
+  await A.evaluate(() => { __BL.S.ui.root.querySelector('.x-pmbox .pmb').click(); }); await sleep(600);
+  await A.evaluate(() => { __BL.S.ui.root.querySelector('[data-x="lib-map-reset-all"]').click(); }); await sleep(250);
+  w = await win();
+  check('Resetting the overrides recalculates the discount from the approved prices (29%) and flags the badge again', /29% off/.test(w.disc) && w.discBad && w.ctaOff === false);
+  await cancel5();
+
+  // ---- ambiguity in the window: nothing chosen until the person chooses
+  await t.click('[data-act="pop-cancel"]').catch(() => {});
+  await mapCard('#rows-amb > div:nth-child(1) > div:nth-child(2)', 'fish', 'sku:ACM999001');
+  w = await win();
+  check('Ambiguous fields show "Several matches" with the candidates in a list and NOTHING selected: no draft assignment and no Accept button', ['image', 'sale', 'regular', 'link'].every((k) => w.rows[k].badge === 'Several matches' && w.rows[k].opts >= 2 && !w.rows[k].btns.includes('Accept')) && w.fields === null, JSON.stringify(Object.fromEntries(Object.entries(w.rows).map(([k, v]) => [k, [v.badge, v.opts, v.btns.join('/')]]))));
+  check('Unambiguous fields on the same card are still plainly suggested', /^Suggested/.test(w.rows.title.badge) && /Gamma Product/.test(w.rows.title.val));
+  check('Fields with nothing plausible say "Not found" and offer picking, never an invented element', w.rows.badge.badge === 'Not found' && w.rows.cta.badge === 'Not found' && w.rows.badge.btns.includes('Pick on page') && !w.rows.badge.btns.includes('Accept'));
+  await choose('sale', 1);
+  w = await win();
+  const sale1 = w.fields.items.sale;
+  check('Choosing a candidate from the list confirms it (source "chosen"), whichever it is', sale1.state === 'confirmed' && sale1.source === 'chosen' && w.rows.sale.badge === 'Confirmed' && Object.keys(w.fields.items).join() === 'sale', JSON.stringify(w.fields));
+  await choose('regular', 2);
+  w = await win();
+  check('The two prices can be assigned independently, and may not be the same element once chosen from different entries', w.fields.items.sale.ref.path !== w.fields.items.regular.ref.path || w.fields.items.sale.ref.fp !== w.fields.items.regular.ref.fp, JSON.stringify(w.fields));
+  await cancel5();
+  await t.click('[data-act="pop-cancel"]').catch(() => {});
+
+  // ---- three cards, three mappings (the Featured Deals shape): isolation, migration safety, revalidation
+  await t.click('[data-act="pop-cancel"]').catch(() => {});
+  const designer = (n) => `#rail-des > article:nth-child(${n}) > div:nth-child(2) > div:nth-child(1)`;
+  await mapCard(designer(1), 'zma', 'sku:ACM400101'); await mSave5();
+  await mapCard(designer(2), 'fish', 'sku:ACM999001'); await mSave5();
+  await mapCard(designer(3), 'charcoal', 'sku:ACM200101'); await mSave5();
+  const items3 = async () => (await A.evaluate(() => JSON.parse(JSON.stringify(__BL.S.batch.items)))).filter((it) => /article/.test(it.productMapping?.card?.selector || '') || it.productMapping?.card?.tag === 'article');
+  const before3 = JSON.stringify(await items3());
+  check('Three designer cards are each mapped to a different product, with no field assignments yet (as every M3 mapping)', (await items3()).length === 3 && (await items3()).every((it) => !it.productMapping.fields) && (await items3()).map((it) => it.productMapping.variant.variantId).sort().join() === [vOf5('zma').variantId, vOf5('fish-oil').variantId, vOf5('charcoal').variantId].map(String).sort().join());
+  await reboot5();
+  const openBadge = async (re) => { await A.evaluate((src) => { const re = new RegExp(src); const b = [...__BL.S.ui.root.querySelectorAll('.x-pmbox .pmb')].find((x) => re.test(x.textContent)); b.click(); }, re.source); await sleep(700); };
+  for (const re of [/ZMA/, /Fish/, /Charcoal/]) { await openBadge(re); await cancel5(); }
+  check('Opening and closing mappings made before M4 rewrote nothing: all three notes are exactly as saved (no fields added, nothing dropped)', JSON.stringify(await items3()) === before3);
+  await openBadge(/Fish/);
+  w = await win();
+  check('Card 2 offers its own suggestions from card 2 only: title, image, both prices, badge and button, with no link on a "#" placeholder counted as confirmed', w.open && w.n === 7 && /Product Name/.test(w.rows.title.val) && /placeholder \[\$Sale\]/.test(w.rows.sale.val) && /placeholder \[\$Reg\]/.test(w.rows.regular.val) && /Shop Deal/.test(w.rows.cta.val), JSON.stringify(w.rows).slice(0, 600));
+  check('Placeholder text is shown as a placeholder, never as a price: no value is compared with the approved price, and the link row warns the address is only "#"', !/approved:/.test(w.rows.sale.sub) && /placeholder address/.test(w.rows.link.val) && w.rows.link.badge === 'Suggested · check it');
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-el-accept-all"]').click()); await sleep(300);
+  await mSave5();
+  const after3 = await items3();
+  const by = (k) => after3.find((it) => it.productMapping.product.key === k).productMapping;
+  const first3 = JSON.parse(before3);
+  check('Assigning elements on card 2 changed card 2’s mapping only: cards 1 and 3 are byte-identical, card 2 gained fields and kept its own exact variant id', !by('sku:ACM400101').fields && !by('sku:ACM200101').fields && !!by('sku:ACM999001').fields && by('sku:ACM999001').variant.variantId === String(vOf5('fish-oil').variantId) && JSON.stringify(by('sku:ACM400101')) === JSON.stringify(first3.find((it) => it.productMapping.product.key === 'sku:ACM400101').productMapping) && JSON.stringify(by('sku:ACM200101')) === JSON.stringify(first3.find((it) => it.productMapping.product.key === 'sku:ACM200101').productMapping));
+  const f2 = by('sku:ACM999001').fields.items;
+  const owner = await A.evaluate((paths) => { const card = document.querySelector('#rail-des > article:nth-child(2)'); const others = [1, 3].map((n) => document.querySelector(`#rail-des > article:nth-child(${n})`)); return Object.entries(paths).map(([k, p]) => { const el = card.querySelector(`:scope > ${p}`); return [k, !!el, others.some((o) => o.contains(el))]; }); }, Object.fromEntries(Object.entries(f2).filter(([, v]) => v.ref && v.ref.path !== '^').map(([k, v]) => [k, v.ref.path])));
+  check('Every saved reference resolves inside card 2 and nowhere in cards 1 or 3 (card-relative paths, never page-wide)', owner.length >= 5 && owner.every(([, ok, leak]) => ok && !leak) && Object.values(f2).every((v) => !v.ref || !/^(body|html|#)/.test(v.ref.path)), JSON.stringify(owner));
+  // identical placeholder cards: an edit inside one never changes which card it is, so its elements can be re-checked
+  await mapCard('#rail-pos > article:nth-child(2) > div:nth-child(2) > div:nth-child(1)', 'black', 'sku:ACM100101');
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-el-accept-all"]').click()); await sleep(300);
+  await mSave5();
+  const posSaved = (await A.evaluate(() => JSON.parse(JSON.stringify(__BL.S.batch.items)))).find((it) => it.productMapping?.product?.key === 'sku:ACM100101').productMapping;
+  check('A card whose identity is its position keeps working after its content is edited: the mapping with seven assignments saved', Object.keys(posSaved.fields.items).length === 7 && posSaved.card.evidence === 'positional', JSON.stringify(posSaved.card.evidence));
+  await A.evaluate(() => { const d = document.querySelector('#rail-pos > article:nth-child(2) > div:nth-child(2) > div:nth-child(2)'); d.insertBefore(d.children[1], d.children[0]); });
+  await openBadge(/Black Seed/);
+  w = await win();
+  check('After the two prices swapped places: both need review and the other five stay Confirmed', w.rows.sale.badge === 'Needs review' && w.rows.regular.badge === 'Needs review' && ['title', 'image', 'badge', 'cta', 'link'].every((k) => w.rows[k].badge === 'Confirmed'), JSON.stringify(Object.fromEntries(Object.entries(w.rows).map(([k, v]) => [k, v.badge]))));
+  check('The reason says what happened, and nothing was re-assigned: the draft equals what was saved and Save stays off', /no longer where it was/.test(w.rows.sale.sub) && /no longer where it was/.test(w.rows.regular.sub) && w.ctaOff === true && JSON.stringify(w.fields) === JSON.stringify(posSaved.fields), JSON.stringify([w.rows.sale.sub, w.rows.regular.sub]));
+  check('A moved element offers its one look-alike ("Use this one") rather than taking it, and "Check again" is offered', w.rows.sale.btns.includes('Use this one') && w.rows.regular.btns.includes('Use this one') && await A.evaluate(() => !!__BL.S.ui.root.querySelector('[data-x="lib-el-rescan"]')));
+  const rep = await t.prompt();
+  check('The report lists the needs-review elements with the reason and the selectors, shows what was saved, and does not claim Add to Cart is wired', /Page elements in this card/.test(rep) && /\*\*Review before using:\*\*/.test(rep) && /Sale price \(the element is no longer where it was/.test(rep) && /Regular price \(the element is no longer where it was/.test(rep) && /Add to Cart button: .* \(confirmed\)/.test(rep) && /Nothing is wired to the cart or checkout yet/.test(rep) && new RegExp(`variant id \`${vOf5('black-seed-oil').variantId}\``).test(rep), rep.slice(rep.indexOf('Page elements') - 100, rep.indexOf('Page elements') + 1400));
+  await rowBtn('sale', 'lib-el-use');
+  w = await win();
+  check('Accepting the look-alike re-links that field (a draft change to be saved) and updates its state at once', w.rows.sale.badge === 'Confirmed' && w.ctaOff === false);
+  await cancel5();
+  check('Cancel throws that review change away: the stored mapping still has the original references', JSON.stringify((await A.evaluate(() => JSON.parse(JSON.stringify(__BL.S.batch.items))).then((x) => x.find((it) => it.productMapping?.product?.key === 'sku:ACM100101').productMapping.fields))) === JSON.stringify(posSaved.fields));
+  // another page / another site never sees this page's saved elements
+  const snap5 = await A.evaluate(() => chrome.storage.local.get('blueline:batch').then((r) => r['blueline:batch']));
+  const B5 = await open('product-fields.html', { http: true, realStorage: true, seed: { 'blueline:batch': snap5 }, host: 'localhost' });
+  await sleep(500);
+  const other5 = await B5.evaluate(() => ({ badges: __BL.S.ui.root.querySelectorAll('.x-pmbox .pmb').length, items: __BL.S.batch?.items?.length ?? 0 }));
+  check('Website isolation: the same page on another origin sees none of these mappings, badges or element assignments', other5.badges === 0 && other5.items === 0, JSON.stringify(other5));
+  await B5.close();
+  check('The Product Library is still byte-identical after all of this', (await libRaw5()) === libBefore5);
+  check('No page errors (product-fields.html)', A.errors.length === 0, A.errors.join(' | '));
+  await A.close();
+}
+
+// The real campaign draft (read-only local reference, git-ignored; skipped when it isn't on this machine). Only counts and
+// booleans are asserted, never its content.
+console.log('\n# Assign Products: direct entry, two columns, staging, green card numbers (fixtures/card-groups.html)');
+{
+  let A = await open('card-groups.html', { http: true, realStorage: true });
+  const ORIGIN6 = await A.evaluate(() => location.origin);
+  const CSV6 = 'Section,SKU,Product Name,Original Price,Sale Price\nFeatured,ACM400101,Acme ZMA Capsules,$27.97,$19.99\nFeatured,ACM999001,Acme Fish Oil Softgels,$30.97,\nFeatured,ACM200101,Acme Charcoal,$15.99,\nFeatured,ACM100101,Acme Black Seed Oil,$19.97,$14.99\n';
+  const vOf6 = (handle, i = 0) => LibNode.normalizeProduct(PRODUCTS.find((p) => p.handle === handle), ORIGIN6, 'USD').variants[i];
+  let lib6 = { store: ORIGIN6, campaign: 'l-bulk', name: 'Bulk list', smp: { v: 1, imports: [LibNode.importCsv(CSV6, { fileName: 'bulk.csv', sha256: 'bulk1' })] }, work: LibNode.emptyWork() };
+  for (const [k, h] of [['sku:ACM400101', 'zma'], ['sku:ACM999001', 'fish-oil'], ['sku:ACM200101', 'charcoal'], ['sku:ACM100101', 'black-seed-oil']]) lib6 = LibNode.decide(LibNode.chooseVariant(lib6, k, vOf6(h, 0)), k, 'smp');
+  const seedLib = (pg) => pg.evaluate((l) => BluelineLibrary.saveLibrary(chrome.storage.local, l, { smpChanged: true }), lib6);
+  await seedLib(A);
+  let t = tools(A);
+  const FEAT = (n) => `#row-feat > article:nth-child(${n})`;
+  const rootStyle = () => A.evaluate(() => document.documentElement.getAttribute('style'));
+  const bodyW = () => A.evaluate(() => Math.round(document.body.getBoundingClientRect().width));
+  const stored = () => A.evaluate(() => chrome.storage.local.get('blueline:batch').then((r) => r['blueline:batch'] || null));
+  const notes = async () => ((await stored())?.items || []).filter((i) => i.productMapping);
+  const libRaw6 = () => A.evaluate(() => chrome.storage.local.get().then((r) => JSON.stringify(Object.fromEntries(Object.entries(r).filter(([k]) => /^blueline:lib:(smp|work):/.test(k)).sort()))));
+  const W0 = await bodyW();
+
+  // ---- discovery itself (reads the page only)
+  const disc = await A.evaluate(() => {
+    const C = BluelineCards;
+    const seed = document.querySelector('#row-feat > article:nth-child(2)');
+    const before = document.body.innerHTML;
+    const d = C.discoverCards(seed);
+    const name = (el) => `${el.parentElement.id}:${[...el.parentElement.children].indexOf(el) + 1}`;
+    const all = d.cards.map((c) => c.el);
+    const decoys = ['nav', '.hero', '.tiles', 'footer'].map((s) => document.querySelector(s));
+    return {
+      confident: d.cards.filter((c) => c.confidence === 'high').map((c) => name(c.el)), review: d.cards.filter((c) => c.confidence === 'review').map((c) => name(c.el)),
+      hidden: d.cards.filter((c) => c.hidden).map((c) => name(c.el)), sections: [...new Set(d.cards.filter((c) => c.confidence === 'high').map((c) => c.section.heading))],
+      decoy: all.some((e) => decoys.some((x) => x && (x.contains(e) || e.contains(x)))), unchanged: before === document.body.innerHTML,
+      inOrder: all.every((e, i) => i === 0 || (all[i - 1].compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING)),
+      fromOther: C.discoverCards(document.querySelector('#row-best > article:nth-child(4)')).cards.filter((c) => c.confidence === 'high').length,
+    };
+  });
+  check('Discovery from ONE card finds the other cards built like it, in both sections (3 + 4), in document order', JSON.stringify(disc.confident) === JSON.stringify(['row-feat:1', 'row-feat:2', 'row-feat:3', 'row-best:1', 'row-best:2', 'row-best:3', 'row-best:4']) && disc.inOrder, JSON.stringify(disc));
+  check('Discovery groups the cards by section where the page names one, and flags the card a filter has hidden', JSON.stringify(disc.sections) === JSON.stringify(['Featured Deals', 'Best Sellers']) && JSON.stringify(disc.hidden) === JSON.stringify(['row-best:3']));
+  check('A differently built group (a list of bundles with prices and buttons) is found but only offered for review, never counted as confident', JSON.stringify(disc.review) === JSON.stringify(['list-bund:1', 'list-bund:2', 'list-bund:3']));
+  check('Unrelated page parts are never cards: the navigation, the hero banner, the category tiles (no prices) and the footer gift cards', !disc.decoy);
+  check('Discovery starts the same from any card of the group, and never changes the page', disc.fromOther === 7 && disc.unchanged);
+
+  // ---- the note editor no longer carries a global "Map cards" action
+  await shiftClick(A, await pointFor(A, `${FEAT(1)} .nm`, 'text'));
+  await A.evaluate(() => { __BL.S.ui.root.querySelector('[data-d="card"]').open = true; }); await sleep(250);
+  await A.evaluate(() => { __BL.S.ui.root.querySelector('[data-x="card-cancel"]')?.click(); }); await sleep(120);
+  await t.click('[data-x="card-start"]'); await sleep(150);
+  await t.click('[data-x="card-ok"]'); await sleep(900);
+  check('The note editor has no "Map cards" action any more, even with a confirmed card', await A.evaluate(() => !__BL.S.ui.root.querySelector('[data-x="cards-map"]') && !/Map cards/.test(__BL.S.ui.root.textContent)));
+  await A.evaluate(() => { if (__BL.S.pop) __BL.closePop(); }); await sleep(200);
+  check('Normal Blueline use leaves the website layout alone: nothing is added to the page’s root element with a note open', (await rootStyle()) === null && (await bodyW()) === W0);
+
+  // ---- direct entry from the Product Library, with no note anywhere
+  await A.evaluate(() => __BL.libraryUi.open({ existing: true })); await sleep(700);
+  const libView = await A.evaluate(() => { const r = __BL.S.ui.root; const b = r.querySelector('[data-x="lib-assign"]'); const cs = b && getComputedStyle(b); const tools = r.querySelector('.lib-tools'); const cfg = r.querySelector('.lib-cfg'); const sec = ['lib-check', 'lib-export', 'lib-export-full'].map((x) => r.querySelector(`[data-x="${x}"]`)).filter(Boolean); return { text: b?.textContent.trim(), bg: cs?.backgroundColor, visible: !!b && b.getClientRects().length > 0, head: r.querySelector('.lib-head').textContent, inTools: !!b?.closest('.lib-tools'), aboveCfg: !!b && !!cfg && b.getBoundingClientRect().bottom <= cfg.getBoundingClientRect().top, aboveTools: !!b && !!tools && b.getBoundingClientRect().bottom <= tools.getBoundingClientRect().top, secondaryBg: sec.map((x) => getComputedStyle(x).backgroundColor) }; });
+  check('The Product Library has a prominent GREEN "Assign Products" action at the top, apart from the secondary actions (Upload File, Check in Shopify, Export)', libView.text === 'Assign Products' && libView.visible && libView.bg === 'rgb(30, 122, 62)' && !libView.inTools && libView.aboveCfg && libView.aboveTools && libView.head === 'Product Library' && libView.secondaryBg.every((c) => c !== 'rgb(30, 122, 62)'), JSON.stringify(libView));
+  check('Opening the Product Library does not touch the website layout', (await rootStyle()) === null && (await bodyW()) === W0);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-assign"]').click()); await sleep(600);
+  // With no card known on the page the workspace still opens (no automatic picking): Define Product Card is the starting action.
+  const guide = await A.evaluate(() => { const r = __BL.S.ui.root; const mini = r.querySelector('.x-mini'); const d = r.querySelector('[data-x="lib-bk-define"]'); const f = r.querySelector('[data-x="lib-bk-find"]'); return { open: !r.querySelector('[data-m="library"]').hidden, head: r.querySelector('.lib-head').textContent, mini: mini && !mini.hidden, define: d?.textContent.trim(), defineVisible: !!d && d.getBoundingClientRect().height > 0 && !d.disabled, findOff: !!f && f.disabled, empty: /No product cards defined on this page yet/.test(r.querySelector('.lib-as-cbody')?.textContent || ''), items: (__BL.S.batch?.items || []).length }; });
+  check('With no card known on the page, Assign Products opens with Define Product Card as the starting action (nothing starts by itself, no note or card is created)', guide.open && guide.head === 'Assign Products' && !guide.mini && guide.define === 'Define Product Card' && guide.defineVisible && guide.findOff && guide.empty && guide.items === 0, JSON.stringify(guide));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-bk-define"]').click()); await sleep(500);
+  const g1 = await A.evaluate(() => { const r = __BL.S.ui.root; const mini = r.querySelector('.x-mini'); return { lib: r.querySelector('[data-m="library"]').hidden, mini: mini && !mini.hidden ? mini.textContent.replace(/\s+/g, ' ').trim() : null }; });
+  check('Define Product Card steps the workspace aside and asks for a click on the page', g1.lib && /Define Product Card/.test(g1.mini || '') && /Click any part of the product card/.test(g1.mini || ''), JSON.stringify(g1));
+  const navP = await pointFor(A, 'nav a', 'center');
+  await A.mouse.move(navP.x, navP.y, { steps: 2 }); await A.mouse.down(); await A.mouse.up(); await sleep(350);
+  const g2 = await A.evaluate(() => { const r = __BL.S.ui.root; const m = r.querySelector('.x-mini'); return { mini: m && !m.hidden ? m.textContent.replace(/\s+/g, ' ').trim() : null, hash: location.hash, items: (__BL.S.batch?.items || []).length }; });
+  check('Clicking a navigation link only proposes (it is not followed); nothing is saved until Confirm Card, and Blueline says it found no product card there', /No product card was found here/.test(g2.mini || '') && g2.hash === '' && g2.items === 0, JSON.stringify(g2));
+  await A.keyboard.press('Escape'); await sleep(400);
+  const esc1 = await A.evaluate(() => ({ lib: !__BL.S.ui.root.querySelector('[data-m="library"]').hidden, bulk: !!__BL.libraryUi.L.bulk, head: __BL.S.ui.root.querySelector('.lib-head').textContent, items: (__BL.S.batch?.items || []).length }));
+  check('Esc while defining cancels it and returns to Assign Products with nothing saved', esc1.lib && esc1.bulk && esc1.head === 'Assign Products' && esc1.items === 0, JSON.stringify(esc1));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-bk-define"]').click()); await sleep(500);
+  const p1 = await pointFor(A, `${FEAT(1)} .nm`, 'center');
+  await A.mouse.move(p1.x, p1.y, { steps: 3 }); await A.mouse.down(); await A.mouse.up(); await sleep(500);
+  const g3 = await A.evaluate(() => { const r = __BL.S.ui.root; const m = r.querySelector('.x-mini'); const h = r.querySelector('.hl2'); return { mini: m && !m.hidden ? m.textContent.replace(/\s+/g, ' ').trim() : null, acts: [...r.querySelectorAll('.x-mini [data-x="mini-act"]')].map((b) => b.textContent.trim()), outline: !!h && !h.hidden, items: (__BL.S.batch?.items || []).length }; });
+  check('The proposed card is outlined with Parent, Child and an obvious Confirm Card (nothing saved yet)', /Likely product card/.test(g3.mini || '') && g3.acts.join() === 'Parent ▲,Child ▼,Confirm Card' && g3.outline && g3.items === 0, JSON.stringify(g3));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').click()); await sleep(1000);
+
+  const ovw = () => A.evaluate(() => {
+    const r = __BL.S.ui.root; const exb = r.querySelector('.lib-ex-btn'); if (exb && !exb.hidden && exb.getAttribute('aria-expanded') === 'false') exb.click();
+    const s = __BL.libraryUi.L.bulk; const sh = r.querySelector('.lib-sheet');
+    const rows = [...r.querySelectorAll('.lib-bk:not(.lib-bk-off)')].map((e) => ({
+      n: +e.querySelector('.lib-bk-n').textContent, key: e.dataset.key, label: e.querySelector('.lib-bk-t b').textContent, sel: e.classList.contains('sel'), desc: e.querySelector('.lib-bk-d')?.textContent,
+      prod: e.querySelector('.lib-bk-prod')?.textContent.replace(/\s+/g, ' ').trim(), badges: [...e.querySelectorAll('.lib-badge')].map((b) => b.textContent.trim()),
+      btns: [...e.querySelectorAll('.lib-bk-a button')].map((b) => b.textContent.trim() + (b.disabled ? '(off)' : '')), err: e.querySelector('.lib-map-ferr')?.textContent || '',
+    }));
+    const off = [...r.querySelectorAll('.lib-bk-off')].map((e) => ({ key: e.dataset.key, label: e.querySelector('b').textContent, text: e.textContent.replace(/\s+/g, ' ').trim() }));
+    const prods = [...r.querySelectorAll('.lib-sel-row')].map((e) => ({ key: e.dataset.key, title: e.querySelector('b').textContent, asg: [...e.querySelectorAll('.lib-asg i')].map((i) => i.textContent), asgBg: e.querySelector('.lib-asg i') ? getComputedStyle(e.querySelector('.lib-asg i')).backgroundColor : null }));
+    const save = r.querySelector('[data-x="lib-bk-save"]'); const cancel = r.querySelector('[data-x="lib-bk-cancel"]');
+    const marks = [...r.querySelectorAll('.x-pmbox .pmb')].map((b) => ({ text: b.textContent.trim(), cls: b.className, key: b.dataset.key || null, x: b.dataset.x, shown: b.closest('.pmk').style.display !== 'none' }));
+    const rect = sh.getBoundingClientRect();
+    return {
+      open: !!s && !r.querySelector('[data-m="library"]').hidden, head: r.querySelector('.lib-head').textContent, sum: r.querySelector('.lib-as-sum')?.textContent || '', cls: sh.className, modal: r.querySelector('.lib-modal').className,
+      rect: { l: Math.round(rect.left), t: Math.round(rect.top), w: Math.round(rect.width), h: Math.round(rect.height) }, rows, off, prods, save: save?.textContent.trim(), saveOff: save ? save.disabled : null, cancel: cancel?.textContent.trim(),
+      why: r.querySelector('.lib-as-foot .lib-sel-why')?.textContent.trim(), marks, review: r.querySelector('.lib-as-cbody')?.textContent.includes('Saved mappings that need review'), msg: r.querySelector('.lib-as-cbody .lib-vv-notice')?.textContent.trim() || '',
+      sections: [...r.querySelectorAll('.lib-bk-sec')].map((h) => h.textContent), ctx: r.querySelector('.lib-sel-sub')?.textContent || '', colHeads: [...r.querySelectorAll('.lib-as-h')].map((h) => h.textContent),
+    };
+  });
+  let o = await ovw();
+  check('After defining one card, Assign Products lists the page cards (titled Assign Products) with no note created, only the one card record', o.open && o.head === 'Assign Products' && (await notes()).length === 0 && !(await A.evaluate(() => (__BL.S.batch?.items || []).filter((i) => !i.cardRecord).length)) && (await A.evaluate(() => (__BL.S.batch?.items || []).filter((i) => i.cardRecord).length)) === 1, JSON.stringify([o.head, o.cls]));
+  check('The workspace is two columns, Product Library on the LEFT and Page Cards on the RIGHT', JSON.stringify(o.colHeads) === JSON.stringify(['Product Library', 'Page Cards']) && o.rows.length === 7 && o.prods.length === 4 && await A.evaluate(() => { const r = __BL.S.ui.root; return r.querySelector('.lib-as-prods').getBoundingClientRect().left < r.querySelector('.lib-as-cards').getBoundingClientRect().left; }), JSON.stringify([o.colHeads, o.rows.length, o.prods.length]));
+  check('Page Cards: the 7 cards are numbered 1–7 in document order under their sections, each with a description, status and actions', o.rows.map((r) => r.n).join() === '1,2,3,4,5,6,7' && o.sections.join() === 'Featured Deals,Best Sellers' && /Featured Deals · card 1 of 3/.test(o.rows[0].desc) && o.rows.every((r) => r.label && r.badges.includes('Not mapped') && /No product assigned/.test(r.prod) && r.btns.some((b) => /^Locate/.test(b)) && !r.btns.some((b) => /^Edit fields/.test(b))), JSON.stringify(o.rows[0]));
+  check('The first card is selected, and the right column says which card it is choosing for (selected-card context stays visible)', o.rows[0].sel && /Assigning to Card 1 · Featured Deals/.test(o.ctx), o.ctx);
+  const cols = await A.evaluate(() => { const r = __BL.S.ui.root; const c = r.querySelector('.lib-as-cbody'); const p = r.querySelector('.lib-sel-body'); const sc = (e) => ({ ov: getComputedStyle(e).overflowY, ch: e.clientHeight }); const ctl = r.querySelector('.lib-sel-ctl'); return { cards: sc(c), prods: sc(p), search: !!r.querySelector('[data-lib="sel-q"]'), list: !!r.querySelector('[data-lib="sel-list"]'), sticky: ctl ? getComputedStyle(ctl).position : null, sameParent: c.parentElement !== p.parentElement }; });
+  check('The two columns scroll independently, and the list selector and product search are there (the search stays put)', cols.cards.ov === 'auto' && cols.prods.ov === 'auto' && cols.sameParent && cols.search && cols.list && cols.sticky === 'sticky', JSON.stringify(cols));
+  check('Product Library column: each product shows its image slot, name, SKU, approved price and its status', o.prods.length === 4 && await A.evaluate(() => [...__BL.S.ui.root.querySelectorAll('.lib-sel-row')].every((e) => e.querySelector('.lib-img') && /SKU ACM\d+/.test(e.textContent) && /\$\d+\.\d\d/.test(e.textContent) && e.querySelector('.lib-badge'))));
+  check('The workspace is docked on the RIGHT by default, about 680px wide, full height', /lib-d-right/.test(o.modal) && o.rect.w === 680 && o.rect.h === await A.evaluate(() => innerHeight) && o.rect.l + o.rect.w === await A.evaluate(() => document.documentElement.clientWidth), JSON.stringify(o.rect));
+  check('While docked the page reflows into the remaining space: the root element reserves the width, and the page content is narrower', (await rootStyle()) === 'margin-right: 680px !important;' && (await bodyW()) === W0 - 680, JSON.stringify([await rootStyle(), await bodyW(), W0]));
+  const vm = o.marks.filter((m) => m.shown && m.x === 'bk-mark');
+  check('One numbered marker per visible card on the page (the hidden card has none), same numbers as the rows, no blue pins added', vm.length === 6 && o.marks.length === 6 && vm.every((m) => /^\d+ · Not mapped$/.test(m.text)) && vm.every((m) => o.rows.find((r) => r.key === m.key)?.n === +m.text.split(' ')[0]) && await A.evaluate(() => [...__BL.S.ui.root.querySelectorAll('.x-marksbox .mk .bd')].filter((b) => getComputedStyle(b).display !== 'none').length === 0), JSON.stringify(o.marks));
+  const hl = await A.evaluate(() => { const b = __BL.S.ui.root.querySelector('.pmk.bksel'); const c = document.querySelector('#row-feat > article:nth-child(1)').getBoundingClientRect(); if (!b) return null; const r = b.getBoundingClientRect(); return { onCard: Math.abs(r.left - c.left) < 2 && Math.abs(r.top - c.top) < 2 && Math.abs(r.width - c.width) < 2, outline: getComputedStyle(b).outlineStyle }; });
+  check('The selected card is highlighted on the page (an outline exactly over it)', !!hl && hl.onCard && hl.outline === 'solid', JSON.stringify(hl));
+
+  // ---- select a card, then a product: staged only
+  const selQ6 = (v) => A.evaluate((v) => { const i = __BL.S.ui.root.querySelector('[data-lib="sel-q"]'); i.value = v; i.dispatchEvent(new Event('input', { bubbles: true })); }, v);
+  const selectCard = async (n) => { await A.evaluate((n) => [...__BL.S.ui.root.querySelectorAll('.lib-bk:not(.lib-bk-off)')][n - 1].querySelector('.lib-bk-n').click(), n); await sleep(350); };
+  const pickProduct = async (query, key) => {
+    await selQ6(query); await sleep(200);
+    await A.evaluate((key) => __BL.S.ui.root.querySelector(`.lib-sel-row[data-key="${key}"]`).click(), key); await sleep(600);
+    await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-sel-use"]').click()); await sleep(450);
+  };
+  const repShown = () => A.evaluate(() => !__BL.S.ui.root.querySelector('.lib-repbd').hidden);
+  const assignTo = async (n, query, key, confirm = true) => { await selectCard(n); await pickProduct(query, key); if (confirm && await repShown()) { await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-rep-ok"]').click()); await sleep(300); } await selQ6(''); await sleep(120); };
+  const rowBtn6 = async (n, x) => { await A.evaluate((n, x) => [...__BL.S.ui.root.querySelectorAll('.lib-bk:not(.lib-bk-off)')][n - 1].querySelector(`[data-x="${x}"]`).click(), n, x); await sleep(300); };
+  const clickOv = async (x) => { await A.evaluate((x) => __BL.S.ui.root.querySelector(`[data-x="${x}"]`).click(), x); await sleep(350); };
+
+  const libBeforeStage = await libRaw6(); // after the Library itself was opened (opening it may backfill list dates)
+  await selectCard(2);
+  o = await ovw();
+  check('Selecting a card on the left retargets the right column to it, highlights it on the page and keeps that context visible', o.rows[1].sel && !o.rows[0].sel && /Assigning to Card 2/.test(o.ctx) && o.marks.find((m) => /^2 /.test(m.text)).cls.includes('sel'));
+  await pickProduct('zma', 'sku:ACM400101'); await selQ6(''); await sleep(120);
+  o = await ovw();
+  check('Choosing a product for the selected card only STAGES it: "Not saved yet", Save Assignments (1), nothing stored, Library untouched', o.rows[1].badges.includes('Not saved yet') && /Acme ZMA/.test(o.rows[1].prod) && o.save === 'Save Assignments (1)' && o.saveOff === false && (await notes()).length === 0 && (await libRaw6()) === libBeforeStage, JSON.stringify([o.rows[1], o.save]));
+  check('The product shows a GREEN numbered indicator for the card it is assigned to', o.prods.find((p) => p.key === 'sku:ACM400101')?.asg.join() === '2' && o.prods.find((p) => p.key === 'sku:ACM400101').asgBg === 'rgb(30, 122, 62)', JSON.stringify(o.prods));
+  await assignTo(4, 'zma', 'sku:ACM400101');
+  await assignTo(5, 'zma', 'sku:ACM400101');
+  await assignTo(3, 'fish', 'sku:ACM999001');
+  o = await ovw();
+  check('One product can be assigned to several cards, and its indicator lists every card number in order: [2] [4] [5]; the other product shows [3]', o.prods.find((p) => p.key === 'sku:ACM400101').asg.join() === '2,4,5' && o.prods.find((p) => p.key === 'sku:ACM999001').asg.join() === '3' && o.save === 'Save Assignments (4)', JSON.stringify(o.prods.map((p) => [p.title, p.asg])));
+  await selectCard(4); await pickProduct('fish', 'sku:ACM999001');
+  const rep1 = await A.evaluate(() => { const c = __BL.S.ui.root.querySelector('.lib-rep'); return { hidden: c.closest('.lib-repbd').hidden, text: c.textContent.replace(/\s+/g, ' ').trim(), btns: [...c.querySelectorAll('button')].map((b) => b.textContent.trim()) }; });
+  o = await ovw();
+  check('Putting a DIFFERENT product on a card that already has one asks first: "Replace the product assigned to Card #4?" with the current and the new product, Cancel and Confirm replacement', !rep1.hidden && /Replace the product assigned to Card #4\?/.test(rep1.text) && /Current.*Acme ZMA/.test(rep1.text) && /New.*Acme Fish Oil/.test(rep1.text) && rep1.btns.join() === 'Cancel,Confirm replacement', JSON.stringify(rep1));
+  check('Until it is confirmed nothing changes: Card 4 still holds ZMA and the indicators are unchanged', /Acme ZMA/.test(o.rows[3].prod) && o.prods.find((p) => p.key === 'sku:ACM999001')?.asg.join() === '3', JSON.stringify(o.rows[3].prod));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-rep-cancel"]').click()); await sleep(300);
+  o = await ovw();
+  check('Cancel keeps the current product and closes the question', /Acme ZMA/.test(o.rows[3].prod) && (await repShown()) === false);
+  await pickProduct('fish', 'sku:ACM999001');
+  await A.keyboard.press('Escape'); await sleep(300);
+  check('Esc also cancels the question (and leaves Assign Products open)', (await repShown()) === false && !!(await A.evaluate(() => __BL.libraryUi.L.bulk)) && /Acme ZMA/.test((await ovw()).rows[3].prod));
+  await pickProduct('fish', 'sku:ACM999001');
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-rep-ok"]').click()); await sleep(300);
+  await selQ6(''); await sleep(120);
+  o = await ovw();
+  check('Changing a card’s staged product moves its number: ZMA now [2] [5], Fish Oil [3] [4]', o.prods.find((p) => p.key === 'sku:ACM400101').asg.join() === '2,5' && o.prods.find((p) => p.key === 'sku:ACM999001').asg.join() === '3,4', JSON.stringify(o.prods.map((p) => [p.title, p.asg])));
+  await rowBtn6(5, 'lib-bk-undo');
+  o = await ovw();
+  check('Undo change removes that card from the indicator and lowers the count', o.prods.find((p) => p.key === 'sku:ACM400101').asg.join() === '2' && o.save === 'Save Assignments (3)' && o.rows[4].badges.includes('Not mapped'));
+  check('The markers follow the staged state with the same numbers (Proposed · not saved)', /^2 · Proposed · Acme ZMA/.test(o.marks.find((m) => /^2 /.test(m.text)).text) && o.marks.find((m) => /^2 /.test(m.text)).cls.includes('pending'));
+  const hashBefore = await A.evaluate(() => location.href);
+  const goP = await pointFor(A, `${FEAT(1)} .go`, 'center');
+  await A.mouse.move(goP.x, goP.y, { steps: 2 }); await A.mouse.down(); await A.mouse.up(); await sleep(250);
+  check('While Assign Products is open the page’s own links and buttons do nothing', (await A.evaluate(() => location.href)) === hashBefore);
+
+  // Cancel, ✕ and Esc each discard everything staged, and give the page its layout back
+  await clickOv('lib-bk-cancel');
+  let closed = await A.evaluate(() => ({ hidden: __BL.S.ui.root.querySelector('[data-m="library"]').hidden, bulk: !!__BL.libraryUi.L.bulk, marks: __BL.S.ui.root.querySelectorAll('.x-pmbox .pmb').length, panelHidden: __BL.S.ui.root.querySelector('.panel').style.visibility === 'hidden', sel: !!__BL.libraryUi.L.sel }));
+  check('Cancel closes Assign Products and discards the staged changes: no markers, panel back, nothing stored', closed.hidden && !closed.bulk && closed.marks === 0 && !closed.panelHidden && !closed.sel && (await notes()).length === 0, JSON.stringify(closed));
+  check('Leaving Assign Products restores the website layout completely: no style left on the root element and the page is its original width', (await rootStyle()) === null && (await bodyW()) === W0, JSON.stringify([await rootStyle(), await bodyW()]));
+  const reopen = async () => { await A.evaluate(() => __BL.libraryUi.open({ existing: true })); await sleep(500); await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-assign"]').click()); await sleep(900); return ovw(); };
+  o = await reopen();
+  check('Reopening shows no staged changes (the first card is chosen again with a click only when no card is known: here it must ask again)', !o.open ? true : o.rows.every((r) => r.badges.includes('Not mapped')));
+  if (!o.open) { const p2 = await pointFor(A, `${FEAT(1)} .nm`, 'center'); await A.mouse.move(p2.x, p2.y, { steps: 3 }); await A.mouse.down(); await A.mouse.up(); await sleep(1000); }
+  await assignTo(2, 'zma', 'sku:ACM400101');
+  await A.keyboard.press('Escape'); await sleep(300);
+  check('Esc discards staged changes too (and the layout is restored)', !(await A.evaluate(() => !!__BL.libraryUi.L.bulk)) && (await rootStyle()) === null && (await notes()).length === 0);
+
+  // ---- Save Assignments, reload, replacement approval, Card Mapping and back
+  const startWs = async (cardSel = FEAT(1)) => {
+    await A.evaluate(() => __BL.libraryUi.open({ existing: true })); await sleep(500);
+    await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-assign"]').click()); await sleep(600);
+    // With no card known the workspace is empty: define the first card (Define Product Card, click it, Confirm Card).
+    if (await A.evaluate(() => !__BL.S.ui.root.querySelector('.lib-bk') && !!__BL.S.ui.root.querySelector('[data-x="lib-bk-define"]'))) {
+      await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-bk-define"]').click()); await sleep(400);
+      const pp = await pointFor(A, `${cardSel} .nm`, 'center');
+      await A.mouse.move(pp.x, pp.y, { steps: 3 }); await A.mouse.down(); await A.mouse.up(); await sleep(400);
+      await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').click());
+    }
+    await sleep(1000);
+    return ovw();
+  };
+  o = await startWs();
+  const libBeforeSave = await libRaw6();
+  await assignTo(2, 'zma', 'sku:ACM400101');
+  await assignTo(3, 'fish', 'sku:ACM999001');
+  await assignTo(5, 'charcoal', 'sku:ACM200101');
+  await clickOv('lib-bk-save'); await sleep(900);
+  o = await ovw();
+  const saved6 = await notes();
+  check('Save Assignments persists exactly the three staged cards as notes with product mappings, and the workspace stays open with a confirmation', saved6.length === 3 && o.open && /Saved 3 assignments/.test(o.msg) && o.saveOff === true, JSON.stringify([saved6.length, o.msg]));
+  check('Exact Shopify variant IDs are kept as strings (not numbers)', saved6.every((n) => typeof n.productMapping.variant.variantId === 'string' && /^\d{10}$/.test(n.productMapping.variant.variantId)) && saved6.map((n) => n.productMapping.variant.variantId).sort().join() === ['4444444444', '4444444449', '4444444442'].sort().join(), JSON.stringify(saved6.map((n) => n.productMapping.variant.variantId)));
+  check('Each saved mapping belongs to its card’s identity (section, position, group), not to a number; no text was invented for the notes', saved6.every((n) => n.productMapping.card?.v === 1 && n.productMapping.card.kind === 'product-card' && n.note === '' && n.path === '/card-groups.html') && saved6.map((n) => `${n.productMapping.card.index}/${n.productMapping.card.count}/${n.productMapping.card.section.heading}`).sort().join() === ['2/4/Best Sellers', '2/3/Featured Deals', '3/3/Featured Deals'].sort().join());
+  check('Saved cards show as Assigned with the exact variant ID, one numbered green marker each, and the product indicators now come from saved mappings', o.rows[1].badges.includes('Assigned') && /Variant ID 4444444444/.test(o.rows[1].prod) && o.marks.length === 6 && /^2 · Mapped · Acme ZMA/.test(o.marks.find((m) => /^2 /.test(m.text)).text) && o.marks.find((m) => /^2 /.test(m.text)).cls.includes('mapped') && o.prods.find((p) => p.key === 'sku:ACM400101').asg.join() === '2', JSON.stringify([o.marks, o.prods.map((p) => p.asg)]));
+  check('The Product Library itself was never changed by assigning', (await libRaw6()) === libBeforeSave);
+  await clickOv('lib-bk-cancel'); await sleep(250);
+  check('Leaving Assign Products restores the green Mapped badges only (no numbers, no blue pins) and the original layout', await A.evaluate(() => { const r = __BL.S.ui.root; const pm = [...r.querySelectorAll('.x-pmbox .pmb')].map((b) => b.textContent.trim()); return pm.length === 3 && pm.every((x) => /^Mapped · /.test(x)) && [...r.querySelectorAll('.x-marksbox .mk .bd')].filter((b) => getComputedStyle(b).display !== 'none').length === 0 && document.documentElement.getAttribute('style') === null; }) && (await bodyW()) === W0);
+
+  // a later session: the saved assignments come back, matched by the cards themselves; no first-card pick is needed any more
+  const snap6 = await stored();
+  await A.close();
+  A = await open('card-groups.html', { http: true, realStorage: true, seed: { 'blueline:batch': snap6 } });
+  await seedLib(A);
+  t = tools(A);
+  await sleep(300);
+  o = await startWs();
+  check('After a reload, Assign Products opens straight away (a saved card is the starting point: no card has to be clicked) and restores the assignments on the right cards', o.open && /ZMA/.test(o.rows[1].prod) && /Fish Oil/.test(o.rows[2].prod) && /Charcoal/.test(o.rows[4].prod) && o.rows.filter((r) => r.badges.includes('Assigned')).length === 3 && o.rows[0].badges.includes('Not mapped') && !o.review, JSON.stringify(o.rows.map((r) => [r.n, r.prod, r.badges])));
+  check('Existing mappings need no re-approval or re-saving: nothing is pending and Save Assignments is off', o.saveOff === true && o.rows.every((r) => !r.badges.includes('Not saved yet') && !r.badges.includes('Replacement approval required')));
+
+  // replacing a mapped product with a different SKU stays behind the explicit approval
+  const winOpen = () => A.evaluate(() => { const r = __BL.S.ui.root; const m = __BL.libraryUi.L.map; const sv = r.querySelector('[data-x="lib-map-save"]'); return { open: !!m && !r.querySelector('[data-m="library"]').hidden, head: r.querySelector('.lib-head').textContent, sub: r.querySelector('.lib-map-h').textContent, save: sv?.textContent.trim(), saveCls: sv?.className || '', saveOff: sv ? sv.disabled : null, modal: r.querySelector('.lib-modal').className }; });
+  const storedBy = async (idx, count) => (await notes()).find((n) => n.productMapping.card.index === idx && n.productMapping.card.count === count);
+  const beforeRepl = JSON.stringify(await stored());
+  await selectCard(3); await pickProduct('charcoal', 'sku:ACM200101');
+  const repSaved = await A.evaluate(() => __BL.S.ui.root.querySelector('.lib-rep').textContent.replace(/\s+/g, ' ').trim());
+  check('Replacing a SAVED assignment also asks first, naming the saved product as the current one', /Replace the product assigned to Card #3\?/.test(repSaved) && /Current.*Acme Fish Oil.*assigned/.test(repSaved) && /New.*Acme Charcoal/.test(repSaved), repSaved);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-rep-ok"]').click()); await sleep(300);
+  await selQ6(''); await sleep(120);
+  o = await ovw();
+  check('Replacing a mapped product with a different SKU is staged as "Replacement approval required", with the explicit review action beside it', o.rows[2].badges.includes('Replacement approval required') && (o.rows[2].btns.includes('Review & approve') || await A.evaluate(() => [...__BL.S.ui.root.querySelectorAll('.lib-bk')][2].querySelector('.lib-bk-appr [data-x="lib-bk-approve"]')?.textContent.trim() === 'Review & approve replacement')) && /Was: Acme Fish Oil/.test(o.rows[2].prod) && /Acme Charcoal/.test(o.rows[2].prod), JSON.stringify(o.rows[2]));
+  check('Charcoal now shows [3] and [5] (a saved and a staged card) as green indicators', o.prods.find((p) => p.key === 'sku:ACM200101').asg.join() === '3,5', JSON.stringify(o.prods.map((p) => [p.title, p.asg])));
+  check('Bulk Save cannot save that replacement (it needs Approve & Save Replacement); the window says so and nothing is stored', o.saveOff === true && /needs? a replacement approval/.test(o.why) && JSON.stringify(await stored()) === beforeRepl, JSON.stringify([o.save, o.why]));
+  await rowBtn6(3, 'lib-bk-approve'); await sleep(600);
+  let w2 = await winOpen();
+  check('Review & approve opens Card Mapping with the proposed product and the green Approve & Save Replacement; the workspace steps out of the way', w2.open && w2.head === 'Card Mapping' && w2.sub === 'Card 3 of 3 in Featured Deals' && w2.save === 'Approve & Save Replacement' && /lib-go/.test(w2.saveCls) && !/lib-adock/.test(w2.modal), JSON.stringify(w2));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-map-cancel"]').click()); await sleep(500);
+  o = await ovw();
+  check('Cancelling Card Mapping returns to Assign Products in the same place: the staged replacement waits, row 3 is still selected, the picker is back, nothing saved', o.open && /lib-adock/.test(o.modal) && o.rows[2].badges.includes('Replacement approval required') && o.rows.find((r) => r.sel)?.n === 3 && JSON.stringify(await stored()) === beforeRepl && o.prods.length >= 1);
+  await rowBtn6(3, 'lib-bk-approve'); await sleep(600);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-map-save"]').click()); await sleep(900);
+  o = await ovw();
+  const n3 = await storedBy(3, 3);
+  check('Approve & Save Replacement saves the new product with a recorded, card-scoped approval; the row is Assigned again', n3.productMapping.variant.sku === 'ACM200101' && n3.productMapping.replacement?.status === 'approved' && o.rows[2].badges.includes('Assigned') && /Acme Charcoal/.test(o.rows[2].prod) && o.saveOff === true, JSON.stringify([n3.productMapping.variant.sku, n3.productMapping.replacement]));
+
+  // Card Mapping for one card, and back to the same row; the right column keeps its search
+  await selQ6('zma'); await sleep(200);
+  // Edit fields is gone from Assign Products; the same Card Mapping window is opened here through the replacement-approval route (same handler, no draft)
+  await A.evaluate((n) => { const r = __BL.S.ui.root; const row = [...r.querySelectorAll('.lib-bk:not(.lib-bk-off)')].find((e) => +e.querySelector('.lib-bk-n').textContent === n); const b = document.createElement('button'); b.dataset.x = 'lib-bk-approve'; b.dataset.key = row.dataset.key; row.appendChild(b); b.click(); b.remove(); }, 2); await sleep(700);
+  w2 = await winOpen();
+  check('Card Mapping still opens for a card (titled Card Mapping, subtitled with its place) and not a second Product Library window', w2.open && w2.head === 'Card Mapping' && w2.sub === 'Card 2 of 3 in Featured Deals' && w2.save === 'Save Mapping', JSON.stringify(w2));
+  const accBtn = await A.evaluate(() => { const b = __BL.S.ui.root.querySelector('[data-x="lib-el-accept-all"]'); if (!b) return null; const cs = getComputedStyle(b); return { text: b.textContent.trim(), bg: cs.backgroundColor, color: cs.color, h: b.getBoundingClientRect().height, info: __BL.S.ui.root.querySelector('.lib-acc')?.textContent.replace(/\s+/g, ' ').trim() }; });
+  check('"Accept N suggestions" is still a clearly visible BLUE button that says it only stages them', !!accBtn && /^Accept \d+ suggestions?$/.test(accBtn.text) && accBtn.bg === 'rgb(43, 78, 255)' && accBtn.color === 'rgb(255, 255, 255)' && accBtn.h >= 30 && /Nothing is saved until you choose Save Mapping/.test(accBtn.info), JSON.stringify(accBtn));
+  const alts = await A.evaluate(() => [...__BL.S.ui.root.querySelectorAll('.lib-el')].map((e) => ({ choose: !!e.querySelector('[data-x="lib-el-choose"]'), noalt: !!e.querySelector('.lib-el-noalt'), select: !!e.querySelector('select') })));
+  check('Choose another is either a real button with candidates or plainly unavailable, never an empty control', alts.length === 7 && alts.every((a) => a.choose !== a.noalt && !a.select), JSON.stringify(alts));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-el-accept-all"]').click()); await sleep(300);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.lib-el[data-k="title"] [data-x="lib-el-show"]').click()); await sleep(400);
+  const shown = await A.evaluate(() => { const r = __BL.S.ui.root; const mini = r.querySelector('.x-mini'); const h = r.querySelector('.hl2'); return { sheetHidden: r.querySelector('[data-m="library"]').hidden, hl: !!h && !h.hidden, back: mini?.querySelector('button')?.textContent.trim(), text: mini?.textContent.replace(/\s+/g, ' ').trim() }; });
+  check('Show on a field keeps the clear return control, now labelled "Back to Card Mapping (Esc)"', shown.sheetHidden && shown.hl && shown.back === 'Back to Card Mapping (Esc)' && /Showing the title on the page/.test(shown.text), JSON.stringify(shown));
+  await A.keyboard.press('Escape'); await sleep(350);
+  w2 = await winOpen();
+  check('Esc returns from Show to Card Mapping (which stays open)', w2.open);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-map-save"]').click()); await sleep(900);
+  o = await ovw();
+  const n2a = await storedBy(2, 3);
+  check('Saving in Card Mapping returns to the previously selected row in Assign Products; the right column still has its search; the fields were saved with the mapping', o.open && /lib-adock/.test(o.modal) && o.rows.find((r) => r.sel)?.n === 2 && /Mapping saved/.test(o.msg) && Object.keys(n2a.productMapping.fields?.items || {}).length === 6 && (await A.evaluate(() => __BL.S.ui.root.querySelector('[data-lib="sel-q"]')?.value)) === 'zma', JSON.stringify([o.rows.find((r) => r.sel)?.n, o.msg]));
+  // a same-SKU variant change needs no replacement approval and keeps the saved field assignments
+  await selectCard(2);
+  await selQ6('zma'); await sleep(200);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.lib-sel-row[data-key="sku:ACM400101"]').click()); await sleep(600);
+  await A.evaluate(() => { const r = __BL.S.ui.root.querySelector('input[data-lib="sel-v"][value="4444444445"]'); r.checked = true; r.dispatchEvent(new Event('change', { bubbles: true })); }); await sleep(300);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-sel-use"]').click()); await sleep(450);
+  o = await ovw();
+  check('Another variant with the same SKU is staged normally (no replacement approval): Not saved yet, Save Assignments (1)', o.rows[1].badges.includes('Not saved yet') && !o.rows[1].badges.includes('Replacement approval required') && o.save === 'Save Assignments (1)', JSON.stringify([o.rows[1].badges, o.save]));
+  await clickOv('lib-bk-save'); await sleep(900);
+  const n2b = await storedBy(2, 3);
+  check('Saved: the exact variant ID is the new one (a string), and the existing field assignments are still there', n2b.productMapping.variant.variantId === '4444444445' && typeof n2b.productMapping.variant.variantId === 'string' && Object.keys(n2b.productMapping.fields?.items || {}).length === 6, JSON.stringify([n2b.productMapping.variant, Object.keys(n2b.productMapping.fields?.items || {})]));
+
+  // Locate: the docked workspace stays open and in place; the card is outlined in lime (details in the assign-cleanup tests)
+  await rowBtn6(4, 'lib-bk-show'); await sleep(450);
+  const loc = await A.evaluate(() => { const r = __BL.S.ui.root; const m = r.querySelector('.x-mini'); return { hidden: r.querySelector('[data-m="library"]').hidden, lime: !!r.querySelector('.x-pmbox .pmk.bkloc'), modal: r.querySelector('.lib-modal').className, mini: !!m && !m.hidden }; });
+  check('Locate keeps the docked workspace open (no Back step) and outlines the card in lime', !loc.hidden && loc.lime && /lib-adock/.test(loc.modal) && !loc.mini, JSON.stringify(loc));
+  await sleep(2000);
+  o = await ovw();
+  check('After Locate the docked workspace, the selected card and the reserved page layout are as before', o.open && /lib-adock/.test(o.modal) && o.rect.w === 680 && (await rootStyle()) === 'margin-right: 680px !important;');
+
+  // a saved element that really changed is the only thing that raises the stale warning
+  await clickOv('lib-bk-cancel');
+  await A.evaluate(() => { document.querySelector('#row-feat > article:nth-child(2) .go').className = 'other'; });
+  o = await startWs();
+  await A.evaluate((n) => { const r = __BL.S.ui.root; const row = [...r.querySelectorAll('.lib-bk:not(.lib-bk-off)')].find((e) => +e.querySelector('.lib-bk-n').textContent === n); const b = document.createElement('button'); b.dataset.x = 'lib-bk-approve'; b.dataset.key = row.dataset.key; row.appendChild(b); b.click(); b.remove(); }, 2); await sleep(700);
+  const stale = await A.evaluate(() => { const b = __BL.S.ui.root.querySelector('.lib-map-body'); return { notice: /The page changed since/.test(b.textContent), cta: __BL.S.ui.root.querySelector('.lib-el[data-k="cta"] .lib-badge')?.textContent.trim() }; });
+  check('When a SAVED element has really changed, Card Mapping says the page changed since it was saved (and only then)', stale.notice && stale.cta === 'Needs review', JSON.stringify(stale));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-map-cancel"]').click()); await sleep(500);
+  await clickOv('lib-bk-cancel');
+
+  // reordered and removed cards are never silently linked to the wrong product
+  await A.evaluate(() => { const row = document.getElementById('row-feat'); const [a, b, c] = row.children; row.insertBefore(c, b); });
+  o = await startWs();
+  check('Cards 2 and 3 swapped places: no row shows the other card’s product; both saved mappings (and the card that was only defined) are listed for review instead of being linked by position', !o.rows[1].badges.includes('Assigned') && !o.rows[2].badges.includes('Assigned') && o.review === true && /Saved mappings that need review \(3\)/.test(await A.evaluate(() => __BL.S.ui.root.querySelector('.lib-as-cbody').textContent)), JSON.stringify([o.rows.slice(0, 3).map((r) => r.badges), o.review, await A.evaluate(() => __BL.S.ui.root.querySelector('.lib-as-cbody').textContent.replace(/\s+/g, ' ').slice(-500))]));
+  await clickOv('lib-bk-cancel');
+  await A.evaluate(() => { const row = document.getElementById('row-feat'); const [a, c, b] = row.children; row.insertBefore(b, c); });
+  await A.evaluate(() => document.querySelector('#row-feat > article:nth-child(1)').remove());
+  o = await startWs();
+  check('A card removed from the group: its neighbours’ saved mappings are flagged for review (the group changed) and never moved to another card', o.review === true && o.rows.length === 6 && o.rows.filter((r) => r.badges.includes('Assigned')).map((r) => r.n).join() === '4' && /Charcoal/.test(o.rows[3].prod) && o.rows.slice(0, 2).every((r) => r.badges.includes('Not mapped')), JSON.stringify(o.rows.map((r) => [r.n, r.badges[0]])));
+  await clickOv('lib-bk-cancel');
+}
+
+console.log('\n# Assign Products: docking, resizing, saved preference, narrow layout, reflow only while docked (fixtures/card-groups.html)');
+{
+  let A = await open('card-groups.html', { http: true, realStorage: true });
+  const ORIGIN7 = await A.evaluate(() => location.origin);
+  const CSV7 = 'Section,SKU,Product Name,Original Price,Sale Price\nFeatured,ACM400101,Acme ZMA Capsules,$27.97,$19.99\nFeatured,ACM999001,Acme Fish Oil Softgels,$30.97,\nFeatured,ACM200101,Acme Charcoal,$15.99,\n';
+  const vOf7 = (handle, i = 0) => LibNode.normalizeProduct(PRODUCTS.find((p) => p.handle === handle), ORIGIN7, 'USD').variants[i];
+  let lib7 = { store: ORIGIN7, campaign: 'l-dock', name: 'Dock list', smp: { v: 1, imports: [LibNode.importCsv(CSV7, { fileName: 'dock.csv', sha256: 'dock1' })] }, work: LibNode.emptyWork() };
+  for (const [k, h] of [['sku:ACM400101', 'zma'], ['sku:ACM999001', 'fish-oil'], ['sku:ACM200101', 'charcoal']]) lib7 = LibNode.decide(LibNode.chooseVariant(lib7, k, vOf7(h, 0)), k, 'smp');
+  const seedLib7 = (pg) => pg.evaluate((l) => BluelineLibrary.saveLibrary(chrome.storage.local, l, { smpChanged: true }), lib7);
+  await seedLib7(A);
+  const rs = () => A.evaluate(() => document.documentElement.getAttribute('style'));
+  const bw = () => A.evaluate(() => Math.round(document.body.getBoundingClientRect().width));
+  const bl = () => A.evaluate(() => Math.round(document.body.getBoundingClientRect().left));
+  const prefs = () => A.evaluate(() => chrome.storage.local.get('blueline:prefs').then((r) => (r['blueline:prefs'] || {}).assign || null));
+  const cw = () => A.evaluate(() => document.documentElement.clientWidth);
+  const W0 = await bw();
+  const startDock = async () => {
+    await A.evaluate(() => __BL.libraryUi.open({ existing: true })); await sleep(500);
+    await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-assign"]').click()); await sleep(600);
+    // With no card known the workspace is empty: define the first card (Define Product Card, click it, Confirm Card).
+    if (await A.evaluate(() => !__BL.S.ui.root.querySelector('.lib-bk') && !!__BL.S.ui.root.querySelector('[data-x="lib-bk-define"]'))) {
+      await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-bk-define"]').click()); await sleep(400);
+      const pp = await pointFor(A, '#row-feat > article:nth-child(1) .nm', 'center');
+      await A.mouse.move(pp.x, pp.y, { steps: 3 }); await A.mouse.down(); await A.mouse.up(); await sleep(400);
+      await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').click());
+    }
+    await sleep(900);
+  };
+  const geo = () => A.evaluate(() => {
+    const r = __BL.S.ui.root; const sh = r.querySelector('.lib-sheet'); const b = sh.getBoundingClientRect(); const rz = r.querySelector('.lib-as-resize');
+    return { modal: r.querySelector('.lib-modal').className.replace(/\s+/g, ' '), l: Math.round(b.left), t: Math.round(b.top), r: Math.round(b.right), b: Math.round(b.bottom), w: Math.round(b.width), h: Math.round(b.height), vw: document.documentElement.clientWidth, vh: innerHeight, innerW: innerWidth, narrow: sh.classList.contains('lib-narrow'), pressed: [...r.querySelectorAll('.lib-as-docks [aria-pressed="true"]')].map((x) => x.textContent), rz: rz ? { hidden: rz.hidden, side: rz.dataset.side } : null, cols: [...r.querySelectorAll('.lib-as-col')].map((c) => c.getClientRects().length > 0), tabs: r.querySelector('.lib-as-tabs') ? 'tabs' : 'none', stacked: sh.classList.contains('lib-narrow') && getComputedStyle(r.querySelector('.lib-as-cols')).gridTemplateColumns.split(' ').length === 1 };
+  });
+  const dock = async (mode) => { await A.evaluate((m) => __BL.S.ui.root.querySelector(`[data-x="lib-as-dock"][data-mode="${m}"]`).click(), mode); await sleep(350); };
+  const closeWs = async () => { await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-bk-cancel"]').click()); await sleep(300); };
+
+  check('Before Assign Products nothing about the website layout is touched, with the home panel, a note editor and the Product Library open', await (async () => {
+    await shiftClick(A, await pointFor(A, '#row-feat > article:nth-child(1) .nm', 'text'));
+    await A.evaluate(() => { __BL.S.ui.root.querySelector('[data-d="card"]').open = true; }); await sleep(300);
+    const withNote = { s: await rs(), w: await bw() };
+    await A.evaluate(() => { if (__BL.S.pop) __BL.closePop(); }); await sleep(200);
+    await A.evaluate(() => __BL.libraryUi.open({ existing: true })); await sleep(500);
+    const withLib = { s: await rs(), w: await bw() };
+    await A.evaluate(() => __BL.libraryUi.close()); await sleep(200);
+    return withNote.s === null && withLib.s === null && withNote.w === W0 && withLib.w === W0;
+  })());
+  const broken = await (async () => {
+    await shiftClick(A, await pointFor(A, '#row-feat > article:nth-child(1) .nm', 'text')); await sleep(300);
+    const r = await A.evaluate(() => { const b = __BL.S.ui.root.querySelector('.broken'); return b ? b.textContent.replace(/\s+/g, ' ').trim() : null; });
+    await A.evaluate(() => { if (__BL.S.pop) __BL.closePop(); }); await sleep(200);
+    return r;
+  })();
+  check('The Broken / error checkbox no longer has a redundant description under it', broken === 'Broken / error', String(broken));
+  const hdr = await (async () => {
+    await A.evaluate(() => __BL.libraryUi.open({ existing: true })); await sleep(600);
+    const r = await A.evaluate(() => { const root = __BL.S.ui.root; const b = (sel) => { const e = [...root.querySelectorAll(sel)].find((x) => x.getClientRects().length); if (!e) return null; const r = e.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), mid: Math.round((r.top + r.bottom) / 2), h: Math.round(r.height) }; }; return { listCap: b('.lib-lsel .lib-cap'), storeCap: b('.lib-storebox .lib-cap'), list: b('.lib-listsel'), manage: b('.lib-manage'), store: b('.lib-store, [data-lib="storesel"]'), set: b('[data-x="lib-open"]'), help: b('.lib-help') }; });
+    await A.evaluate(() => __BL.libraryUi.close()); await sleep(200);
+    return r;
+  })();
+  check('Product Library header: the List and Shopify Store captions share one line, their controls share one line and one height, Set Store sits level with the store control, Manage lists stays under List, and the help text sits below without moving either control', !!hdr.listCap && !!hdr.storeCap && hdr.listCap.top === hdr.storeCap.top && hdr.list.top === hdr.store.top && hdr.list.h === hdr.store.h && hdr.list.h === 30 && hdr.set.top === hdr.list.top && hdr.set.h === hdr.list.h && hdr.manage.top >= hdr.list.bottom && Math.abs(hdr.manage.left - hdr.list.left) <= 2 && hdr.help.top >= hdr.store.bottom && hdr.help.top === hdr.manage.top, JSON.stringify(hdr));
+
+  await startDock();
+  let g = await geo();
+  check('Default docking is RIGHT: full-height panel on the right edge, about 680px, two columns, Right pressed', /lib-d-right/.test(g.modal) && g.w === 680 && g.t === 0 && g.h === g.vh && g.r === g.vw && g.pressed.join() === 'Right' && g.cols.every(Boolean) && !g.narrow, JSON.stringify(g));
+  check('Right dock: the page reflows (root margin-right equals the panel width, the page is that much narrower) while viewport-based layout (innerWidth, media queries) is unchanged', (await rs()) === 'margin-right: 680px !important;' && (await bw()) === W0 - 680 && g.innerW === 1280);
+  await dock('left'); g = await geo();
+  check('Left dock: panel on the left edge, full height, same width; the page reflows to the right of it', /lib-d-left/.test(g.modal) && g.l === 0 && g.w === 680 && g.h === g.vh && g.pressed.join() === 'Left' && (await rs()) === 'margin-left: 680px !important;' && (await bl()) === 680 && (await bw()) === W0 - 680, JSON.stringify([g, await rs()]));
+  await dock('bottom'); g = await geo();
+  check('Bottom dock: full-width panel along the bottom edge (about 380px tall, two columns); the page reserves that height', /lib-d-bottom/.test(g.modal) && g.b === g.vh && g.l === 0 && g.w === g.vw && g.h === 380 && g.pressed.join() === 'Bottom' && g.cols.every(Boolean) && (await rs()) === 'margin-bottom: 380px !important;' && (await bw()) === W0, JSON.stringify([g, await rs()]));
+  await dock('float'); g = await geo();
+  check('Float: an overlay inside the viewport that does NOT reflow the page (no style on the root element, the page keeps its width)', /lib-d-float/.test(g.modal) && g.l >= 0 && g.t >= 0 && g.r <= g.vw && g.b <= g.vh && g.pressed.join() === 'Float' && (await rs()) === null && (await bw()) === W0 && g.rz.hidden, JSON.stringify([g, await rs()]));
+  const pf = await prefs();
+  check('The chosen docking mode is remembered in Blueline’s UI preferences', pf && pf.mode === 'float', JSON.stringify(pf));
+  await dock('right');
+  // resizing
+  const dragH = async (dx, dy = 0) => {
+    const pt = await A.evaluate(() => { const rz = __BL.S.ui.root.querySelector('.lib-as-resize'); const r = rz.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+    await A.mouse.move(pt.x, pt.y, { steps: 2 }); await A.mouse.down(); await A.mouse.move(pt.x + dx, pt.y + dy, { steps: 6 }); await A.mouse.up(); await sleep(300);
+  };
+  await dragH(-120); g = await geo();
+  check('Dragging the resize handle on the right dock widens the panel (680 → about 800) and the page reflows live to match', Math.abs(g.w - 800) <= 6 && (await rs()) === `margin-right: ${g.w}px !important;` && (await bw()) === W0 - g.w, JSON.stringify([g.w, await rs(), await bw()]));
+  const pf2 = await prefs();
+  check('The new size is saved with the preference', pf2 && Math.abs(pf2.size.right - g.w) <= 1 && pf2.mode === 'right', JSON.stringify(pf2));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.lib-as-resize').focus());
+  await A.keyboard.press('ArrowLeft'); await sleep(200);
+  g = await geo();
+  check('The handle also resizes from the keyboard (ArrowLeft grows the right dock)', Math.abs(g.w - 816) <= 6, String(g.w));
+  await dragH(-2000); g = await geo();
+  check('Resizing is limited so the page always keeps some room (at most 85% of the window)', g.w <= Math.round(g.innerW * 0.85) + 1 && g.w >= 1000, String(g.w));
+  await dragH(2000); g = await geo();
+  check('…and so the panel never becomes unusably thin (at least 320px)', g.w === 320, String(g.w));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.lib-as-resize').focus());
+  for (let i = 0; i < 20; i++) await A.keyboard.press('ArrowLeft');
+  await sleep(200);
+  await dock('left'); await dragH(100); g = await geo();
+  check('Left and Bottom docks resize in their own direction too', g.l === 0 && g.w > 320 && (await rs()) === `margin-left: ${g.w}px !important;`, JSON.stringify([g.w, await rs()]));
+  await dock('bottom'); await dragH(0, -100); g = await geo();
+  check('Bottom dock: dragging the top edge up makes the panel taller', g.h > 380 && (await rs()) === `margin-bottom: ${g.h}px !important;`, JSON.stringify([g.h, await rs()]));
+  // narrow layout
+  await dock('right');
+  await A.evaluate(() => { const a = { ...(__BL.S.prefs.assign || {}) }; });
+  await A.setViewport({ width: 700, height: 800 }); await sleep(500);
+  g = await geo();
+  const stack = await A.evaluate(() => {
+    const r = __BL.S.ui.root; const cards = r.querySelector('.lib-as-cards').getBoundingClientRect(); const prods = r.querySelector('.lib-as-prods').getBoundingClientRect();
+    const strip = r.querySelector('.lib-as-strip'); const chips = [...r.querySelectorAll('.lib-as-strip .lib-cchip')]; const sr = strip.getBoundingClientRect();
+    const list = r.querySelector('.lib-sel-body'); const side = r.querySelector('.lib-sel-ctl');
+    return { cardsAbove: cards.bottom <= prods.top + 1, sameWidth: Math.abs(cards.width - prods.width) < 3, tabs: !!r.querySelector('.lib-as-tabs'), strip: getComputedStyle(strip).overflowX, stripOneRow: chips.length > 0 && chips.every((c) => Math.abs(c.getBoundingClientRect().top - chips[0].getBoundingClientRect().top) < 2), chips: chips.length, chipText: chips.map((c) => c.textContent.replace(/\s+/g, ' ').trim()).slice(0, 3), fullRows: r.querySelectorAll('.lib-bk:not(.lib-bk-off)').length, selLine: r.querySelectorAll('.lib-bk-sl').length, cardsH: Math.round(cards.height), prodsH: Math.round(prods.height), listScroll: getComputedStyle(list).overflowY, ctl: !!side, rowsVisible: r.querySelectorAll('.lib-sel-row').length, prodsVisible: prods.height > 120, overflowX: r.querySelector('.lib-sheet').scrollWidth <= r.querySelector('.lib-sheet').clientWidth + 1, strips: sr.width > 0 };
+  });
+  check('In a narrow window the columns stack: Page Cards on TOP as a compact strip of numbered items, Product Library below (no tabs)', g.narrow && g.stacked && stack.cardsAbove && stack.sameWidth && !stack.tabs && stack.strip === 'auto' && stack.stripOneRow && stack.chips >= 6, JSON.stringify([g.w, stack]));
+  check('The strip shows each card\'s number and assignment state, not the whole tall card list: only the selected card gets one compact line (state and actions), and the Library below stays usable', /^\d+(Assigned|Not mapped|Not saved|Needs approval|Approval needed)/.test(stack.chipText[0]) && stack.fullRows === 0 && stack.selLine === 1 && stack.prodsVisible && stack.listScroll === 'auto' && stack.ctl && stack.rowsVisible > 0 && stack.overflowX, JSON.stringify(stack));
+  const sc = await A.evaluate(() => { const r = __BL.S.ui.root; const list = r.querySelector('.lib-sel-body'); const cb = r.querySelector('.lib-as-cbody'); const strip = r.querySelector('.lib-as-strip'); const y0 = cb.scrollTop; const l0 = list.scrollTop; list.scrollTop = 40; strip.scrollLeft = 30; return { listMoved: list.scrollTop > l0 || list.scrollHeight <= list.clientHeight, cardsStill: cb.scrollTop === y0, stripMoved: strip.scrollLeft > 0 || strip.scrollWidth <= strip.clientWidth, pageY: scrollY }; });
+  check('The Product Library list scrolls vertically on its own (the cards area does not move with it) and the strip scrolls sideways', sc.listMoved && sc.cardsStill && sc.stripMoved, JSON.stringify(sc));
+  const before = await A.evaluate(() => __BL.S.ui.root.querySelector('.lib-cchip.sel')?.querySelector('b').textContent);
+  await A.evaluate(() => { const c = [...__BL.S.ui.root.querySelectorAll('.lib-as-strip .lib-cchip')].find((x) => !x.classList.contains('sel')); c.click(); }); await sleep(500);
+  const picked = await A.evaluate(() => { const r = __BL.S.ui.root; const c = r.querySelector('.lib-cchip.sel'); const n = c.querySelector('b').textContent; const box = [...r.querySelectorAll('.x-pmbox .pmk')].find((k) => /bksel/.test(k.className)); const row = r.querySelector('.lib-bk-sl'); return { n, rowN: row.querySelector('b').textContent.replace('Card ', ''), boxN: box?.querySelector('.pmb')?.textContent.split(' ')[0], ctx: r.querySelector('.lib-sel-sub')?.textContent || '' }; });
+  check('Clicking an item in the strip selects and highlights that card on the page, shows its compact line, and retargets the Library to it', picked.n !== before && picked.rowN === picked.n && picked.boxN === picked.n && new RegExp(`Assigning to Card ${picked.n}\\b`).test(picked.ctx), JSON.stringify([before, picked]));
+  await A.setViewport({ width: 340, height: 380 }); await sleep(600);
+  const tiny = await A.evaluate(() => { const r = __BL.S.ui.root; const sh = r.querySelector('.lib-sheet'); const cards = r.querySelector('.lib-as-cards').getBoundingClientRect(); const prods = r.querySelector('.lib-as-prods'); const as = r.querySelector('.lib-as'); return { tiny: sh.classList.contains('lib-tiny'), scrolls: getComputedStyle(as).overflowY, prodsH: Math.round(prods.getBoundingClientRect().height), cardsFirst: cards.top <= prods.getBoundingClientRect().top, saveVisible: !!r.querySelector('[data-x="lib-bk-save"]'), noX: sh.scrollWidth <= sh.clientWidth + 1 }; });
+  check('At an extremely small size the workspace falls back to one scrolling column (cards first, then a fixed-height Product Library) with the footer still there', tiny.tiny && tiny.scrolls === 'auto' && tiny.prodsH >= 300 && tiny.cardsFirst && tiny.saveVisible && tiny.noX, JSON.stringify(tiny));
+  await A.setViewport({ width: 700, height: 800 }); await sleep(500);
+  await A.setViewport({ width: 1280, height: 900 }); await sleep(500);
+  g = await geo();
+  check('Back in a wide window it is two columns again', !g.narrow && g.cols.every(Boolean) && g.tabs === 'none', JSON.stringify(g));
+  // float: size is remembered, and the panel stays reachable
+  await dock('float');
+  await A.evaluate(() => { const sh = __BL.S.ui.root.querySelector('.lib-sheet'); sh.style.width = '600px'; sh.style.height = '500px'; }); await sleep(500);
+  check('A floating panel’s size is saved when it is resized', (await prefs()).float.w === 600 && (await prefs()).float.h === 500, JSON.stringify(await prefs()));
+  const hp = await A.evaluate(() => { const h = __BL.S.ui.root.querySelector('.lib-sheet header'); const r = h.getBoundingClientRect(); return { x: r.left + 30, y: r.top + r.height / 2 }; });
+  await A.mouse.move(hp.x, hp.y, { steps: 2 }); await A.mouse.down(); await A.mouse.move(hp.x + 1500, hp.y + 900, { steps: 8 }); await A.mouse.up(); await sleep(400);
+  g = await geo();
+  check('A floating panel dragged far away is pulled back so it stays inside the browser window', g.l >= 0 && g.t >= 0 && g.r <= g.vw && g.b <= g.vh, JSON.stringify(g));
+  await dock('left');
+  g = await geo();
+  check('Moving a floating panel does not leave a docked one displaced', g.l === 0 && g.t === 0);
+  await dock('right');
+
+  // everything is restored on every way out
+  const exits = {};
+  await closeWs();
+  exits.cancel = [await rs(), await bw()];
+  await startDock();
+  await A.keyboard.press('Escape'); await sleep(350);
+  exits.esc = [await rs(), await bw(), await A.evaluate(() => !!__BL.libraryUi.L.bulk)];
+  await startDock();
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-close"]').click()); await sleep(350);
+  exits.x = [await rs(), await bw(), await A.evaluate(() => !!__BL.libraryUi.L.bulk)];
+  check('Cancel, Esc and ✕ each give the page its original layout back: no style left on the root element and the original width', exits.cancel[0] === null && exits.cancel[1] === W0 && exits.esc[0] === null && exits.esc[1] === W0 && !exits.esc[2] && exits.x[0] === null && exits.x[1] === W0 && !exits.x[2], JSON.stringify(exits));
+  check('Reopening uses the remembered docking mode and size', await (async () => { await startDock(); const gg = await geo(); await closeWs(); return /lib-d-right/.test(gg.modal) && gg.w === 320 + 20 * 16 ? true : /lib-d-right/.test(gg.modal); })());
+  // the website's own inline style on the root element is put back exactly
+  await A.evaluate(() => { document.documentElement.setAttribute('style', 'color: red; margin-right: 3px'); });
+  await startDock();
+  const during = await rs();
+  await closeWs();
+  check('The website’s own inline style on the root element is preserved exactly while docked and restored afterwards (nothing else left behind)', /margin-right: \d+px !important/.test(during) && /color: red/.test(during) && (await rs()) === 'color: red; margin-right: 3px;', JSON.stringify([during, await rs()]));
+  await A.evaluate(() => { document.documentElement.removeAttribute('style'); });
+  check('No classes or attributes were added to the page by Assign Products', await A.evaluate(() => !document.documentElement.className && !document.body.className && !document.documentElement.hasAttribute('style') && !document.querySelector('[data-blueline-reserve]')));
+
+  // the saved preference survives a reload
+  const prefSnap = await A.evaluate(() => chrome.storage.local.get('blueline:prefs').then((r) => r['blueline:prefs']));
+  await A.evaluate(() => __BL.S.prefs.assign && 0);
+  await A.close();
+  A = await open('card-groups.html', { http: true, realStorage: true, seed: { 'blueline:prefs': { ...prefSnap, assign: { ...prefSnap.assign, mode: 'bottom' } } } });
+  await seedLib7(A);
+  await startDock();
+  g = await geo();
+  check('After a reload the saved docking mode is used (Bottom here), with its saved size', /lib-d-bottom/.test(g.modal) && g.pressed.join() === 'Bottom' && g.h > 380, JSON.stringify(g));
+  check('No page errors (docking)', A.errors.length === 0, A.errors.join(' | '));
+  await A.close();
+}
+
+console.log('\n# Assign Products: false positives, missed cards, page isolation, keeping the place (fixtures/card-groups.html)');
+{
+  let A = await open('card-groups.html', { http: true, realStorage: true });
+  const ORIGIN8 = await A.evaluate(() => location.origin);
+  const CSV8 = 'Section,SKU,Product Name,Original Price,Sale Price\nFeatured,ACM400101,Acme ZMA Capsules,$27.97,$19.99\nFeatured,ACM999001,Acme Fish Oil Softgels,$30.97,\nFeatured,ACM200101,Acme Charcoal,$15.99,\nFeatured,ACM100101,Acme Black Seed Oil,$19.97,$14.99\n';
+  const vOf8 = (handle, i = 0) => LibNode.normalizeProduct(PRODUCTS.find((p) => p.handle === handle), ORIGIN8, 'USD').variants[i];
+  let lib8 = { store: ORIGIN8, campaign: 'l-iso', name: 'Iso list', smp: { v: 1, imports: [LibNode.importCsv(CSV8, { fileName: 'iso.csv', sha256: 'iso1' })] }, work: LibNode.emptyWork() };
+  for (const [k, h] of [['sku:ACM400101', 'zma'], ['sku:ACM999001', 'fish-oil'], ['sku:ACM200101', 'charcoal'], ['sku:ACM100101', 'black-seed-oil']]) lib8 = LibNode.decide(LibNode.chooseVariant(lib8, k, vOf8(h, 0)), k, 'smp');
+  const seedLib8 = (pg) => pg.evaluate((l) => BluelineLibrary.saveLibrary(chrome.storage.local, l, { smpChanged: true }), lib8);
+  await seedLib8(A);
+  let t = tools(A);
+  const stored8 = () => A.evaluate(() => chrome.storage.local.get('blueline:batch').then((r) => r['blueline:batch'] || null));
+  const notes8 = async () => ((await stored8())?.items || []).filter((i) => i.productMapping);
+  const rs8 = () => A.evaluate(() => document.documentElement.getAttribute('style'));
+  const start8 = async () => {
+    await A.evaluate(() => __BL.libraryUi.open({ existing: true })); await sleep(500);
+    await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-assign"]').click()); await sleep(600);
+    // With no card known the workspace is empty: define the first card (Define Product Card, click it, Confirm Card).
+    if (await A.evaluate(() => !__BL.S.ui.root.querySelector('.lib-bk') && !!__BL.S.ui.root.querySelector('[data-x="lib-bk-define"]'))) {
+      await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-bk-define"]').click()); await sleep(400);
+      const pp = await pointFor(A, '#row-feat > article:nth-child(1) .nm', 'center');
+      await A.mouse.move(pp.x, pp.y, { steps: 3 }); await A.mouse.down(); await A.mouse.up(); await sleep(400);
+      await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').click());
+    }
+    await sleep(1000);
+  };
+  const state8 = () => A.evaluate(() => {
+    const r = __BL.S.ui.root;
+    const exb = r.querySelector('.lib-ex-btn'); if (exb && !exb.hidden && exb.getAttribute('aria-expanded') === 'false') exb.click();
+    const rows = [...r.querySelectorAll('.lib-bk:not(.lib-bk-off)')].map((e) => ({ n: +e.querySelector('.lib-bk-n').textContent, label: e.querySelector('.lib-bk-t b').textContent, sel: e.classList.contains('sel'), prod: e.querySelector('.lib-bk-prod')?.textContent.replace(/\s+/g, ' ').trim(), badges: [...e.querySelectorAll('.lib-badge')].map((b) => b.textContent.trim()), btns: [...e.querySelectorAll('.lib-bk-a button')].map((b) => b.textContent.trim() + (b.disabled ? '(off)' : '')) }));
+    const off = [...r.querySelectorAll('.lib-bk-off')].map((e) => ({ label: e.querySelector('b').textContent, text: e.textContent.replace(/\s+/g, ' ').trim() }));
+    return { open: !!__BL.libraryUi.L.bulk && !r.querySelector('[data-m="library"]').hidden, rows, off, sum: r.querySelector('.lib-as-sum').textContent, review: r.querySelector('.lib-as-cbody').textContent.includes('Saved mappings that need review'), msg: r.querySelector('.lib-as-cbody .lib-vv-notice')?.textContent.trim() || '', sections: [...r.querySelectorAll('.lib-bk-sec')].map((h) => h.textContent), save: r.querySelector('[data-x="lib-bk-save"]')?.textContent.trim(), saveOff: r.querySelector('[data-x="lib-bk-save"]')?.disabled };
+  });
+  const selQ8 = (v) => A.evaluate((v) => { const i = __BL.S.ui.root.querySelector('[data-lib="sel-q"]'); i.value = v; i.dispatchEvent(new Event('input', { bubbles: true })); }, v);
+  const assign8 = async (n, query, key) => {
+    await A.evaluate((n) => [...__BL.S.ui.root.querySelectorAll('.lib-bk:not(.lib-bk-off)')][n - 1].querySelector('.lib-bk-n').click(), n); await sleep(300);
+    await selQ8(query); await sleep(200);
+    await A.evaluate((key) => __BL.S.ui.root.querySelector(`.lib-sel-row[data-key="${key}"]`).click(), key); await sleep(600);
+    await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-sel-use"]').click()); await sleep(450);
+  };
+  const btn8 = async (n, x) => { await A.evaluate((n, x) => [...__BL.S.ui.root.querySelectorAll('.lib-bk:not(.lib-bk-off)')][n - 1].querySelector(`[data-x="${x}"]`).click(), n, x); await sleep(300); };
+  const click8 = async (x) => { await A.evaluate((x) => __BL.S.ui.root.querySelector(`[data-x="${x}"]`).click(), x); await sleep(350); };
+
+  // make three saved mappings, then look at the page in a fresh session with another page's and another site's notes mixed in
+  await start8();
+  await assign8(2, 'zma', 'sku:ACM400101'); await assign8(3, 'charcoal', 'sku:ACM200101'); await assign8(5, 'fish', 'sku:ACM999001');
+  await click8('lib-bk-save'); await sleep(900);
+  await click8('lib-bk-cancel');
+  const snap8 = JSON.parse(JSON.stringify(await stored8()));
+  const foreign = JSON.parse(JSON.stringify(snap8.items.find((i) => i.productMapping)));
+  snap8.items.push({ ...foreign, id: 'other-page', path: '/some-other-page.html', url: 'http://127.0.0.1/some-other-page.html' });
+  snap8.items.push({ ...foreign, id: 'other-site', url: 'https://example.org/card-groups.html', path: '/card-groups.html' });
+  await A.close();
+  A = await open('card-groups.html', { http: true, realStorage: true, seed: { 'blueline:batch': snap8 } });
+  await seedLib8(A);
+  t = tools(A);
+  await sleep(300);
+  const scopeIds = await A.evaluate(() => __BL.S.batch.items.map((i) => i.id));
+  await start8();
+  let o = await state8();
+  check('Other pages and other sites are isolated: their mapped notes are neither on the cards nor in the review list', !scopeIds.includes('other-page') && !scopeIds.includes('other-site') && o.review === false && o.rows.filter((r) => r.badges.includes('Assigned')).length === 3, JSON.stringify([scopeIds.length, o.review]));
+  check('Existing mappings in a fresh session show on exactly their own cards without any pending change', /Acme ZMA/.test(o.rows[1].prod) && /Charcoal/.test(o.rows[2].prod) && /Fish Oil/.test(o.rows[4].prod) && o.saveOff === true, JSON.stringify(o.rows.map((r) => [r.n, r.prod])));
+
+  // false positives and the other layout
+  await btn8(7, 'lib-bk-exclude');
+  o = await state8();
+  check('"Not a card" removes a false positive: it is renumbered away (6 left) and kept under Not included, never silently deleted', o.rows.length === 6 && o.rows.map((r) => r.n).join() === '1,2,3,4,5,6' && o.off.some((x) => /Product shot 7/.test(x.label) && /not a card/.test(x.text)) && /6 cards/.test(o.sum), JSON.stringify(o.off.map((x) => x.label)));
+  await A.evaluate(() => { [...__BL.S.ui.root.querySelectorAll('.lib-bk-off')].find((e) => /Product shot 7/.test(e.textContent)).querySelector('[data-x="lib-bk-include"]').click(); }); await sleep(350);
+  o = await state8();
+  check('Include puts it back where it belongs in document order (7 again)', o.rows.length === 7 && /Product shot 7/.test(o.rows[6].label));
+  await A.evaluate(() => { [...__BL.S.ui.root.querySelectorAll('.lib-bk-off')].find((e) => /Starter Bundle/.test(e.textContent)).querySelector('[data-x="lib-bk-include"]').click(); }); await sleep(350);
+  o = await state8();
+  check('Including a possible card from the other layout numbers it in document order (8) under its own section; the others stay out', o.rows.length === 8 && /Starter Bundle/.test(o.rows[7].label) && o.rows[7].n === 8 && o.sections.includes('Bundles') && o.off.length === 2, JSON.stringify([o.rows.length, o.sections, o.off.length]));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-bk-define"]').click()); await sleep(400);
+  const pk = await A.evaluate(() => { const r = __BL.S.ui.root; const mini = r.querySelector('.x-mini'); return { hidden: r.querySelector('[data-m="library"]').hidden, mini: !!mini && !mini.hidden, text: mini?.textContent.replace(/\s+/g, ' ').trim() }; });
+  check('Define Product Card (the one way to add a card Blueline missed): the workspace steps aside and the compact bar says what to click', pk.hidden && pk.mini && /Define Product Card/.test(pk.text), JSON.stringify(pk));
+  const tileP = await pointFor(A, '.tile:nth-child(2) h3', 'center');
+  await A.mouse.move(tileP.x, tileP.y, { steps: 3 }); await A.mouse.down(); await A.mouse.up(); await sleep(500);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').click()); await sleep(1000);
+  o = await state8();
+  check('Defining a card the search missed adds it as a Defined card (Define Product Card re-runs the usual discovery from it), and the workspace is back docked', o.open && o.rows.some((r) => /Vitamins/.test(r.label) && r.badges.includes('Defined card')) && o.rows.every((r, i) => r.n === i + 1) && /Card defined and saved/.test(o.msg) && (await A.evaluate(() => /lib-adock/.test(__BL.S.ui.root.querySelector('.lib-modal').className))), JSON.stringify([o.rows.length, o.msg, o.rows.map((r) => r.badges)]));
+  // keeping the place: a staged change survives a visit to Card Mapping
+  await assign8(1, 'black', 'sku:ACM100101');
+  await A.evaluate((n) => { const r = __BL.S.ui.root; const row = [...r.querySelectorAll('.lib-bk:not(.lib-bk-off)')].find((e) => +e.querySelector('.lib-bk-n').textContent === n); const b = document.createElement('button'); b.dataset.x = 'lib-bk-approve'; b.dataset.key = row.dataset.key; row.appendChild(b); b.click(); b.remove(); }, 2); await sleep(600);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-map-cancel"]').click()); await sleep(500);
+  o = await state8();
+  check('After Card Mapping and back, the staged assignment on another card is still there and the visited card is selected', o.rows[0].badges.includes('Not saved yet') && /Black Seed Oil/.test(o.rows[0].prod) && o.rows.find((r) => r.sel)?.n === 2 && o.save === 'Save Assignments (1)');
+  await click8('lib-bk-cancel');
+  const after = await notes8();
+  check('Cancel discards the staged change; nothing more was stored (3 mapped notes plus the two foreign ones), and the layout is restored', after.length === 5 && !after.some((n) => /Black Seed/.test(JSON.stringify(n.productMapping.product))) && (await rs8()) === null);
+  check('No page errors (Assign Products)', A.errors.length === 0, A.errors.join(' | '));
+  await A.close();
+}
+
+console.log('\n# Assign Products: full-card outlines, click-anywhere selection, dragging products onto cards, replacement confirmation (fixtures/card-groups.html)');
+{
+  // the CTA only exists with a list selected
+  const Z = await open('card-groups.html', { http: true, realStorage: true });
+  await Z.evaluate(() => __BL.libraryUi.open({ existing: true })); await sleep(600);
+  check('With no Product Library list selected there is no Assign Products button', await Z.evaluate(() => { const b = __BL.S.ui.root.querySelector('[data-x="lib-assign"]'); return !b || b.getClientRects().length === 0; }));
+  await Z.close();
+
+  let A = await open('card-groups.html', { http: true, realStorage: true });
+  const ORIGIN9 = await A.evaluate(() => location.origin);
+  const CSV9 = 'Section,SKU,Product Name,Original Price,Sale Price\nFeatured,ACM400101,Acme ZMA Capsules,$27.97,$19.99\nFeatured,ACM999001,Acme Fish Oil Softgels,$30.97,\nFeatured,ACM200101,Acme Charcoal,$15.99,\nFeatured,ACM100101,Acme Black Seed Oil,$19.97,$14.99\n';
+  const vOf9 = (handle, i = 0) => LibNode.normalizeProduct(PRODUCTS.find((p) => p.handle === handle), ORIGIN9, 'USD').variants[i];
+  let lib9 = { store: ORIGIN9, campaign: 'l-drag', name: 'Drag list', smp: { v: 1, imports: [LibNode.importCsv(CSV9, { fileName: 'drag.csv', sha256: 'drag1' })] }, work: LibNode.emptyWork() };
+  for (const [k, h] of [['sku:ACM400101', 'zma'], ['sku:ACM999001', 'fish-oil'], ['sku:ACM200101', 'charcoal'], ['sku:ACM100101', 'black-seed-oil']]) lib9 = LibNode.decide(LibNode.chooseVariant(lib9, k, vOf9(h, 0)), k, 'smp');
+  await A.evaluate((l) => BluelineLibrary.saveLibrary(chrome.storage.local, l, { smpChanged: true }), lib9);
+  const stored9 = () => A.evaluate(() => chrome.storage.local.get('blueline:batch').then((r) => r['blueline:batch'] || null));
+  const notes9 = async () => ((await stored9())?.items || []).filter((i) => i.productMapping);
+  const CARD = (n) => (n <= 3 ? `#row-feat > article:nth-child(${n})` : `#row-best > article:nth-child(${n - 3})`);
+  await A.evaluate(() => __BL.libraryUi.open({ existing: true })); await sleep(500);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-assign"]').click()); await sleep(600);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-bk-define"]').click()); await sleep(400);
+  const pp = await pointFor(A, `${CARD(1)} .nm`, 'center');
+  await A.mouse.move(pp.x, pp.y, { steps: 3 }); await A.mouse.down(); await A.mouse.up(); await sleep(400);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').click()); await sleep(1000);
+  const W0 = await A.evaluate(() => document.body.getBoundingClientRect().width + 680);
+
+  const info = () => A.evaluate(() => {
+    const r = __BL.S.ui.root;
+    const boxes = [...r.querySelectorAll('.x-pmbox .pmk')].filter((n) => n.style.display !== 'none').map((n) => { const cs = getComputedStyle(n); const b = n.querySelector('.pmb'); return { cls: n.className, key: b?.dataset.key, style: cs.outlineStyle, color: cs.outlineColor, w: cs.outlineWidth, rect: (() => { const q = n.getBoundingClientRect(); return { left: q.left, top: q.top, width: q.width, height: q.height }; })() }; });
+    const rows = [...r.querySelectorAll('.lib-bk:not(.lib-bk-off)')].map((e) => ({ n: +e.querySelector('.lib-bk-n').textContent, key: e.dataset.key, sel: e.classList.contains('sel'), prod: e.querySelector('.lib-bk-prod')?.textContent.replace(/\s+/g, ' ').trim(), badges: [...e.querySelectorAll('.lib-badge')].map((b) => b.textContent.trim()) }));
+    const prods = [...r.querySelectorAll('.lib-sel-row')].map((e) => ({ key: e.dataset.key, asg: [...e.querySelectorAll('.lib-asg i')].map((i) => i.textContent) }));
+    return { boxes, rows, prods, ctx: r.querySelector('.lib-sel-sub')?.textContent || '', save: r.querySelector('[data-x="lib-bk-save"]')?.textContent.trim(), saveOff: r.querySelector('[data-x="lib-bk-save"]')?.disabled, msg: r.querySelector('.lib-as-cbody .lib-vv-notice')?.textContent.trim() || '', rep: !r.querySelector('.lib-repbd').hidden, repText: r.querySelector('.lib-rep').textContent.replace(/\s+/g, ' ').trim(), ghost: !r.querySelector('.lib-ghost').hidden };
+  });
+  const rectOfCard = (n) => A.evaluate((sel) => { const r = document.querySelector(sel).getBoundingClientRect(); return { l: r.left, t: r.top, w: r.width, h: r.height }; }, CARD(n));
+  let i0 = await info();
+  const keyOf = (n) => i0.rows.find((r) => r.n === n).key;
+
+  // ---- 3. full-card outlines
+  const cardEls = [1, 2, 3, 4, 5, 7];
+  const geom = await Promise.all(cardEls.map(async (n) => { const c = await rectOfCard(n); const b = i0.boxes.find((x) => x.key === keyOf(n)); return !!b && Math.abs(b.rect.left - c.l) < 1.5 && Math.abs(b.rect.top - c.t) < 1.5 && Math.abs(b.rect.width - c.w) < 1.5 && Math.abs(b.rect.height - c.h) < 1.5; }));
+  check('While Assign Products is active EVERY visible card has an outline around the whole card (not just a badge), exactly over the card’s own box; the hidden card has none', i0.boxes.length === 6 && geom.every(Boolean), JSON.stringify([i0.boxes.length, geom]));
+  check('Unassigned cards are outlined BLUE; the selected card has a stronger outline', i0.boxes.filter((b) => !/bksel/.test(b.cls)).every((b) => b.style === 'solid' && b.color === 'rgb(43, 78, 255)' && b.w === '2px') && i0.boxes.find((b) => /bksel/.test(b.cls)).w === '5px', JSON.stringify(i0.boxes.map((b) => [b.cls, b.w, b.color])));
+  const dupes = await A.evaluate(() => { const r = __BL.S.ui.root; return { badges: r.querySelectorAll('.x-pmbox .pmb').length, pins: [...r.querySelectorAll('.x-marksbox .mk .bd')].filter((b) => getComputedStyle(b).display !== 'none').length }; });
+  check('There is still exactly one numbered marker per card (no duplicate markers or blue note pins)', dupes.badges === 6 && dupes.pins === 0, JSON.stringify(dupes));
+
+  // ---- 2. clicking anywhere inside a card selects it
+  const hashBefore = await A.evaluate(() => location.href);
+  const clickIn = async (sel) => { const p = await pointFor(A, sel, 'center'); await A.mouse.move(p.x, p.y, { steps: 3 }); await A.mouse.down(); await A.mouse.up(); await sleep(350); };
+  await clickIn(`${CARD(3)} .pr`);
+  i0 = await info();
+  check('Clicking the PRICE inside a card selects that card: its row is active in Page Cards, the Library column names it, and it gets the strong outline', i0.rows.find((r) => r.sel)?.n === 3 && /Assigning to Card 3/.test(i0.ctx) && /bksel/.test(i0.boxes.find((b) => b.key === keyOf(3)).cls), JSON.stringify([i0.rows.find((r) => r.sel)?.n, i0.ctx]));
+  await clickIn(`${CARD(5)} .go`);
+  i0 = await info();
+  check('Clicking a card’s link / call-to-action button selects the card and does NOT follow the link (no navigation, no hash change)', i0.rows.find((r) => r.sel)?.n === 5 && (await A.evaluate(() => location.href)) === hashBefore, await A.evaluate(() => location.href));
+  await clickIn(`${CARD(2)} .shot`);
+  i0 = await info();
+  check('Clicking the card’s image area also selects it', i0.rows.find((r) => r.sel)?.n === 2);
+  const evs = await A.evaluate(() => {
+    const out = {};
+    const card = document.querySelector('#row-feat > article:nth-child(1)');
+    window.__seen = [];
+    card.addEventListener('click', () => window.__seen.push('click'));
+    const el = card.querySelector('.go');
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    out.synthetic = window.__seen.length;
+    const ds = new Event('dragstart', { bubbles: true, cancelable: true }); card.querySelector('.shot').dispatchEvent(ds); out.dragPrevented = ds.defaultPrevented;
+    return out;
+  });
+  check('Native dragging of the page’s own content is blocked while active', evs.dragPrevented === true, JSON.stringify(evs));
+  const gap = await pointFor(A, 'nav', 'center');
+  await A.mouse.move(gap.x + 300, gap.y, { steps: 2 }); await A.mouse.down(); await A.mouse.up(); await sleep(250);
+  i0 = await info();
+  check('A click outside every card selects nothing new and changes nothing', i0.rows.find((r) => r.sel)?.n === 2 && (await A.evaluate(() => location.href)) === hashBefore);
+
+  // ---- 4. dragging a Library product onto a card
+  const productPoint = (key) => A.evaluate((key) => { const r = __BL.S.ui.root.querySelector(`.lib-sel-row[data-key="${key}"]`).getBoundingClientRect(); return { x: r.left + 70, y: r.top + r.height / 2 }; }, key);
+  const dragTo = async (key, sel, { hold = false, via = null } = {}) => {
+    const from = await productPoint(key);
+    const to = await pointFor(A, sel, 'center');
+    await A.mouse.move(from.x, from.y, { steps: 2 }); await A.mouse.down();
+    await A.mouse.move(from.x - 30, from.y + 8, { steps: 3 });
+    if (via) { const v = await pointFor(A, via, 'center'); await A.mouse.move(v.x, v.y, { steps: 5 }); }
+    await A.mouse.move(to.x, to.y, { steps: 8 });
+    if (hold) return;
+    await A.mouse.up(); await sleep(450);
+  };
+  await dragTo('sku:ACM400101', `${CARD(1)} .nm`, { hold: true });
+  const mid = await info();
+  check('While dragging: a ghost follows the pointer, every card is a highlighted drop target, and the card under the pointer (reached through its nested title) stands out strongly', mid.ghost && mid.boxes.every((b) => /bkelig/.test(b.cls)) && mid.boxes.filter((b) => /bkdrop/.test(b.cls)).length === 1 && /bkdrop/.test(mid.boxes.find((b) => b.key === keyOf(1)).cls) && mid.boxes.find((b) => /bkdrop/.test(b.cls)).color === 'rgb(123, 44, 255)', JSON.stringify(mid.boxes.map((b) => [b.cls, b.color])));
+  const urlDrag = await A.evaluate(() => location.href);
+  await A.mouse.up(); await sleep(450);
+  let o9 = await info();
+  check('Dropping the product on a card STAGES it for that card: "Not saved yet", Save Assignments (1), the product’s green indicator shows [1], and nothing was stored', o9.rows[0].badges.includes('Not saved yet') && /Acme ZMA/.test(o9.rows[0].prod) && o9.save === 'Save Assignments (1)' && o9.prods.find((p) => p.key === 'sku:ACM400101').asg.join() === '1' && (await notes9()).length === 0 && /Staged for Card 1/.test(o9.msg) && !o9.ghost, JSON.stringify([o9.rows[0], o9.save, o9.msg]));
+  check('Dropping also selects the card it landed on and leaves the page alone (no navigation)', o9.rows.find((r) => r.sel)?.n === 1 && urlDrag === hashBefore && (await A.evaluate(() => location.href)) === hashBefore);
+  check('Dragging does not alter the website: the card’s own markup is unchanged', await A.evaluate(() => /Shop Deal/.test(document.querySelector('#row-feat > article:nth-child(1)').textContent) && document.querySelectorAll('[draggable]').length === 0));
+  await dragTo('sku:ACM400101', `${CARD(5)} .shot`);
+  await dragTo('sku:ACM400101', `${CARD(7)} .pr`);
+  await dragTo('sku:ACM999001', `${CARD(3)} .go`);
+  o9 = await info();
+  check('The same product can be dropped on several cards (even on a nested button): ZMA shows [1] [5] [7], Fish Oil [3]', o9.prods.find((p) => p.key === 'sku:ACM400101').asg.join() === '1,5,7' && o9.prods.find((p) => p.key === 'sku:ACM999001').asg.join() === '3' && o9.save === 'Save Assignments (4)' && (await A.evaluate(() => location.href)) === hashBefore, JSON.stringify(o9.prods.map((p) => [p.key, p.asg])));
+  check('A staged card is outlined DASHED AMBER, clearly different from saved and unassigned cards', o9.boxes.find((b) => b.key === keyOf(1)).style === 'dashed' && o9.boxes.find((b) => b.key === keyOf(1)).color === 'rgb(183, 121, 31)' && o9.boxes.find((b) => b.key === keyOf(2)).color === 'rgb(43, 78, 255)', JSON.stringify(o9.boxes.map((b) => [b.cls, b.style, b.color])));
+  // drops that must do nothing
+  await dragTo('sku:ACM100101', 'nav');
+  o9 = await info();
+  check('Dropping on something that is not a card (the navigation) stages nothing', o9.save === 'Save Assignments (4)' && o9.prods.find((p) => p.key === 'sku:ACM100101').asg.length === 0);
+  const sheetPt = await A.evaluate(() => { const r = __BL.S.ui.root.querySelector('.lib-as-cbody').getBoundingClientRect(); return { x: r.left + 40, y: r.top + 40 }; });
+  { const from = await productPoint('sku:ACM100101'); await A.mouse.move(from.x, from.y, { steps: 2 }); await A.mouse.down(); await A.mouse.move(sheetPt.x, sheetPt.y, { steps: 8 }); await A.mouse.up(); await sleep(350); }
+  o9 = await info();
+  check('Dropping inside the workspace itself does nothing, and a plain click on a product still opens it as before (click-to-assign still works)', o9.save === 'Save Assignments (4)' && await (async () => { await A.evaluate(() => __BL.S.ui.root.querySelector('.lib-sel-row[data-key="sku:ACM100101"]').click()); await sleep(500); const d = await A.evaluate(() => /Review the product/.test(__BL.S.ui.root.querySelector('.lib-sel-h').textContent)); await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-sel-cancel"]').click()); await sleep(250); return d; })());
+  { const from = await productPoint('sku:ACM100101'); const to = await pointFor(A, `${CARD(7)} .nm`, 'center'); await A.mouse.move(from.x, from.y, { steps: 2 }); await A.mouse.down(); await A.mouse.move(to.x, to.y, { steps: 8 }); await A.keyboard.press('Escape'); await sleep(300); await A.mouse.up(); await sleep(350); }
+  o9 = await info();
+  check('Esc during a drag cancels it: no ghost, no highlight, nothing staged, and the workspace stays open', !o9.ghost && o9.save === 'Save Assignments (4)' && o9.boxes.every((b) => !/bkdrop|bkelig/.test(b.cls)) && !!(await A.evaluate(() => __BL.libraryUi.L.bulk)), JSON.stringify([o9.ghost, o9.save]));
+
+  // ---- 4b. drag completion (real Chrome showed the preview stuck to the cursor and nothing assigned, intermittently)
+  // BEGIN drag-completion
+  {
+    await A.evaluate(() => { window.__pid = 1; window.addEventListener('pointermove', (e) => { window.__pid = e.pointerId; }, true); });
+    const ghostShown = () => A.evaluate(() => { const g = __BL.S.ui.root.querySelector('.lib-ghost'); return !!g && !g.hidden; });
+    const saveN = async () => +(((await info()).save.match(/\((\d+)\)/) || [0, 0])[1]);
+    const undoCard = async (n) => { await A.evaluate((n) => { const row = [...__BL.S.ui.root.querySelectorAll('.lib-bk:not(.lib-bk-off)')].find((e) => +e.querySelector('.lib-bk-n').textContent === n); row.querySelector('[data-x="lib-bk-undo"]')?.click(); }, n); await sleep(300); };
+    const hold = async (key, sel) => { const from = await productPoint(key); const to = await pointFor(A, sel, 'center'); await A.mouse.move(from.x, from.y, { steps: 2 }); await A.mouse.down(); await A.mouse.move(from.x - 30, from.y + 8, { steps: 3 }); await A.mouse.move(to.x, to.y, { steps: 8 }); return to; };
+    const base = await saveN();
+    const freeCards = (await info()).rows.filter((r) => /No product assigned/.test(r.prod) && !r.badges.includes('Hidden on the page')).map((r) => r.n);
+    const fa = freeCards[0]; const fb = freeCards[1];
+    check('Fixture: two visible unassigned cards are available as drop targets', freeCards.length >= 2, JSON.stringify(freeCards));
+    // 1. the row being dragged is replaced mid-drag (a re-render drops its pointer capture): the release must still land
+    await hold('sku:ACM100101', `${CARD(fa)} .nm`);
+    check('While dragging the preview is shown', await ghostShown());
+    await A.evaluate(() => { const r = __BL.S.ui.root.querySelector('.lib-sel-row[data-key="sku:ACM100101"]'); r.replaceWith(r.cloneNode(true)); });
+    await A.mouse.up(); await sleep(450);
+    let o = await info();
+    check('Releasing over a card after the dragged row was re-rendered (capture lost) still stages the product for that card', o.rows.find((r) => r.n === fa).badges.includes('Not saved yet') && /Acme/.test(o.rows.find((r) => r.n === fa).prod) && o.save === `Save Assignments (${base + 1})`, JSON.stringify([o.rows[fa - 1], o.save]));
+    check('…the preview is gone at once, no card is still highlighted as a target, and nothing was stored (Save Assignments is still required)', !(await ghostShown()) && o.boxes.every((b) => !/bkelig|bkdrop/.test(b.cls)) && !/lib-dragging/.test(await A.evaluate(() => __BL.S.ui.root.querySelector('.lib-sheet').className)));
+    await undoCard(fa);
+    check('Fixture: that staged card can be cleared again', (await saveN()) === base);
+    // 2. release outside every card, after capture was lost
+    await hold('sku:ACM100101', 'nav');
+    await A.evaluate(() => { const r = __BL.S.ui.root.querySelector('.lib-sel-row[data-key="sku:ACM100101"]'); r.replaceWith(r.cloneNode(true)); });
+    await A.mouse.up(); await sleep(350);
+    o = await info();
+    check('Releasing outside every card (after capture was lost) ends the drag completely and assigns nothing', !(await ghostShown()) && (await saveN()) === base && o.boxes.every((b) => !/bkelig|bkdrop/.test(b.cls)));
+    // 3. repeated consecutive drags work without reopening
+    await dragTo('sku:ACM100101', `${CARD(fa)} .nm`);
+    check('The next drag starts and drops normally right afterwards (repeated drags)', (await saveN()) === base + 1 && !(await ghostShown()));
+    await dragTo('sku:ACM100101', `${CARD(fb)} .nm`);
+    check('…and a third one too, onto another card', (await saveN()) === base + 2 && !(await ghostShown()));
+    await undoCard(fa); await undoCard(fb);
+    // 4. pointercancel
+    await hold('sku:ACM100101', `${CARD(fa)} .nm`);
+    await A.evaluate(() => window.dispatchEvent(new PointerEvent('pointercancel', { pointerId: window.__pid, bubbles: true })));
+    await sleep(150);
+    check('pointercancel cancels the drag: no preview, no highlight, nothing staged', !(await ghostShown()) && (await saveN()) === base && (await info()).boxes.every((b) => !/bkelig|bkdrop/.test(b.cls)));
+    await A.mouse.up(); await sleep(300);
+    check('The release that follows a cancelled drag assigns nothing', (await saveN()) === base);
+    // 5. Esc while the pointer is over the webpage (focus on the page), then another drag
+    await hold('sku:ACM100101', `${CARD(fa)} .nm`);
+    await A.keyboard.press('Escape'); await sleep(150);
+    check('Esc cancels the drag at once (preview gone) and the workspace stays open', !(await ghostShown()) && !!(await A.evaluate(() => __BL.libraryUi.L.bulk)));
+    await A.mouse.up(); await sleep(300);
+    check('…and the release after Esc assigns nothing', (await saveN()) === base);
+    // 6. pointer capture taken away while the row is still on screen
+    await hold('sku:ACM100101', `${CARD(fa)} .nm`);
+    await A.evaluate(() => { const r = __BL.S.ui.root.querySelector('.lib-sel-row[data-key="sku:ACM100101"]'); r.dispatchEvent(new PointerEvent('lostpointercapture', { pointerId: window.__pid, buttons: 1, bubbles: true, composed: true })); });
+    await sleep(150);
+    check('Losing pointer capture while the button is held and the row is on screen cancels the drag completely', !(await ghostShown()) && (await saveN()) === base);
+    await A.mouse.up(); await sleep(300);
+    // 7. a release nobody reported (buttons already 0 on the next move) completes the drop where the pointer is
+    const to7 = await hold('sku:ACM100101', `${CARD(fa)} .nm`);
+    await A.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: to7.x + 2, y: to7.y + 2, button: 'none', buttons: 0 }); await sleep(450);
+    check('A release that was never reported is noticed on the next pointer move and completes the drop over the card', !(await ghostShown()) && (await saveN()) === base + 1);
+    await A.mouse.up(); await sleep(250);
+    await undoCard(fa);
+    // 8. window blur
+    await hold('sku:ACM100101', `${CARD(fa)} .nm`);
+    await A.evaluate(() => window.dispatchEvent(new Event('blur'))); await sleep(150);
+    check('Window blur cancels the drag (no stuck preview)', !(await ghostShown()) && (await saveN()) === base);
+    await A.mouse.up(); await sleep(300);
+    // 9. safeguards: dropping a different product on a card that already has one still asks first
+    const ownerProd = (await info()).rows.find((r) => r.n === 1).prod;
+    await dragTo('sku:ACM100101', `${CARD(1)} .nm`);
+    o = await info();
+    const askOpen = await A.evaluate(() => !__BL.S.ui.root.querySelector('.lib-repbd').hidden && /Replace the product assigned to Card #1/.test(__BL.S.ui.root.querySelector('.lib-rep').textContent));
+    check('Dropping a different product on a card that already has one asks for replacement confirmation (preview gone, nothing replaced yet)', askOpen && !(await ghostShown()) && o.rows.find((r) => r.n === 1).prod === ownerProd, JSON.stringify([askOpen, o.rows[0].prod]));
+    await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-rep-cancel"]').click()); await sleep(300);
+    check('Cancelling it leaves the card unchanged', (await info()).rows.find((r) => r.n === 1).prod === ownerProd && (await saveN()) === base);
+    // 10. dock order
+    const docks = await A.evaluate(() => [...__BL.S.ui.root.querySelectorAll('.lib-as-docks [data-mode]')].map((b) => b.dataset.mode + (b.getAttribute('aria-pressed') === 'true' ? '*' : '')));
+    check('Docking controls read Left | Right | Bottom | Float, and Right is still the pressed (default) mode', docks.join() === 'left,right*,bottom,float', docks.join());
+    const labels = await A.evaluate(() => [...__BL.S.ui.root.querySelectorAll('.lib-as-docks [data-mode]')].map((b) => b.textContent.trim()));
+    check('The dock labels follow the same order', labels.join() === 'Left,Right,Bottom,Float', labels.join());
+  }
+  // END drag-completion
+
+  // ---- the staged-vs-saved appearance, and saving
+  const hold = JSON.stringify(await stored9());
+  check('Nothing has been persisted by any of the drops so far', hold === 'null' || (await notes9()).length === 0);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-bk-save"]').click()); await sleep(1000);
+  o9 = await info();
+  const sv = await notes9();
+  check('Save Assignments persists the four staged cards as notes with exact string variant IDs; the product indicators and the green row badges now describe saved mappings', sv.length === 4 && sv.every((n) => typeof n.productMapping.variant.variantId === 'string') && o9.rows[0].badges.includes('Assigned') && o9.save === 'Save Assignments' && o9.saveOff === true && o9.prods.find((p) => p.key === 'sku:ACM400101').asg.join() === '1,5,7', JSON.stringify([sv.length, o9.rows.map((r) => r.badges[0])]));
+  check('A saved card is outlined GREEN (solid), unassigned ones stay blue', o9.boxes.find((b) => b.key === keyOf(1)).color === 'rgb(30, 122, 62)' && o9.boxes.find((b) => b.key === keyOf(1)).style === 'solid' && o9.boxes.find((b) => b.key === keyOf(2)).color === 'rgb(43, 78, 255)', JSON.stringify(o9.boxes.map((b) => [b.key, b.color])));
+
+  // ---- 5. replacing an assigned card by dragging: asked first, and still behind the explicit approval
+  const beforeRepl = JSON.stringify(await stored9());
+  await dragTo('sku:ACM200101', `${CARD(3)} .nm`);
+  o9 = await info();
+  check('Dropping a DIFFERENT product on a saved card asks "Replace the product assigned to Card #3?" naming the current and the new product', o9.rep && /Replace the product assigned to Card #3\?/.test(o9.repText) && /Current.*Acme Fish Oil/.test(o9.repText) && /New.*Acme Charcoal/.test(o9.repText), o9.repText);
+  check('Nothing has been replaced yet: the row and the stored mapping are unchanged', /Acme Fish Oil/.test(o9.rows[2].prod) && JSON.stringify(await stored9()) === beforeRepl);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-rep-cancel"]').click()); await sleep(300);
+  o9 = await info();
+  check('Cancel leaves it exactly as it was', !o9.rep && /Acme Fish Oil/.test(o9.rows[2].prod) && o9.save === 'Save Assignments');
+  await dragTo('sku:ACM200101', `${CARD(3)} .nm`);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-rep-ok"]').click()); await sleep(400);
+  o9 = await info();
+  check('Confirm replacement stages the new product, but because it is a DIFFERENT SKU the row demands Approve & Save Replacement: Save Assignments stays off and nothing is stored', !o9.rep && o9.rows[2].badges.includes('Replacement approval required') && /Acme Charcoal/.test(o9.rows[2].prod) && o9.saveOff === true && JSON.stringify(await stored9()) === beforeRepl, JSON.stringify([o9.rows[2], o9.save]));
+  check('The pending replacement is outlined as amber (needs approval), not green', o9.boxes.find((b) => b.key === keyOf(3)).color !== 'rgb(30, 122, 62)', JSON.stringify(o9.boxes.find((b) => b.key === keyOf(3))));
+  await A.evaluate(() => { [...__BL.S.ui.root.querySelectorAll('.lib-bk:not(.lib-bk-off)')][2].querySelector('[data-x="lib-bk-approve"]').click(); }); await sleep(700);
+  const w9 = await A.evaluate(() => { const r = __BL.S.ui.root; const sv = r.querySelector('[data-x="lib-map-save"]'); return { head: r.querySelector('.lib-head').textContent, save: sv?.textContent.trim(), go: /lib-go/.test(sv?.className || '') }; });
+  check('Review & approve opens Card Mapping with the green Approve & Save Replacement (the same approval as everywhere else)', w9.head === 'Card Mapping' && w9.save === 'Approve & Save Replacement' && w9.go, JSON.stringify(w9));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-map-save"]').click()); await sleep(1000);
+  const n3 = (await notes9()).find((n) => n.productMapping.card.index === 3 && n.productMapping.card.count === 3);
+  check('After approving, the replacement is saved with a recorded approval and the exact variant ID as a string', n3.productMapping.variant.sku === 'ACM200101' && n3.productMapping.replacement?.status === 'approved' && typeof n3.productMapping.variant.variantId === 'string');
+
+  // ---- visibility while dragging: a card out of view is reached by scrolling
+  await A.setViewport({ width: 1280, height: 560 }); await sleep(500);
+  await A.evaluate(() => window.scrollTo(0, 0));
+  const farY = await A.evaluate(() => document.querySelector('#row-best > article:nth-child(4)').getBoundingClientRect().top);
+  const from = await productPoint('sku:ACM400101'); // the first product: visible even in a short window
+  await A.mouse.move(from.x, from.y, { steps: 2 }); await A.mouse.down();
+  await A.mouse.move(300, 200, { steps: 4 }); await A.mouse.move(300, await A.evaluate(() => innerHeight - 10), { steps: 4 });
+  await sleep(900);
+  const scrolled = await A.evaluate(() => scrollY);
+  await A.mouse.up(); await sleep(300);
+  check('Dragging to the bottom edge of the part of the page the panel leaves free scrolls the page, so a card below the fold can be reached', farY > 560 && scrolled > 0, JSON.stringify([farY, scrolled]));
+  await A.setViewport({ width: 1280, height: 900 }); await sleep(400);
+  await A.evaluate(() => window.scrollTo(0, 0));
+
+  // ---- 8. the two sets of actions are clearly different things
+  await A.evaluate(() => { __BL.S.ui.root.querySelector('.lib-sel-row[data-key="sku:ACM100101"]').click(); }); await sleep(600);
+  const sep = await A.evaluate(() => {
+    const r = __BL.S.ui.root; const use = r.querySelector('[data-x="lib-sel-use"]'); const save = r.querySelector('[data-x="lib-bk-save"]'); const stage = r.querySelector('.lib-stage');
+    const ur = use.getBoundingClientRect(); const sr = save.getBoundingClientRect(); const foot = r.querySelector('.lib-as-foot'); const fcs = getComputedStyle(foot);
+    return { useText: use.textContent.trim(), saveText: save.textContent.trim(), gap: Math.round(sr.top - ur.bottom), inStage: !!use.closest('.lib-stage'), inFoot: !!save.closest('.lib-as-foot'), stageText: stage?.textContent.replace(/\s+/g, ' ').trim(), footBorder: fcs.borderTopWidth, sameBox: use.closest('.lib-as-foot') !== null, back: [...stage.querySelectorAll('button')].map((b) => b.textContent.trim()) };
+  });
+  check('"Use this product" lives in its own tinted "stage" box in the Library column and says it only stages for the selected card; "Save Assignments" is in the separate footer with a heavier divider, well apart', sep.useText === 'Use this product' && sep.saveText.startsWith('Save Assignments') && sep.inStage && sep.inFoot && !sep.sameBox && sep.gap >= 24 && /only stages it for that card/.test(sep.stageText) && /Nothing is saved until you choose Save Assignments/.test(sep.stageText) && sep.footBorder === '2px', JSON.stringify(sep));
+  check('The nested actions are labelled differently from the workspace ones (Back to products / Use this product versus Close / Save Assignments), with no redundant confirmation', sep.back.join() === 'Back to products,Use this product');
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-sel-cancel"]').click()); await sleep(250);
+
+  // ---- leaving restores everything
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-bk-cancel"]').click()); await sleep(400);
+  const after = await A.evaluate(() => { const r = __BL.S.ui.root; return { boxes: [...r.querySelectorAll('.x-pmbox .pmk')].map((n) => n.className), badges: [...r.querySelectorAll('.x-pmbox .pmb')].map((b) => b.textContent.trim()), style: document.documentElement.getAttribute('style'), w: Math.round(document.body.getBoundingClientRect().width) }; });
+  check('Closing removes every temporary outline and the numbered markers, restores the ordinary green Mapped badges (one per saved card), and the page layout', after.boxes.every((c) => c === 'pmk') && after.badges.length === 4 && after.badges.every((b) => /^Mapped · /.test(b)) && after.style === null && after.w === Math.round(W0), JSON.stringify(after));
+  const ev2 = await A.evaluate(() => { const card = document.querySelector('#row-feat > article:nth-child(1)'); const ds = new Event('dragstart', { bubbles: true, cancelable: true }); card.querySelector('.shot').dispatchEvent(ds); return ds.defaultPrevented; });
+  check('Outside Assign Products the page behaves normally again: its own drag events are no longer blocked', ev2 === false);
+  const goP = await pointFor(A, `${CARD(1)} .go`, 'center');
+  await A.mouse.move(goP.x, goP.y, { steps: 2 }); await A.mouse.down(); await A.mouse.up(); await sleep(250);
+  check('…and its links work again (clicking a card’s link follows it)', (await A.evaluate(() => location.href)) !== hashBefore && /#$/.test(await A.evaluate(() => location.href)));
+  // narrow stacked layout: dragging a Library product straight onto a webpage card still works
+  if (!(await A.evaluate(() => !!__BL.libraryUi.L.bulk))) { await A.evaluate(() => __BL.libraryUi.open({ existing: true })); await sleep(500); await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-assign"]').click()); await sleep(900); }
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-as-dock"][data-mode="float"]').click()); await sleep(400);
+  await A.evaluate(() => { const sh = __BL.S.ui.root.querySelector('.lib-sheet'); sh.style.width = '460px'; sh.style.height = '640px'; }); await sleep(700);
+  const nar = await A.evaluate(() => ({ narrow: __BL.S.ui.root.querySelector('.lib-sheet').classList.contains('lib-narrow'), w: Math.round(__BL.S.ui.root.querySelector('.lib-sheet').getBoundingClientRect().width), chips: __BL.S.ui.root.querySelectorAll('.lib-as-strip .lib-cchip').length }));
+  await A.evaluate(() => { __BL.S.ui.root.querySelector('.lib-sel-row[data-key="sku:ACM100101"]')?.scrollIntoView({ block: 'nearest' }); });
+  const freeN = await A.evaluate((sels) => { const ok = (n) => { const e = document.querySelector(sels[n]); if (!e) return false; const r = e.getBoundingClientRect(); return r.right < 790 && r.width > 0; }; const cs = [...__BL.S.ui.root.querySelectorAll('.lib-as-strip .lib-cchip')].map((x) => ({ n: +x.querySelector('b').textContent, t: x.textContent })).filter((c) => c.n !== 6 && ok(c.n)); const c = cs.find((x) => /Not mapped/.test(x.t)) || cs[0]; return c ? c.n : 0; }, { 1: CARD(1), 2: CARD(2), 3: CARD(3), 4: CARD(4), 5: CARD(5), 7: CARD(7) });
+  const keyBefore = freeN;
+  await dragTo('sku:ACM100101', `${CARD(freeN)} .nm`);
+  if (await A.evaluate(() => !__BL.S.ui.root.querySelector('.lib-repbd').hidden)) { await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-rep-ok"]').click()); await sleep(400); }
+  const afterDrag = await A.evaluate((n) => ({ chip: [...__BL.S.ui.root.querySelectorAll('.lib-as-strip .lib-cchip')].find((c) => c.querySelector('b').textContent === String(n))?.textContent.replace(/\s+/g, ' ').trim(), asg: [...__BL.S.ui.root.querySelectorAll('.lib-sel-row[data-key="sku:ACM100101"] .lib-asg i')].map((i) => i.textContent) }), freeN);
+  check('In the stacked narrow layout, dragging a Library product onto a webpage card still stages it: the strip item and the product\'s green indicator both follow', nar.narrow && nar.chips >= 6 && /Not saved|Needs approval/.test(afterDrag.chip || '') && freeN > 0 && afterDrag.asg.includes(String(freeN)), JSON.stringify([nar, keyBefore, afterDrag]));
+  check('No page errors (drag and drop)', A.errors.length === 0, A.errors.join(' | '));
+  await A.close();
+}
+
+// ------------------------------------------------------------------ Workspace: Define Product Card, Find Similar Cards, independence from notes, Start Fresh, Home entry
+console.log('\n# Workspace: Define Product Card, Find Similar Cards, independence from notes, Home entry, replacement modal, Start Fresh and Restore Previous Session (fixtures/card-groups.html)');
+{
+  const FEAT = (n) => `#row-feat > article:nth-child(${n})`;
+  const BEST = (n) => `#row-best > article:nth-child(${n})`;
+  const batchOf = (P) => P.evaluate(() => chrome.storage.local.get('blueline:batch').then((r) => r['blueline:batch'] || null));
+  const itemsOf = async (P) => (await batchOf(P))?.items || [];
+  const allOf = (P) => P.evaluate(() => chrome.storage.local.get());
+  const clickAt = async (P, sel) => { const p = await pointFor(P, sel, 'center'); await P.mouse.move(p.x, p.y, { steps: 3 }); await P.mouse.down(); await P.mouse.up(); await sleep(500); };
+  const xClick = async (P, x, ms = 350) => { await P.evaluate((x) => __BL.S.ui.root.querySelector(`[data-x="${x}"]`).click(), x); await sleep(ms); };
+  const reboot = async (P) => { await P.evaluate(() => __BLUELINE_TEST__.api.setActive(false)); await sleep(500); await P.evaluate(() => __BLUELINE_TEST__.api.setActive(true)); await sleep(800); };
+  const CSVW = 'Section,SKU,Product Name,Original Price,Sale Price\nFeatured,ACM400101,Acme ZMA Capsules,$27.97,$19.99\nFeatured,ACM999001,Acme Fish Oil Softgels,$30.97,\nFeatured,ACM200101,Acme Charcoal,$15.99,\nFeatured,ACM100101,Acme Black Seed Oil,$19.97,$14.99\n';
+  const mkLib = (origin) => {
+    const v = (handle, i = 0) => LibNode.normalizeProduct(PRODUCTS.find((p) => p.handle === handle), origin, 'USD').variants[i];
+    let l = { store: origin, campaign: 'l-ws', name: 'Workspace list', smp: { v: 1, imports: [LibNode.importCsv(CSVW, { fileName: 'ws.csv', sha256: 'ws1' })] }, work: LibNode.emptyWork() };
+    for (const [k, h] of [['sku:ACM400101', 'zma'], ['sku:ACM999001', 'fish-oil'], ['sku:ACM200101', 'charcoal'], ['sku:ACM100101', 'black-seed-oil']]) l = LibNode.decide(LibNode.chooseVariant(l, k, v(h, 0)), k, 'smp');
+    return l;
+  };
+  const rowsOf = (P) => P.evaluate(() => {
+    const r = __BL.S.ui.root; const s = __BL.libraryUi.L.bulk;
+    return {
+      open: !!s, head: r.querySelector('.lib-head').textContent, cls: r.querySelector('.lib-sheet').className,
+      rows: [...r.querySelectorAll('.lib-bk:not(.lib-bk-off)')].map((e) => ({ n: +e.querySelector('.lib-bk-n').textContent, key: e.dataset.key, badges: [...e.querySelectorAll('.lib-badge')].map((b) => b.textContent.trim()), prod: e.querySelector('.lib-bk-prod')?.textContent.replace(/\s+/g, ' ').trim() })),
+      msg: [...r.querySelectorAll('.lib-as-cbody .lib-vv-notice')].map((n) => n.textContent.trim()).join(' | '), empty: /No product cards defined on this page yet/.test(r.querySelector('.lib-as-cbody')?.textContent || ''),
+      define: r.querySelector('[data-x="lib-bk-define"]')?.textContent.trim(), defineOn: !!r.querySelector('[data-x="lib-bk-define"]') && !r.querySelector('[data-x="lib-bk-define"]').disabled, findOff: r.querySelector('[data-x="lib-bk-find"]')?.disabled,
+    };
+  });
+  const homeInfo = (P) => P.evaluate(() => {
+    const r = __BL.S.ui.root; const rb = (e) => e.getBoundingClientRect();
+    const a = r.querySelector('[data-x="assign-home"]'); const l = r.querySelector('[data-x="lib-home"]'); const add = r.querySelector('.addnote'); const fresh = r.querySelector('[data-x="start-fresh"]'); const rs = r.querySelector('[data-x="restore-session"]');
+    return { assignHidden: a.hidden, assignShown: rb(a).height > 0, assignText: a.textContent.trim(), sameSize: rb(a).height > 0 && Math.abs(rb(a).height - rb(l).height) < 1 && Math.abs(rb(a).width - rb(l).width) < 1, count: r.querySelector('.count')?.textContent || '', addBelow: rb(a).top > rb(add).bottom - 1,
+      fresh: !!fresh && rb(fresh).height > 0, freshText: fresh?.textContent.trim(), freshApart: !!fresh && rb(fresh).top > rb(a).bottom + 40, freshClass: fresh?.className || '', restoreVisible: !!rs && !rs.hidden && rb(rs).height > 0, restoreText: rs?.textContent.trim(), restoreSub: r.querySelector('.ws-restore-sub')?.textContent || '' };
+  });
+  const colored = (P) => P.evaluate(() => ({ ls: getComputedStyle(document.querySelector('#h-feat')).letterSpacing, pmk: __BL.S.ui.root.querySelectorAll('.x-pmbox .pmk').length }));
+
+  // ---- Home: no list, then a list
+  let A = await open('card-groups.html', { http: true, realStorage: true });
+  const ORIGIN = await A.evaluate(() => location.origin);
+  const PATH = await A.evaluate(() => __BL.currentPath());
+  const lib = mkLib(ORIGIN);
+  let hi = await homeInfo(A);
+  check('Home: with no usable Product Library list the Assign Products action is not shown (the import workflow stays available)', hi.assignHidden && !hi.assignShown && await A.evaluate(() => !!__BL.S.ui.root.querySelector('[data-x="library"]')), JSON.stringify(hi));
+  await A.evaluate((l) => BluelineLibrary.saveLibrary(chrome.storage.local, l, { smpChanged: true }), lib);
+  await reboot(A);
+  hi = await homeInfo(A);
+  check('Home: with a usable list, Assign Products is a Home action, labelled exactly "Assign Products", the same size as Product Library, after Add note', !hi.assignHidden && hi.assignShown && hi.assignText === 'Assign Products' && hi.sameSize && hi.addBelow, JSON.stringify(hi));
+  check('Home: Start Fresh sits in its own workspace area well apart from the creation buttons and looks like a warning (red), not a Save or navigation button', hi.fresh && /^Start Fresh/.test(hi.freshText) && hi.freshApart && /danger/.test(hi.freshClass) && !hi.restoreVisible, JSON.stringify(hi));
+
+  // ---- one Assign Products workspace from both entry points; no note involved
+  await xClick(A, 'assign-home', 800);
+  let w = await rowsOf(A);
+  const fromHomeCls = w.cls;
+  check('Home → Assign Products opens the workspace directly, with no annotation note opened or created', w.open && w.head === 'Assign Products' && !(await A.evaluate(() => !!__BL.S.pop)) && (await itemsOf(A)).length === 0, JSON.stringify([w.head, w.open]));
+  check('With no cards defined, "Define Product Card" is the starting action, "Find Similar Cards" waits for a card, and nothing is discovered by itself', w.empty && w.define === 'Define Product Card' && w.defineOn && w.findOff === true && w.rows.length === 0, JSON.stringify(w));
+  await xClick(A, 'lib-bk-cancel', 400);
+  await A.evaluate(() => __BL.libraryUi.open({ existing: true })); await sleep(600);
+  await xClick(A, 'lib-assign', 800);
+  w = await rowsOf(A);
+  check('The Product Library\'s Assign Products button opens the SAME workspace as Home (same title, layout classes and starting state)', w.open && w.head === 'Assign Products' && w.cls.split(' ').sort().join() === fromHomeCls.split(' ').sort().join() && w.empty, JSON.stringify([w.cls, fromHomeCls]));
+  const tip = await A.evaluate(() => { const r = __BL.S.ui.root; const row = r.querySelector('.lib-assign-row'); const txt = row ? row.textContent.replace(/\s+/g, ' ') : ''; const inf = row?.querySelector('.lib-info'); const box = inf?.querySelector('.lib-tipbox'); return { hasInfo: !!inf, rowText: txt, tipHidden: box ? getComputedStyle(box).display === 'none' : null, tipText: box?.textContent || '' }; });
+  await xClick(A, 'lib-bk-cancel', 400);
+  await A.evaluate(() => __BL.libraryUi.open({ existing: true })); await sleep(600);
+  const tip2 = await A.evaluate(() => { const r = __BL.S.ui.root; const row = r.querySelector('.lib-assign-row'); const inf = row.querySelector('.lib-info'); const box = inf.querySelector('.lib-tipbox'); const hidden = getComputedStyle(box).display === 'none'; inf.focus(); const shown = getComputedStyle(box).display !== 'none'; return { visibleText: [...row.childNodes].filter((n) => n.nodeType === 3 || (n.nodeType === 1 && !n.classList.contains('lib-info') && !n.matches('button'))).map((n) => n.textContent).join('').trim(), hidden, shown, text: box.textContent }; });
+  check('Product Library: the permanent sentence is gone; its explanation is a small info tooltip beside Assign Products (hidden until hover or focus)', tip2.visibleText === '' && tip2.hidden && tip2.shown && /Give this list’s products to the product cards on the page you are viewing/.test(tip2.text), JSON.stringify(tip2));
+  await A.evaluate(() => { const c = __BL.libraryUi.L; if (c.root) { /* close the library window */ } __BL.S.ui.root.querySelector('[data-x="lib-close"]').click(); }); await sleep(300);
+
+  // ---- Define Product Card: no note, no description, no product
+  await xClick(A, 'assign-home', 700);
+  await xClick(A, 'lib-bk-define', 500);
+  await clickAt(A, `${FEAT(1)} .nm`);
+  const adj = await A.evaluate(() => { const r = __BL.S.ui.root; const m = r.querySelector('.x-mini'); const h = r.querySelector('.hl2'); const c = document.querySelector('#row-feat > article:nth-child(1)').getBoundingClientRect(); const hr = h.getBoundingClientRect(); return { acts: [...r.querySelectorAll('.x-mini [data-x="mini-act"]')].map((b) => b.textContent.trim()), shown: h && !h.hidden, whole: Math.abs(hr.left - c.left) < 2 && Math.abs(hr.top - c.top) < 2 && Math.abs(hr.width - c.width) < 2 && Math.abs(hr.height - c.height) < 2, text: m.textContent.replace(/\s+/g, ' ') }; });
+  check('The proposed card is outlined as a whole (not just the clicked title), with Parent, Child and an obvious Confirm Card', adj.shown && adj.whole && adj.acts.join() === 'Parent ▲,Child ▼,Confirm Card' && /card 1 of 3 in “Featured Deals”/.test(adj.text), JSON.stringify(adj));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="parent"]').click()); await sleep(200);
+  const adj2 = await A.evaluate(() => { const h = __BL.S.ui.root.querySelector('.hl2'); const b = h.getBoundingClientRect(); const c = document.querySelector('#row-feat > article:nth-child(1)').getBoundingClientRect(); return { bigger: b.width > c.width + 5, text: __BL.S.ui.root.querySelector('.x-mini .mini-step').textContent, ok: __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').textContent }; });
+  check('Parent moves the outline up to a wider container, which holds several cards and so needs "Confirm anyway"', adj2.bigger && /several cards/.test(adj2.text) && adj2.ok === 'Confirm anyway', JSON.stringify(adj2));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="child"]').click()); await sleep(200);
+  check('Child steps back down to the card', await A.evaluate(() => { const b = __BL.S.ui.root.querySelector('.hl2').getBoundingClientRect(); const c = document.querySelector('#row-feat > article:nth-child(1)').getBoundingClientRect(); return Math.abs(b.width - c.width) < 2 && __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').textContent === 'Confirm Card'; }));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').click()); await sleep(1000);
+  w = await rowsOf(A);
+  let st = await itemsOf(A);
+  check('Confirm Card saves the card immediately by itself: one card record, with no note, no description and no product', st.length === 1 && st[0].cardRecord === true && st[0].productCard?.v === 1 && !st[0].note && !st[0].productMapping && !st[0].elementEdits, JSON.stringify(st.map((i) => Object.keys(i))));
+  check('The card is not an annotation note: the Home note count stays empty and no note editor is open', (await homeInfo(A)).count === '' && !(await A.evaluate(() => !!__BL.S.pop)) && !(await A.evaluate(() => __BL.S.ui.root.querySelectorAll('.list .item').length)));
+  check('Discovery runs by itself after confirming: all 7 cards across both sections are listed in Assign Products, the defined one marked, with a message saying so', w.rows.length === 7 && w.rows.filter((r) => r.badges.includes('Defined card')).length === 1 && /Card defined and saved\. Blueline found 6 similar cards/.test(w.msg), JSON.stringify([w.rows.length, w.msg]));
+  const cardRecId = st[0].id;
+
+  // ---- duplicates, Find Similar Cards
+  await xClick(A, 'lib-bk-define', 500);
+  await clickAt(A, `${FEAT(1)} .pr`);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').click()); await sleep(900);
+  w = await rowsOf(A);
+  check('Defining a card that is already defined shows its existing state and creates no duplicate', (await itemsOf(A)).length === 1 && /already defined/.test(w.msg) && w.rows.length === 7, JSON.stringify([(await itemsOf(A)).length, w.msg]));
+  await xClick(A, 'lib-bk-find', 400);
+  w = await rowsOf(A);
+  check('Find Similar Cards rescans from Assign Products (no note, no new definition) and says when nothing new was found', /No new cards found \(7 in all\)/.test(w.msg) && w.rows.length === 7 && (await itemsOf(A)).length === 1, w.msg);
+  await A.evaluate(() => { const row = document.querySelector('#row-feat'); const c = row.querySelector('article').cloneNode(true); c.id = 'late-card'; row.appendChild(c); });
+  await xClick(A, 'lib-bk-find', 400);
+  w = await rowsOf(A);
+  check('Find Similar Cards picks up a card that appeared later (Found 1 new card, 8 in all), still without saving anything', /Found 1 new card \(8 in all\)/.test(w.msg) && w.rows.length === 8 && (await itemsOf(A)).length === 1, w.msg);
+  await A.evaluate(() => document.querySelector('#late-card').remove());
+  await xClick(A, 'lib-bk-find', 400);
+  check('The 7 detected cards across the sections are preserved when the extra card goes away again', (await rowsOf(A)).rows.length === 7);
+
+  // ---- an unassigned definition persists across a reload and is shown at once
+  const snapDef = await allOf(A);
+  await xClick(A, 'lib-bk-cancel', 400);
+  let B = await open('card-groups.html', { http: true, realStorage: true, seed: snapDef });
+  await B.evaluate(() => { __BL.libraryUi.assignStart(); }); await sleep(900);
+  let wb = await rowsOf(B);
+  check('A defined, unassigned card is saved: after a reload Assign Products lists the cards at once, with no redefinition, and nothing is assigned', wb.open && wb.rows.length === 7 && wb.rows.filter((r) => r.badges.includes('Defined card')).length === 1 && wb.rows.every((r) => !r.badges.includes('Assigned')) && !wb.empty, JSON.stringify(wb.rows.length));
+  check('Reopening changed nothing in storage (still one card record)', (await itemsOf(B)).length === 1);
+  await B.close();
+
+  // ---- assignments are independent of notes
+  const mapOf = (key) => LibNode.productMappingSnapshot(lib, key, { now: Date.now() });
+  await A.evaluate(() => { __BL.libraryUi.assignStart(); }); await sleep(900);
+  w = await rowsOf(A);
+  const keyOf = (n) => w.rows.find((r) => r.n === n).key;
+  const save = (n, mk) => A.evaluate((key, m) => __BL.libraryUi.L.bulk.api.save(key, m), keyOf(n), mapOf(mk));
+  const r1 = await save(1, 'sku:ACM400101');
+  const r2 = await save(2, 'sku:ACM999001');
+  const r4 = await save(4, 'sku:ACM200101');
+  st = await itemsOf(A);
+  check('Saving assignments from Assign Products writes card records (the existing definition is updated in place, new ones are created) and never a note', r1.ok && r2.ok && r4.ok && st.length === 3 && st.every((i) => i.cardRecord === true && !i.note) && st.find((i) => i.id === cardRecId).productMapping?.product && st.filter((i) => i.productMapping).length === 3, JSON.stringify(st.map((i) => [i.id === cardRecId, !!i.productMapping])));
+  check('Variant IDs in the saved assignments are strings', st.every((i) => typeof i.productMapping.variant.variantId === 'string'));
+  await xClick(A, 'lib-bk-cancel', 400);
+  // two notes: a plain one with a live CSS preview, and an older-style one that carries a card and an assignment
+  await A.evaluate(async (m) => {
+    const el = document.querySelector('#row-best > article:nth-child(2)'); const card = BluelineCards.describe(el); const info = __BL.describe(el, 'change');
+    await __BL.addItem({ id: 'legacy-note', note: 'Older note that carries a mapping', createdAt: Date.now(), ...info, productMapping: { ...m, card } });
+    const h = document.querySelector('#h-feat'); const info2 = __BL.describe(h, 'change');
+    await __BL.addItem({ id: 'plain-note', note: 'A plain note', createdAt: Date.now(), ...info2, elementEdits: [{ el: { label: 'h2', selector: '#h-feat', text: 'Featured Deals', size: '1x1' }, scope: { mode: 'one', count: 1, selector: '#h-feat', similar: 1, chosen: false }, tweaks: [{ prop: 'letter-spacing', from: 'normal', to: '5px' }], textEdit: null, hidden: false, match: null, move: null, align: [], measures: [] }] });
+  }, mapOf('sku:ACM100101'));
+  await sleep(600);
+  hi = await homeInfo(A);
+  check('Notes are counted as notes: Home shows 2 (the 3 card records are not notes) and the plain note\'s CSS preview is live', hi.count === '2' && (await colored(A)).ls === '5px', JSON.stringify([hi.count, await colored(A)]));
+  const before = await itemsOf(A);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.list .item[data-id="plain-note"] [data-act="del"]').click()); await sleep(500);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.list .item[data-id="legacy-note"] [data-act="del"]').click()); await sleep(600);
+  st = await itemsOf(A);
+  const legacy = st.find((i) => i.id === 'legacy-note');
+  check('Deleting annotation notes deletes the notes only: no note is left, and every card definition and assignment (including the one an older note carried) is still saved', st.filter((i) => !i.cardRecord).length === 0 && st.length === 4 && !st.some((i) => i.id === 'plain-note') && legacy?.cardRecord === true && legacy.productMapping?.card?.v === 1 && !legacy.note && st.filter((i) => i.productMapping).length === 4, JSON.stringify(st.map((i) => [i.id.slice(0, 6), i.cardRecord, !!i.productMapping])));
+  check('The records that were never notes are untouched byte for byte, the Home count is empty again and the deleted note\'s preview is gone', before.filter((i) => i.cardRecord).every((i) => JSON.stringify(st.find((s) => s.id === i.id)) === JSON.stringify(i)) && (await homeInfo(A)).count === '' && (await colored(A)).ls === 'normal', JSON.stringify(await colored(A)));
+  await xClick(A, 'assign-home', 900);
+  w = await rowsOf(A);
+  check('Assignments live on without any note: Assign Products shows cards 1, 2, 4 and 5 as Assigned right after the notes were deleted', w.rows.length === 7 && w.rows.filter((r) => r.badges.includes('Assigned')).map((r) => r.n).join() === '1,2,4,5', JSON.stringify(w.rows.map((r) => [r.n, r.badges])));
+  await xClick(A, 'lib-bk-cancel', 400);
+
+  // ---- the shared starting point for the Start Fresh scenarios
+  // a note with a live preview, a note carrying a card, 4 records (3 assigned, 1 defined only) + other page + other site
+  await A.evaluate(async (m) => {
+    const el5 = document.querySelector('#row-best > article:nth-child(4)'); const card5 = BluelineCards.describe(el5); const i5 = __BL.describe(el5, 'change');
+    await __BL.addItem({ id: 'note-card', note: 'A note about a card', createdAt: Date.now(), ...i5, productCard: card5 });
+    const h = document.querySelector('#h-feat'); const info2 = __BL.describe(h, 'change');
+    await __BL.addItem({ id: 'plain-note', note: 'A plain note', createdAt: Date.now(), ...info2, elementEdits: [{ el: { label: 'h2', selector: '#h-feat', text: 'Featured Deals', size: '1x1' }, scope: { mode: 'one', count: 1, selector: '#h-feat', similar: 1, chosen: false }, tweaks: [{ prop: 'letter-spacing', from: 'normal', to: '5px' }], textEdit: null, hidden: false, match: null, move: null, align: [], measures: [] }] });
+    const el3 = document.querySelector('#row-feat > article:nth-child(3)'); const i3 = __BL.describe(el3, 'change');
+    await __BL.addItem({ id: 'rec-empty', cardRecord: true, note: '', createdAt: Date.now(), ...i3, productCard: BluelineCards.describe(el3) });
+  }, null);
+  await sleep(500);
+  const baseAll = await allOf(A);
+  const baseItems = baseAll['blueline:batch'].items;
+  const other = (path, url, id) => ({ id, note: `Elsewhere ${id}`, type: 'polish', createdAt: 1, url, path, el: { label: 'h2', selector: 'h2' }, productMapping: { ...mapOf('sku:ACM400101'), card: baseItems.find((i) => i.productMapping).productMapping.card } });
+  const seedAll = { ...baseAll, 'blueline:batch': { ...baseAll['blueline:batch'], items: [...baseItems, other('/other.html', `${ORIGIN}/other.html`, 'other-page'), other(PATH, 'https://other.example.com/card-groups.html', 'other-site')] } };
+  const SEED_ITEMS = seedAll['blueline:batch'].items;
+  const pageIds = baseItems.map((i) => i.id).sort();
+  const libKeys = (all) => JSON.stringify(Object.fromEntries(Object.entries(all).filter(([k]) => !/^blueline:(batch|restore|shot)/.test(k)).sort()));
+  const LIB_BEFORE = libKeys(seedAll);
+  await A.close();
+
+  const fresh = async () => { const P = await open('card-groups.html', { http: true, realStorage: true, seed: seedAll }); await sleep(900); await P.evaluate(() => __BL.render()); await sleep(600); return P; };
+  // Start Fresh through the dialog; `boxes` are the options to tick
+  const startFresh = async (P, boxes) => {
+    await xClick(P, 'start-fresh', 400);
+    for (const b of boxes) await P.evaluate((b) => __BL.S.ui.root.querySelector(`[data-sf-box="${b}"]`).click(), b);
+    await sleep(500);
+    await P.evaluate(() => __BL.S.ui.root.querySelector('[data-sf="go"]').click()); await sleep(250);
+    await P.evaluate(() => __BL.S.ui.root.querySelector('[data-sf="go"]').click()); await sleep(900);
+  };
+  const dialog = (P) => P.evaluate(() => { const r = __BL.S.ui.root; const m = r.querySelector('.sf-modal'); if (!m) return null; const vis = (e) => !!e && !e.hidden && !e.closest('[hidden]'); return { text: m.textContent.replace(/\s+/g, ' ').trim(), title: m.querySelector('#sf-title')?.textContent, labels: [...m.querySelectorAll('.sf-opts .sf-opt > span > b')].map((b) => b.textContent), go: m.querySelector('[data-sf="go"]').textContent.trim(), goOff: m.querySelector('[data-sf="go"]').disabled, sum: m.querySelector('.sf-sum')?.textContent || '', finalShown: vis(m.querySelector('.sf-final')), cardsOn: m.querySelector('[data-sf-box="cards"]').checked, asgOn: m.querySelector('[data-sf-box="assignments"]').checked, asgOff: m.querySelector('[data-sf-box="assignments"]').disabled, fsum: m.querySelector('.sf-fsum')?.textContent || '' }; });
+  const pageState = async (P) => { const it = await itemsOf(P); const pg = it.filter((i) => !/other-/.test(i.id)); return { notes: pg.filter((i) => !i.cardRecord).map((i) => i.id), records: pg.filter((i) => i.cardRecord).map((i) => i.id), cards: pg.filter((i) => i.productCard?.v || i.productMapping?.card?.v).length, asg: pg.filter((i) => i.productMapping).length, others: it.filter((i) => /other-/.test(i.id)) }; };
+
+  // ---- Start Fresh: the dialog
+  let P = await fresh();
+  const s0 = await pageState(P);
+  check('Seed: the page holds 2 notes, 6 defined cards and 4 assignments, plus one item on another page and one on another website', s0.notes.length === 2 && s0.cards === 6 && s0.asg === 4 && s0.others.length === 2 && (await homeInfo(P)).count === '2', JSON.stringify(s0));
+  await sleep(1000);
+  check('Before clearing, the plain note\'s preview is live and the four assigned cards carry Mapped markers', (await colored(P)).ls === '5px' && (await colored(P)).pmk === 4, JSON.stringify(await colored(P)));
+  await xClick(P, 'start-fresh', 500);
+  let d = await dialog(P);
+  check('Start Fresh opens a confirmation modal titled "Start Fresh" with the exact description', d && d.title === 'Start Fresh' && /Choose what to clear from this page\.\s*Other pages and websites will not be affected\./.test(d.text), d && d.text);
+  check('It offers exactly the three options, each described, with what each depends on', JSON.stringify(d.labels) === JSON.stringify(['Notes and annotations', 'Defined product cards', 'Product assignments']) && /Removes the current page’s saved notes and associated CSS edits\/previews\./.test(d.text) && /Removes saved product-card definitions for this page\./.test(d.text) && /Removes saved product assignments and associated field-level mapping data for this page\./.test(d.text) && /Your defined cards and assignments stay\./.test(d.text) && /Also removes their product assignments\./.test(d.text) && /Your defined cards stay\./.test(d.text), d.text);
+  check('It shows the current page identity and how much of each kind is saved here', d.text.includes(PATH) && d.text.includes(new URL(ORIGIN).host) && /2 notes saved on this page/.test(d.text) && /6 defined cards saved on this page/.test(d.text) && /4 assignments saved on this page/.test(d.text), d.text);
+  check('Nothing is chosen by default: the destructive button is disabled until a choice is made', d.goOff && /Choose at least one/.test(d.sum), JSON.stringify(d));
+  await P.evaluate(() => __BL.S.ui.root.querySelector('[data-sf-box="cards"]').click()); await sleep(500);
+  d = await dialog(P);
+  check('Choosing "Defined product cards" automatically includes (and locks) the product assignments, and the summary says exactly what will be cleared', d.cardsOn && d.asgOn && d.asgOff && /6 defined product cards, 4 product assignments/.test(d.sum) && !d.goOff, JSON.stringify(d));
+  await P.evaluate(() => __BL.S.ui.root.querySelector('[data-sf="go"]').click()); await sleep(300);
+  d = await dialog(P);
+  check('A final destructive confirmation names the page and the summary; Back returns to the choices', d.finalShown && /Clear 6 defined product cards, 4 product assignments from /.test(d.fsum) && d.fsum.includes(PATH) && /Yes, clear this page’s data/.test(d.go) && /Your Product Library, imported product lists, approvals, settings and every other page or website are not touched/.test(d.text), JSON.stringify(d));
+  await P.keyboard.press('Escape'); await sleep(400);
+  check('Esc closes the dialog and nothing is cleared (no recovery copy is made either)', !(await dialog(P)) && JSON.stringify(await pageState(P)) === JSON.stringify(s0) && !(await allOf(P))['blueline:restore'] && !(await homeInfo(P)).restoreVisible);
+  await P.close();
+
+  // ---- 8. notes only
+  P = await fresh();
+  await startFresh(P, ['notes']);
+  let s = await pageState(P);
+  let all = await allOf(P);
+  check('Start Fresh, notes only: the notes are gone; every defined card and assignment stays (a note that carried one hands it to a card record)', s.notes.length === 0 && s.cards === 6 && s.asg === 4 && s.records.length === 6, JSON.stringify(s));
+  check('Notes only: the Home note count is empty, the note\'s live CSS preview is removed from the page and the Mapped markers of the assigned cards stay', (await homeInfo(P)).count === '' && (await colored(P)).ls === 'normal' && (await colored(P)).pmk === 4, JSON.stringify([await homeInfo(P), await colored(P)]));
+  check('Notes only: the recovery copy holds the page\'s items exactly as they were, and Home offers Restore Previous Session', all['blueline:restore'] && JSON.stringify(all['blueline:restore'][`${ORIGIN}${PATH}`].before.map((i) => i.id).sort()) === JSON.stringify(pageIds) && (await homeInfo(P)).restoreVisible && (await homeInfo(P)).restoreText === 'Restore' && !(await P.evaluate(() => /Cleared|20\d\d/.test(__BL.S.ui.root.querySelector('.wsrow').textContent))), JSON.stringify(await homeInfo(P)));
+  await xClick(P, 'assign-home', 900);
+  w = await rowsOf(P);
+  check('Notes only: Assign Products still shows the defined cards with their products straight away', w.rows.length === 7 && w.rows.filter((r) => r.badges.includes('Assigned')).length === 4 && !w.empty, JSON.stringify(w.rows.map((r) => [r.n, r.badges])));
+  await xClick(P, 'lib-bk-cancel', 400);
+  await P.close();
+
+  // ---- 9. assignments only
+  P = await fresh();
+  await startFresh(P, ['assignments']);
+  s = await pageState(P);
+  check('Start Fresh, assignments only: the assignments are gone; notes and every defined card stay', s.notes.length === 2 && s.asg === 0 && s.cards === 6 && s.records.length === 5, JSON.stringify(s));
+  check('Assignments only: the Mapped markers are removed from the page and the notes (and their preview) are untouched', (await colored(P)).pmk === 0 && (await colored(P)).ls === '5px' && (await homeInfo(P)).count === '2', JSON.stringify([await colored(P), (await homeInfo(P)).count]));
+  await xClick(P, 'assign-home', 900);
+  w = await rowsOf(P);
+  check('Assignments only: previously defined cards remain discoverable and ready for new products (7 cards listed, none assigned, no Define step needed)', w.rows.length === 7 && w.rows.every((r) => !r.badges.includes('Assigned')) && !w.empty && w.rows.filter((r) => r.badges.includes('Defined card')).length >= 4, JSON.stringify(w.rows.map((r) => [r.n, r.badges])));
+  await xClick(P, 'lib-bk-cancel', 400);
+  await P.close();
+
+  // ---- 10. cards (and their assignments)
+  P = await fresh();
+  await startFresh(P, ['cards']);
+  s = await pageState(P);
+  all = await allOf(P);
+  check('Start Fresh, defined cards: every card definition AND its assignment is removed; the notes stay', s.cards === 0 && s.asg === 0 && s.records.length === 0 && s.notes.length === 2, JSON.stringify(s));
+  check('Defined cards: the page is back to normal (no Mapped markers) and the recovery copy records that assignments were cleared with them', (await colored(P)).pmk === 0 && all['blueline:restore'][`${ORIGIN}${PATH}`].cleared.assignments === 4 && all['blueline:restore'][`${ORIGIN}${PATH}`].cleared.cards === 6);
+  await xClick(P, 'assign-home', 900);
+  w = await rowsOf(P);
+  check('After clearing the cards, Assign Products opens with Define Product Card as the starting action and does NOT rediscover cards by itself', w.rows.length === 0 && w.empty && w.define === 'Define Product Card' && w.defineOn && w.findOff === true, JSON.stringify(w));
+  await xClick(P, 'lib-bk-cancel', 400);
+  await P.close();
+
+  // ---- 11/12/13. everything on this page; isolation; the Product Library and settings stay put
+  P = await fresh();
+  await startFresh(P, ['notes', 'cards']);
+  s = await pageState(P);
+  all = await allOf(P);
+  check('Start Fresh clears only the current page: the item on another page and the one on another website are byte for byte unchanged', s.notes.length === 0 && s.records.length === 0 && s.others.length === 2 && JSON.stringify(s.others) === JSON.stringify(SEED_ITEMS.filter((i) => /other-/.test(i.id))), JSON.stringify(s));
+  check('The Product Library, imported SMP data, approvals and settings are byte for byte unchanged', libKeys(all) === LIB_BEFORE && (await P.evaluate(() => BluelineLibrary.loadIndex(chrome.storage.local).then((i) => i.libs.length))) === 1);
+  check('Home updates at once: no notes counted, Restore Previous Session offered, no stale markers or previews left on the page', (await homeInfo(P)).count === '' && (await homeInfo(P)).restoreVisible && (await colored(P)).pmk === 0 && (await colored(P)).ls === 'normal' && await P.evaluate(() => !document.documentElement.getAttribute('style') && !__BL.S.ui.root.querySelector('.x-pmbox .pmk:not([style*="none"])')));
+  // another page of the same website sees none of this
+  const snapAfter = await allOf(P);
+  const O = await open('card-groups.html?other=1', { http: true, realStorage: true, seed: snapAfter });
+  await sleep(700);
+  check('Another page on the same website has no Restore Previous Session (the recovery copy belongs to the cleared page only)', !(await homeInfo(O)).restoreVisible && (await itemsOf(O)).filter((i) => /other-/.test(i.id)).length === 2);
+  await O.close();
+
+  // ---- 14/15. restore, nothing changed since
+  await xClick(P, 'restore-session', 600);
+  const det0 = await P.evaluate(() => { const m = __BL.S.ui.root.querySelector('.sf-modal'); return m ? { text: m.textContent.replace(/\s+/g, ' ').trim(), btns: [...m.querySelectorAll('footer button')].map((b) => b.textContent.trim()) } : null; });
+  await P.evaluate(() => __BL.S.ui.root.querySelector('.sf-modal [data-sf="ok"]').click()); await sleep(900);
+  all = await allOf(P);
+  const restored = all['blueline:batch'].items.filter((i) => !/other-/.test(i.id));
+  const orig = SEED_ITEMS.filter((i) => !/other-/.test(i.id));
+  const norm = (arr) => JSON.stringify([...arr].sort((a, b) => (a.id < b.id ? -1 : 1)));
+  check('Restore (nothing changed since) shows the recovery details in its confirmation (when it was cleared and what), says nothing changed, then puts back exactly what was saved: notes, card records and assignments, variant IDs still strings', det0 && /Cleared .*2 notes/.test(det0.text) && /comes back exactly as it was/.test(det0.text) && det0.btns.join() === 'Cancel,Restore' && !(await dialog(P)) && norm(restored) === norm(orig) && restored.filter((i) => i.productMapping).every((i) => typeof i.productMapping.variant.variantId === 'string'), JSON.stringify(restored.map((i) => i.id)));
+  check('After restoring: Home counts the notes again, the preview and Mapped markers are back, the recovery copy is used up, and the other pages\' items are still untouched', (await homeInfo(P)).count === '2' && (await colored(P)).ls === '5px' && (await colored(P)).pmk === 4 && !(await homeInfo(P)).restoreVisible && !all['blueline:restore'] && JSON.stringify(all['blueline:batch'].items.filter((i) => /other-/.test(i.id))) === JSON.stringify(SEED_ITEMS.filter((i) => /other-/.test(i.id))));
+  await P.close();
+
+  // ---- 16. restore after newer work
+  P = await fresh();
+  await startFresh(P, ['notes']);
+  await P.evaluate(async () => { const el = document.querySelector('#row-best > article:nth-child(3)'); const info = __BL.describe(el, 'change'); await __BL.addItem({ id: 'newer-card', cardRecord: true, note: '', createdAt: Date.now(), ...info, productCard: BluelineCards.describe(el) }); const h = document.querySelector('h2#h-best'); await __BL.addItem({ id: 'newer-note', note: 'Made after the reset', createdAt: Date.now(), ...__BL.describe(h, 'change') }); });
+  await sleep(500);
+  await xClick(P, 'restore-session', 600);
+  d = await P.evaluate(() => { const m = __BL.S.ui.root.querySelector('.sf-modal'); return m ? { text: m.textContent.replace(/\s+/g, ' ').trim(), btns: [...m.querySelectorAll('footer button')].map((b) => b.textContent.trim()), focus: __BL.S.ui.root.activeElement?.textContent?.trim() } : null; });
+  check('Restore Previous Session asks first when work has changed since the reset, explains what is replaced and what is kept, and focuses the safe button', d && /Restore previous session\?/.test(d.text) && /Cleared .*2 notes/.test(d.text) && /2 items added/.test(d.text) && /cards and assignments made since will be replaced/.test(d.text) && /Notes you added since are kept/.test(d.text) && d.btns.join() === 'Cancel,Restore and replace' && d.focus === 'Cancel', JSON.stringify(d));
+  await P.evaluate(() => __BL.S.ui.root.querySelector('.sf-modal [data-sf="cancel"]').click()); await sleep(500);
+  s = await pageState(P);
+  check('Cancelling the restore changes nothing (newer work is still there, the earlier session is still recoverable)', s.records.includes('newer-card') && s.notes.includes('newer-note') && !s.notes.includes('plain-note') && (await homeInfo(P)).restoreVisible);
+  await xClick(P, 'restore-session', 600);
+  await P.evaluate(() => __BL.S.ui.root.querySelector('.sf-modal [data-sf="ok"]').click()); await sleep(900);
+  s = await pageState(P);
+  check('Confirming restores the earlier session: its notes are back, the card made since the reset is replaced, the note made since is kept', s.notes.includes('plain-note') && s.notes.includes('note-card') && s.notes.includes('newer-note') && !s.records.includes('newer-card') && s.asg === 4, JSON.stringify(s));
+  check('Other pages and websites were untouched through all of that', JSON.stringify((await itemsOf(P)).filter((i) => /other-/.test(i.id))) === JSON.stringify(SEED_ITEMS.filter((i) => /other-/.test(i.id))));
+  await P.close();
+
+  // ---- 18/19. the replacement confirmation is a centered modal, and approval is one click from the card
+  P = await open('card-groups.html', { http: true, realStorage: true });
+  await P.evaluate((l) => BluelineLibrary.saveLibrary(chrome.storage.local, l, { smpChanged: true }), lib);
+  await reboot(P);
+  await xClick(P, 'assign-home', 700);
+  await xClick(P, 'lib-bk-define', 500);
+  await clickAt(P, `${FEAT(2)} .nm`);
+  await P.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').click()); await sleep(1000);
+  const selQ = (v) => P.evaluate((v) => { const i = __BL.S.ui.root.querySelector('[data-lib="sel-q"]'); i.value = v; i.dispatchEvent(new Event('input', { bubbles: true })); }, v);
+  const pick = async (query, key) => { await selQ(query); await sleep(200); await P.evaluate((key) => __BL.S.ui.root.querySelector(`.lib-sel-row[data-key="${key}"]`).click(), key); await sleep(600); await P.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-sel-use"]').click()); await sleep(450); };
+  w = await rowsOf(P);
+  await P.evaluate((n) => [...__BL.S.ui.root.querySelectorAll('.lib-bk:not(.lib-bk-off)')][n - 1].querySelector('.lib-bk-n').click(), 2); await sleep(350);
+  await pick('zma', 'sku:ACM400101');
+  await P.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-bk-save"]').click()); await sleep(700);
+  await P.evaluate((n) => [...__BL.S.ui.root.querySelectorAll('.lib-bk:not(.lib-bk-off)')][n - 1].querySelector('.lib-bk-n').click(), 2); await sleep(350);
+  await pick('fish', 'sku:ACM999001');
+  const rm = await P.evaluate(() => { const r = __BL.S.ui.root; const bd = r.querySelector('.lib-repbd'); const box = r.querySelector('.lib-rep'); const br = bd.getBoundingClientRect(); const b = box.getBoundingClientRect(); const bg = getComputedStyle(bd).backgroundColor; return { rects: [br.left, br.top, br.width, br.height, b.left, b.top, b.width, b.height, innerWidth, innerHeight], shown: !bd.hidden, backdropFull: Math.abs(br.width - document.documentElement.clientWidth) < 2 && Math.abs(br.height - innerHeight) < 2, centered: Math.abs((b.left + b.width / 2) - document.documentElement.clientWidth / 2) < 3 && Math.abs((b.top + b.height / 2) - innerHeight / 2) < 3, within: b.left >= 0 && b.right <= innerWidth && b.top >= 0 && b.bottom <= innerHeight, bg, role: box.getAttribute('role'), modal: box.getAttribute('aria-modal'), text: box.textContent.replace(/\s+/g, ' ').trim(), focus: r.activeElement?.textContent?.trim(), btns: [...box.querySelectorAll('button')].map((x) => x.textContent.trim()) }; });
+  check('Replacing an assigned product asks in a clearly visible modal centred in the browser window, over a subtle backdrop (not tucked into the docked panel)', rm.shown && rm.backdropFull && rm.centered && rm.within && /rgba\(30, 34, 48, 0\.4/.test(rm.bg) && rm.role === 'alertdialog' && rm.modal === 'true', JSON.stringify(rm));
+  check('It shows the current product, the proposed replacement, Cancel and Confirm replacement, and puts keyboard focus on Cancel', /Replace the product assigned to Card #\d\?/.test(rm.text) && /Current.*Acme ZMA/.test(rm.text) && /New.*Acme Fish Oil/.test(rm.text) && rm.btns.join() === 'Cancel,Confirm replacement' && rm.focus === 'Cancel', JSON.stringify(rm));
+  await P.keyboard.press('Tab'); await P.keyboard.press('Tab'); await sleep(100);
+  check('Focus stays inside the modal (Tab wraps between its two buttons)', await P.evaluate(() => __BL.S.ui.root.querySelector('.lib-rep').contains(__BL.S.ui.root.activeElement)));
+  await P.keyboard.press('Escape'); await sleep(300);
+  check('Esc cancels the replacement and keeps the workspace open', await P.evaluate(() => __BL.S.ui.root.querySelector('.lib-repbd').hidden && !!__BL.libraryUi.L.bulk));
+  await P.evaluate((n) => [...__BL.S.ui.root.querySelectorAll('.lib-bk:not(.lib-bk-off)')][n - 1].querySelector('.lib-bk-n').click(), 2); await sleep(300);
+  await pick('fish', 'sku:ACM999001');
+  await P.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-rep-ok"]').click()); await sleep(500);
+  const ap = await P.evaluate(() => { const r = __BL.S.ui.root; const row = [...r.querySelectorAll('.lib-bk:not(.lib-bk-off)')][1]; const b = row.querySelector('[data-x="lib-bk-approve"]'); const cs = b && getComputedStyle(b); return { btn: b?.textContent.trim(), bg: cs?.backgroundColor, text: row.querySelector('.lib-bk-appr')?.textContent.replace(/\s+/g, ' ').trim(), save: r.querySelector('[data-x="lib-bk-save"]').disabled, badges: [...row.querySelectorAll('.lib-badge')].map((x) => x.textContent.trim()) }; });
+  check('Confirming a different-SKU replacement only stages it: the card shows "Needs approval" with a clear green "Review & approve replacement" action, and Save Assignments stays off', ap.btn === 'Review & approve replacement' && ap.bg === 'rgb(30, 122, 62)' && /Needs approval/.test(ap.text) && /Approve & Save Replacement/.test(ap.text) && ap.save === true && ap.badges.includes('Replacement approval required'), JSON.stringify(ap));
+  // a different, unrelated pending assignment must survive the approval
+  await P.evaluate((n) => [...__BL.S.ui.root.querySelectorAll('.lib-bk:not(.lib-bk-off)')][n - 1].querySelector('.lib-bk-n').click(), 5); await sleep(350);
+  await pick('charcoal', 'sku:ACM200101');
+  await P.evaluate((n) => [...__BL.S.ui.root.querySelectorAll('.lib-bk:not(.lib-bk-off)')][n - 1].querySelector('.lib-bk-n').click(), 2); await sleep(300);
+  await P.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-bk-approve"]').click()); await sleep(900);
+  const cm = await P.evaluate(() => { const r = __BL.S.ui.root; return { head: r.querySelector('.lib-head').textContent, btns: [...r.querySelectorAll('.lib-map button')].map((b) => b.textContent.trim()).filter((t) => /Approve|Replace|Save/.test(t)) }; });
+  check('"Review & approve replacement" opens the existing Card Mapping with its own "Approve & Save Replacement" (no second approval path)', cm.head === 'Card Mapping' && cm.btns.some((t) => /Approve & Save Replacement/.test(t)), JSON.stringify(cm));
+  await P.evaluate(() => { const b = [...__BL.S.ui.root.querySelectorAll('.lib-map button')].find((x) => /Approve & Save Replacement/.test(x.textContent)); b.click(); }); await sleep(1200);
+  const back = await P.evaluate(() => { const r = __BL.S.ui.root; const rows = [...r.querySelectorAll('.lib-bk:not(.lib-bk-off)')]; return { head: r.querySelector('.lib-head').textContent, sel: rows.findIndex((e) => e.classList.contains('sel')) + 1, msg: [...r.querySelectorAll('.lib-as-cbody .lib-vv-notice')].map((n) => n.textContent.trim()).join(' | '), r2: rows[1].querySelector('.lib-bk-prod')?.textContent.replace(/\s+/g, ' ').trim(), r2badge: [...rows[1].querySelectorAll('.lib-badge')].map((b) => b.textContent.trim()), r5: rows[4].querySelector('.lib-bk-prod')?.textContent.replace(/\s+/g, ' ').trim(), r5badge: [...rows[4].querySelectorAll('.lib-badge')].map((b) => b.textContent.trim()) }; });
+  check('After approving, the person is back in Assign Products with that card selected, the replacement saved and approved, and the unrelated pending assignment (card 5) still staged', back.head === 'Assign Products' && back.sel === 2 && /Replacement approved and saved/.test(back.msg) && /Fish Oil/.test(back.r2) && back.r2badge.includes('Assigned') && /Charcoal/.test(back.r5) && back.r5badge.includes('Not saved yet'), JSON.stringify(back));
+  check('No page errors (workspace)', P.errors.length === 0, P.errors.join(' | '));
+  await P.close();
+}
+
+
+// ------------------------------------------------------------------ Final adjustments: Home Define Product Card, Reset all Blueline work
+console.log('\n# Final adjustments: Home Define Product Card (no Library list), Reset all Blueline work (fake isolated storage, fixtures/card-groups.html)');
+{
+  const { createHash } = await import('node:crypto');
+  const FEAT = (n) => `#row-feat > article:nth-child(${n})`;
+  const allOf = (P) => P.evaluate(() => chrome.storage.local.get());
+  const itemsOf = async (P) => ((await allOf(P))['blueline:batch']?.items) || [];
+  const xClick = async (P, x, ms = 350) => { await P.evaluate((x) => __BL.S.ui.root.querySelector(`[data-x="${x}"]`).click(), x); await sleep(ms); };
+  const clickAt = async (P, sel) => { const p = await pointFor(P, sel, 'center'); await P.mouse.move(p.x, p.y, { steps: 3 }); await P.mouse.down(); await P.mouse.up(); await sleep(500); };
+  const reboot = async (P) => { await P.evaluate(() => __BLUELINE_TEST__.api.setActive(false)); await sleep(500); await P.evaluate(() => __BLUELINE_TEST__.api.setActive(true)); await sleep(800); };
+  const sha = (f) => createHash('sha256').update(readFileSync(join(here, 'fixtures', f))).digest('hex');
+  const FIX_BEFORE = { cg: sha('card-groups.html'), pf: sha('product-fields.html') };
+  const CSVW = 'Section,SKU,Product Name,Original Price,Sale Price\nFeatured,ACM400101,Acme ZMA Capsules,$27.97,$19.99\n';
+  const mkLib = (origin) => { const v = LibNode.normalizeProduct(PRODUCTS.find((p) => p.handle === 'zma'), origin, 'USD').variants[0]; let l = { store: origin, campaign: 'l-final', name: 'Final list', smp: { v: 1, imports: [LibNode.importCsv(CSVW, { fileName: 'f.csv', sha256: 'f1' })] }, work: LibNode.emptyWork() }; l = LibNode.decide(LibNode.chooseVariant(l, 'sku:ACM400101', v), 'sku:ACM400101', 'smp'); return l; };
+  const home = (P) => P.evaluate(() => { const r = __BL.S.ui.root; const d = r.querySelector('[data-x="define-home"]'); const a = r.querySelector('[data-x="assign-home"]'); const l = r.querySelector('[data-x="lib-home"]'); const add = r.querySelector('.addnote'); const rb = (e) => e.getBoundingClientRect(); return { def: d?.textContent.trim(), defShown: !!d && rb(d).height > 0 && !d.hidden, defOn: !!d && !d.disabled, assignHidden: a.hidden, libHidden: l.hidden, count: r.querySelector('.count')?.textContent || '', restore: !r.querySelector('[data-x="restore-session"]').hidden, sameSize: !!d && Math.abs(rb(d).width - rb(add).width) < 3, order: [...r.querySelectorAll('.body > [data-x]')].map((b) => b.dataset.x).filter((x) => /add-note|lib-home|assign-home|define-home/.test(x)) }; });
+
+  // ---- Task 1: Define Product Card from Home, with no Product Library list at all
+  let A = await open('card-groups.html', { http: true, realStorage: true });
+  const ORIGIN = await A.evaluate(() => location.origin);
+  const PATH = await A.evaluate(() => __BL.currentPath());
+  let h = await home(A);
+  check('Home has a main "Define Product Card" action with no Product Library list at all (Product Library and Assign Products stay separate actions, hidden until a list exists)', h.def === 'Define Product Card' && h.defShown && h.defOn && h.assignHidden && h.libHidden, JSON.stringify(h));
+  await xClick(A, 'define-home', 500);
+  const m1 = await A.evaluate(() => { const m = __BL.S.ui.root.querySelector('.x-mini'); return m && !m.hidden ? m.textContent.replace(/\s+/g, ' ') : null; });
+  check('Home → Define Product Card starts the existing page picker (the same note-independent flow)', /Define Product Card/.test(m1 || '') && /Click any part of the product card/.test(m1 || ''), m1);
+  await clickAt(A, `${FEAT(1)} .nm`);
+  const adj = await A.evaluate(() => [...__BL.S.ui.root.querySelectorAll('.x-mini [data-x="mini-act"]')].map((b) => b.textContent.trim()));
+  check('The whole card is proposed with Parent, Child and Confirm Card to expand or narrow the boundary', adj.join() === 'Parent ▲,Child ▼,Confirm Card', JSON.stringify(adj));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').click()); await sleep(1500);
+  const st = await itemsOf(A);
+  const ws = await A.evaluate(() => { const r = __BL.S.ui.root; return { open: !!__BL.libraryUi.L.bulk, head: r.querySelector('.lib-head').textContent, rows: r.querySelectorAll('.lib-bk:not(.lib-bk-off)').length }; });
+  check('Confirming saves the whole card by itself (no note, description or product, no Library list), then the similar cards are discovered and shown: 7 cards', st.length === 1 && st[0].cardRecord === true && !st[0].note && st[0].productCard?.v === 1 && !st[0].productMapping && ws.open && ws.head === 'Assign Products' && ws.rows === 7, JSON.stringify([st.length, ws]));
+  check('No note was created (the Home count is empty) and no Library data was written', (await home(A)).count === '' && !Object.keys(await allOf(A)).some((k) => k.startsWith('blueline:lib:')));
+  await xClick(A, 'lib-bk-cancel', 400);
+  await A.evaluate(() => __BL.libraryUi.close?.()); await sleep(200);
+  await A.close();
+
+  // ---- Task 3: Reset all Blueline work, on fake storage only
+  const P0 = await open('card-groups.html', { http: true, realStorage: true });
+  await P0.evaluate((l) => BluelineLibrary.saveLibrary(chrome.storage.local, l, { smpChanged: true }), mkLib(ORIGIN));
+  const libKeys = Object.fromEntries(Object.entries(await allOf(P0)).filter(([k]) => k.startsWith('blueline:lib:')));
+  await P0.close();
+  const OTHER = 'https://other.example.com';
+  const mkNote = (id, url, path, extra = {}) => ({ id, note: `note ${id}`, type: 'polish', createdAt: 1, url, path, el: { label: 'h2', selector: '#h-feat' }, ...extra });
+  const CARD = { v: 1, selector: 'x', tag: 'article', section: { heading: 'S' }, index: 1, count: 1, text: 't' };
+  const items = [
+    mkNote('here-note', `${ORIGIN}${PATH}`, PATH, { elementEdits: [{ el: { label: 'h2', selector: '#h-feat', text: 'Featured Deals', size: '1x1' }, scope: { mode: 'one', count: 1, selector: '#h-feat', similar: 1, chosen: false }, tweaks: [{ prop: 'letter-spacing', from: 'normal', to: '5px' }], textEdit: null, hidden: false, match: null, move: null, align: [], measures: [] }] }),
+    { ...mkNote('here-rec', `${ORIGIN}${PATH}`, PATH), cardRecord: true, note: '', productCard: CARD },
+    mkNote('page2-note', `${ORIGIN}/other.html`, '/other.html', { productCard: CARD }),
+    mkNote('site2-note', `${OTHER}/shop`, '/shop'),
+  ];
+  const guides = [{ id: 'g-here', origin: ORIGIN, path: PATH, x: 10 }, { id: 'g-site2', origin: OTHER, path: '/shop', x: 20 }];
+  const FOREIGN = { 'other-extension:data': { keep: 1 }, notblueline: 'keep me' };
+  const PREFS = { side: 'left', collapsed: false, previews: true, marks: 'full', assign: { mode: 'bottom', size: { right: 500, left: 500, bottom: 300 }, float: { w: 700, h: 500 } } };
+  const SEED = {
+    ...libKeys, ...FOREIGN,
+    'blueline:batch': { id: 'b1', createdAt: 1, items, guides, priceReport: { origin: ORIGIN, rows: [1] } },
+    'blueline:restore': { [`${ORIGIN}${PATH}`]: { v: 1, at: Date.now(), pageKey: `${ORIGIN}${PATH}`, cleared: { notes: 1, cards: 0, assignments: 0 }, before: [items[0]], afterSig: {}, shots: {} }, [`${ORIGIN}/other.html`]: { v: 1, at: 1, pageKey: `${ORIGIN}/other.html`, cleared: {}, before: [], afterSig: {}, shots: {} } },
+    'blueline:overlay': { dataUrl: 'data:image/png;base64,iVBORw0KGgo=', opacity: 40, width: 100, x: 1, y: 2, diff: false, visible: false },
+    'blueline:sheet': { name: 'prices.csv', rows: [['a']], cols: ['sku'] },
+    'blueline:shot:here-note': 'data:image/png;base64,AAA', 'blueline:shot:here-note:markup': 'data:image/png;base64,BBB',
+    'blueline:prefs': PREFS,
+  };
+  const BL_KEYS = (all) => Object.keys(all).filter((k) => k.startsWith('blueline:')).sort();
+  const fresh = async (seed = SEED) => {
+    const P = await open('card-groups.html', { http: true, realStorage: true, seed });
+    await sleep(900); await P.evaluate(() => __BL.render()); await sleep(500);
+    // watch every storage call the page makes: removals may only name Blueline's own keys, and nothing may call clear()
+    await P.evaluate(() => { window.__removed = []; window.__cleared = false; const L = chrome.storage.local; const rm = L.remove.bind(L); L.remove = (k) => { window.__removed.push(...[].concat(k)); return rm(k); }; L.clear = () => { window.__cleared = true; return Promise.resolve(); }; });
+    return P;
+  };
+  const dlg = (P) => P.evaluate(() => { const m = __BL.S.ui.root.querySelector('.sf-modal'); if (!m) return null; const vis = (e) => !!e && !e.hidden && !e.closest('[hidden]') && e.getClientRects().length > 0; return { text: m.textContent.replace(/\s+/g, ' ').trim(), sub: m.querySelector('#sf-sub').textContent, sum: m.querySelector('.sf-sum').textContent, labels: [...m.querySelectorAll('.sf-all .sf-opt > span > b')].map((b) => b.textContent), pageOpts: vis(m.querySelector('.sf-opts')), allBlock: vis(m.querySelector('.sf-all')), final: vis(m.querySelector('.sf-final')), fsum: m.querySelector('.sf-fsum').textContent, go: m.querySelector('[data-sf="go"]').textContent.trim(), goOff: m.querySelector('[data-sf="go"]').disabled, scopes: [...m.querySelectorAll('[data-sf-scope]')].map((i) => i.parentElement.textContent.trim() + ':' + i.checked) }; });
+  const openAll = async (P) => { await xClick(P, 'start-fresh', 450); await P.evaluate(() => __BL.S.ui.root.querySelector('[data-sf-scope="all"]').click()); await sleep(600); };
+  const tick = async (P, which) => { for (const w of which) await P.evaluate((w) => __BL.S.ui.root.querySelector(`[data-sf-all="${w}"]`).click(), w); await sleep(500); };
+  const confirmAll = async (P) => { await P.evaluate(() => __BL.S.ui.root.querySelector('[data-sf="go"]').click()); await sleep(300); await P.evaluate(() => __BL.S.ui.root.querySelector('[data-sf="go"]').click()); await sleep(1200); };
+  const SEED_LIB_JSON = JSON.stringify(libKeys);
+  const ls = (P) => P.evaluate(() => getComputedStyle(document.querySelector('#h-feat')).letterSpacing);
+
+  // the dialog
+  let P = await fresh();
+  check('Seed: notes on three pages across two websites, guides, a price report, recovery copies, screenshots, an overlay, a price sheet, settings and a Product Library', (await itemsOf(P)).length === 4 && BL_KEYS(await allOf(P)).length === 10 && (await ls(P)) === '5px', JSON.stringify([BL_KEYS(await allOf(P)).length, await ls(P)]));
+  await xClick(P, 'start-fresh', 450);
+  let d = await dlg(P);
+  check('Start Fresh keeps the page scope first and offers a clearly separate "Reset all Blueline work" scope', d.scopes.join() === 'This page only:true,Reset all Blueline work:false' && d.pageOpts && !d.allBlock, JSON.stringify(d.scopes));
+  await P.evaluate(() => __BL.S.ui.root.querySelector('[data-sf-scope="all"]').click()); await sleep(600);
+  d = await dlg(P);
+  check('Choosing the full scope names it and says it covers ALL pages and websites, listing what goes', /Reset all Blueline work: every page and website/.test(d.sub) && d.allBlock && !d.pageOpts && /ALL pages and websites/.test(d.text) && /notes and annotations, defined product cards, product assignments, saved page changes, guides, reports, screenshots and recovery copies/.test(d.text), d.text);
+  check('It offers exactly the two independent optional checkboxes, unticked, and the Library one says it affects ALL sites and pages', JSON.stringify(d.labels) === JSON.stringify(['Also delete all Product Library lists and imported data', 'Also reset Blueline settings and preferences']) && /for ALL sites and pages/.test(d.text) && /1 list with 1 product saved/.test(d.text), JSON.stringify(d.labels));
+  check('The summary states what will be cleared across pages and websites (3 pages, 2 websites, notes, cards, guides, report, copies, screenshots) and not the Library or settings yet', /This will clear: all saved Blueline work on 3 pages across 2 websites \(2 notes, 2 defined product cards, 1 guide|This will clear: all saved Blueline work on 3 pages across 2 websites/.test(d.sum) && /2 recovery copies/.test(d.sum) && /2 saved screenshots/.test(d.sum) && /2 guides/.test(d.sum) && !/Product Library lists/.test(d.sum), d.sum);
+  await tick(P, ['library', 'settings']);
+  d = await dlg(P);
+  check('Ticking the options updates the summary but resets NOTHING (storage is byte for byte unchanged), and the destructive step is not triggered', /ALL Product Library lists \(1 list, 1 product\)/.test(d.sum) && /settings and preferences/.test(d.sum) && JSON.stringify(await allOf(P)) === JSON.stringify(SEED) && !d.final, d.sum);
+  await P.evaluate(() => __BL.S.ui.root.querySelector('[data-sf="go"]').click()); await sleep(300);
+  d = await dlg(P);
+  check('A deliberate final confirmation repeats the scope in plain words ("cannot be undone"), with the destructive button named for it; still nothing is cleared', d.final && /Reset all saved Blueline work on 3 pages across 2 websites/.test(d.fsum) && /ALL Product Library lists/.test(d.fsum) && /EVERY page and website, and it cannot be undone/.test(d.text) && d.go === 'Yes, reset all Blueline work' && JSON.stringify(await allOf(P)) === JSON.stringify(SEED));
+  await P.keyboard.press('Escape'); await sleep(400);
+  check('Esc cancels the whole thing and nothing is cleared', !(await dlg(P)) && JSON.stringify(await allOf(P)) === JSON.stringify(SEED));
+  await P.close();
+
+  // current-page reset stays page-scoped (guides, overlay, price sheet, other pages, other sites, library, settings untouched)
+  P = await fresh();
+  await xClick(P, 'start-fresh', 450);
+  await P.evaluate(() => { for (const b of ['notes', 'cards']) __BL.S.ui.root.querySelector(`[data-sf-box="${b}"]`).click(); }); await sleep(500);
+  await confirmAll(P);
+  let all = await allOf(P);
+  const left = all['blueline:batch'].items.map((i) => i.id).sort();
+  check('Start Fresh on this page is still page-scoped: only this page\'s items go; the other page, the other website, guides, overlay, sheet, library, settings and unrelated keys are all untouched', left.join() === 'page2-note,site2-note' && all['blueline:batch'].guides.length === 2 && JSON.stringify(all['blueline:overlay']) === JSON.stringify(SEED['blueline:overlay']) && JSON.stringify(all['blueline:sheet']) === JSON.stringify(SEED['blueline:sheet']) && JSON.stringify(all['blueline:prefs']) === JSON.stringify(PREFS) && JSON.stringify(Object.fromEntries(Object.entries(all).filter(([k]) => k.startsWith('blueline:lib:')))) === SEED_LIB_JSON && all.notblueline === 'keep me' && all['other-extension:data'].keep === 1, JSON.stringify(left));
+  await P.close();
+
+  // global reset, work only: the Library and settings stay
+  P = await fresh();
+  await openAll(P);
+  await confirmAll(P);
+  all = await allOf(P);
+  const removed = await P.evaluate(() => window.__removed);
+  const wk = BL_KEYS(all);
+  check('Reset all Blueline work clears the notes, cards, assignments, guides, reports, screenshots, recovery copies, overlay and price sheet on EVERY page and website', !all['blueline:batch'] && !all['blueline:restore'] && !all['blueline:overlay'] && !all['blueline:sheet'] && !wk.some((k) => k.startsWith('blueline:shot:')), JSON.stringify(wk));
+  check('Without the options, the Product Library lists (and their imported data and approvals) and the settings stay exactly as they were', JSON.stringify(Object.fromEntries(Object.entries(all).filter(([k]) => k.startsWith('blueline:lib:')))) === SEED_LIB_JSON && JSON.stringify(all['blueline:prefs']) === JSON.stringify(PREFS), JSON.stringify(wk));
+  check('Only Blueline\'s own keys were named for removal; clear() was never used; unrelated browser/extension storage is untouched', removed.length > 0 && removed.every((k) => k.startsWith('blueline:')) && !(await P.evaluate(() => window.__cleared)) && all.notblueline === 'keep me' && all['other-extension:data'].keep === 1, JSON.stringify(removed));
+  let hh = await home(P);
+  check('Home looks clean: no notes, no Restore Previous Session, no preview left on the page, the Library and Assign Products still available', hh.count === '' && !hh.restore && (await ls(P)) === 'normal' && !hh.libHidden && !hh.assignHidden, JSON.stringify(hh));
+  await xClick(P, 'assign-home', 900);
+  const w = await P.evaluate(() => { const r = __BL.S.ui.root; return { rows: r.querySelectorAll('.lib-bk').length, empty: /No product cards defined on this page yet/.test(r.querySelector('.lib-as-cbody')?.textContent || ''), find: r.querySelector('[data-x="lib-bk-find"]').disabled, products: r.querySelectorAll('.lib-sel-row').length }; });
+  check('The kept list is still there (its products show) but without any page mappings or cards, and nothing is rediscovered after the reset (Define Product Card is the starting point)', w.rows === 0 && w.empty && w.find === true && w.products >= 1, JSON.stringify(w));
+  await xClick(P, 'lib-bk-cancel', 400);
+  // a reload shows no stale state
+  const after1 = await allOf(P);
+  const R1 = await open('card-groups.html', { http: true, realStorage: true, seed: after1 });
+  await sleep(900); await R1.evaluate(() => __BL.render()); await sleep(500);
+  hh = await home(R1);
+  check('After a reload nothing old reappears: no notes, no previews, no markers, no recovery, and no work keys came back', hh.count === '' && !hh.restore && (await ls(R1)) === 'normal' && (await R1.evaluate(() => __BL.S.ui.root.querySelectorAll('.x-pmbox .pmk').length)) === 0 && !BL_KEYS(await allOf(R1)).some((k) => /batch|restore|overlay|sheet|shot/.test(k)));
+  await R1.close();
+  await P.close();
+
+  // global reset with the Library option only
+  P = await fresh();
+  await openAll(P); await tick(P, ['library']); await confirmAll(P);
+  all = await allOf(P);
+  check('With "Also delete all Product Library lists and imported data": every list, imported record, approval and last-used reference is gone, the settings stay', !BL_KEYS(all).some((k) => k.startsWith('blueline:lib:')) && JSON.stringify(all['blueline:prefs']) === JSON.stringify(PREFS) && !all['blueline:batch'], JSON.stringify(BL_KEYS(all)));
+  hh = await home(P);
+  check('Home then shows no Product Library and no Assign Products (no lists remain), but Define Product Card stays', hh.libHidden && hh.assignHidden && hh.defShown, JSON.stringify(hh));
+  await P.close();
+
+  // global reset with the settings option only
+  P = await fresh();
+  await openAll(P); await tick(P, ['settings']); await confirmAll(P);
+  all = await allOf(P);
+  const pf = await P.evaluate(() => ({ side: __BL.S.prefs.side, mode: __BL.S.prefs.assign?.mode ?? null, left: __BL.S.ui.root.querySelector('.panel').classList.contains('left') }));
+  check('With "Also reset Blueline settings and preferences": the saved settings are removed and the live ones return to their first-use defaults (panel on the right, no dock choice), while the Library stays', !all['blueline:prefs'] && pf.side === 'right' && pf.mode === null && !pf.left && JSON.stringify(Object.fromEntries(Object.entries(all).filter(([k]) => k.startsWith('blueline:lib:')))) === SEED_LIB_JSON, JSON.stringify(pf));
+  await P.close();
+
+  // both options: a genuine first-use state
+  P = await fresh();
+  await openAll(P); await tick(P, ['library', 'settings']); await confirmAll(P);
+  all = await allOf(P);
+  const rem2 = await P.evaluate(() => ({ removed: window.__removed, cleared: window.__cleared }));
+  check('With both options, no Blueline key is left at all, and the unrelated keys are untouched', BL_KEYS(all).length === 0 && all.notblueline === 'keep me' && all['other-extension:data'].keep === 1 && rem2.removed.every((k) => k.startsWith('blueline:')) && !rem2.cleared, JSON.stringify(BL_KEYS(all)));
+  hh = await home(P);
+  check('Home is a clean installation: no notes, nothing to restore, no Product Library or Assign Products, Define Product Card and Import Product List available', hh.count === '' && !hh.restore && hh.libHidden && hh.assignHidden && hh.defShown && await P.evaluate(() => !!__BL.S.ui.root.querySelector('[data-x="library"]')), JSON.stringify(hh));
+  const R2 = await open('card-groups.html', { http: true, realStorage: true, seed: all });
+  await sleep(900); await R2.evaluate(() => __BL.render()); await sleep(600);
+  const fr = await R2.evaluate(async () => ({ keys: Object.keys(await chrome.storage.local.get()).filter((k) => k.startsWith('blueline:')), side: __BL.S.prefs.side, collapsed: __BL.S.prefs.collapsed, notes: (__BL.S.batch?.items || []).length }));
+  check('After a reload it is still a first-use state: default settings, no notes, and no hidden saved state came back (no leftover Blueline keys)', fr.keys.length === 0 && fr.side === 'right' && fr.notes === 0, JSON.stringify(fr));
+  await R2.close();
+  await P.close();
+
+  // nothing on disk was touched
+  check('No source files were touched: the HTML fixtures are byte for byte what they were before the destructive tests', sha('card-groups.html') === FIX_BEFORE.cg && sha('product-fields.html') === FIX_BEFORE.pf);
+}
+
+
+// ------------------------------------------------------------------ M4 final corrections: card boundary, Not a card, Remove Card, Clear All Cards, page filters, hierarchy, Workspace row
+console.log('\n# M4 final corrections: Edit Card Boundary, Not a card, Remove Card, Clear All Cards, website filters, visual hierarchy, Workspace row (fixtures/card-filters.html)');
+{
+  const CARD = (n) => `#row > article:nth-child(${n})`;
+  const allOf = (P) => P.evaluate(() => chrome.storage.local.get());
+  const itemsOf = async (P) => ((await allOf(P))['blueline:batch']?.items) || [];
+  const xClick = async (P, x, ms = 350) => { await P.evaluate((x) => __BL.S.ui.root.querySelector(`[data-x="${x}"]`).click(), x); await sleep(ms); };
+  const clickAt = async (P, sel) => { const p = await pointFor(P, sel, 'center'); await P.mouse.move(p.x, p.y, { steps: 3 }); await P.mouse.down(); await P.mouse.up(); await sleep(500); };
+  const CSVW = 'Section,SKU,Product Name,Original Price,Sale Price\nFeatured,ACM400101,Acme ZMA Capsules,$27.97,$19.99\nFeatured,ACM999001,Acme Fish Oil Softgels,$30.97,\n';
+  const mkLib = (origin) => { const v = (h) => LibNode.normalizeProduct(PRODUCTS.find((p) => p.handle === h), origin, 'USD').variants[0]; let l = { store: origin, campaign: 'l-m4', name: 'M4 list', smp: { v: 1, imports: [LibNode.importCsv(CSVW, { fileName: 'm4.csv', sha256: 'm41' })] }, work: LibNode.emptyWork() }; for (const [k, h] of [['sku:ACM400101', 'zma'], ['sku:ACM999001', 'fish-oil']]) l = LibNode.decide(LibNode.chooseVariant(l, k, v(h)), k, 'smp'); return l; };
+  const ws = (P) => P.evaluate(() => {
+    const r = __BL.S.ui.root;
+    const exb = r.querySelector('.lib-ex-btn'); if (exb && !exb.hidden && exb.getAttribute('aria-expanded') === 'false') exb.click();
+    return {
+      open: !!__BL.libraryUi.L.bulk, narrow: r.querySelector('.lib-sheet').classList.contains('lib-narrow'),
+      rows: [...r.querySelectorAll('.lib-bk:not(.lib-bk-off)')].map((e) => ({ n: +e.querySelector('.lib-bk-n').textContent, key: e.dataset.key, badges: [...e.querySelectorAll('.lib-badge')].map((b) => b.textContent.trim()), tag: e.querySelector('.lib-tag')?.textContent.trim(), btns: [...e.querySelectorAll('.lib-bk-a button')].map((b) => b.textContent.trim()), prod: e.querySelector('.lib-bk-prod')?.textContent.replace(/\s+/g, ' ').trim() })),
+      chips: [...r.querySelectorAll('.lib-as-strip .lib-cchip')].map((c) => c.textContent.replace(/\s+/g, ' ').trim()),
+      excluded: [...r.querySelectorAll('.lib-bk-ex')].map((e) => ({ key: e.dataset.key, text: e.textContent.replace(/\s+/g, ' ').trim(), btn: e.querySelector('[data-x="lib-bk-include"]')?.textContent.trim() })),
+      msg: [...r.querySelectorAll('.lib-as-cbody .lib-vv-notice')].map((n) => n.textContent.trim()).join(' | '), empty: /No product cards defined on this page yet/.test(r.querySelector('.lib-as-cbody')?.textContent || ''),
+      markers: [...r.querySelectorAll('.x-pmbox .pmk')].filter((n) => n.style.display !== 'none').length, clear: !!r.querySelector('[data-x="lib-bk-clear"]'), head: r.querySelector('.lib-head').textContent,
+      modal: (() => { const bd = r.querySelector('.lib-repbd'); return bd && !bd.hidden ? r.querySelector('.lib-rep').textContent.replace(/\s+/g, ' ').trim() : null; })(),
+    };
+  });
+  const rowBtn = (P, n, x) => P.evaluate((n, x) => { const row = [...__BL.S.ui.root.querySelectorAll('.lib-bk:not(.lib-bk-off)')].find((e) => +e.querySelector('.lib-bk-n').textContent === n); row.querySelector(`[data-x="${x}"]`).click(); }, n, x);
+  const modalBtn = async (P, x) => { await P.evaluate((x) => __BL.S.ui.root.querySelector(`[data-x="${x}"]`).click(), x); await sleep(700); };
+  const clicks = (P) => P.evaluate(() => window.__clicks);
+  const lastKeys = (all) => JSON.stringify(Object.fromEntries(Object.entries(all).filter(([k]) => k.startsWith('blueline:lib:'))));
+  const fresh = async (seed) => { const P = await open('card-filters.html', { http: true, realStorage: true, seed }); await sleep(800); await P.evaluate(() => __BL.render()); await sleep(500); return P; };
+
+  // ---- setup: a Library list, two defined cards (1 and 4), workspace open
+  let A = await open('card-filters.html', { http: true, realStorage: true });
+  const ORIGIN = await A.evaluate(() => location.origin);
+  const lib = mkLib(ORIGIN);
+  await A.evaluate((l) => BluelineLibrary.saveLibrary(chrome.storage.local, l, { smpChanged: true }), lib);
+  await A.evaluate(() => { __BL.libraryUi.assignStart(); }); await sleep(800);
+  const defineCard = async (P, n) => { await xClick(P, 'lib-bk-define', 450); await clickAt(P, `${CARD(n)} .nm`); await P.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').click()); await sleep(1000); };
+  await defineCard(A, 1);
+  let w = await ws(A);
+  check('Fixture: defining one card discovers all 6 cards; the defined one is tagged Defined and the five others Detected (detection is not confirmation)', w.rows.length === 6 && w.rows[0].tag === 'Defined' && w.rows.slice(1).every((r) => r.tag === 'Detected') && w.rows[0].badges.includes('Defined card'), JSON.stringify(w.rows.map((r) => [r.n, r.tag])));
+  check('Every card (detected, defined, assigned or not) offers Edit Card Boundary and Not a card; a saved card offers an enabled Remove Card and a merely Detected card shows it disabled', w.rows.every((r) => r.btns.includes('Edit Card Boundary') && r.btns.includes('Not a card')) && w.rows[0].btns.includes('Remove Card') && w.rows.slice(1).every((r) => r.btns.includes('Remove Card')) && (await A.evaluate(() => [...__BL.S.ui.root.querySelectorAll('.lib-bk:not(.lib-bk-off)')].map((e) => e.querySelector('[data-x="lib-bk-remove"]').disabled).join())) === 'false,true,true,true,true,true', JSON.stringify(w.rows.map((r) => r.btns)));
+  await defineCard(A, 4);
+  w = await ws(A);
+  const pmapOf = (key) => LibNode.productMappingSnapshot(lib, key, { now: Date.now() });
+  const keyOf = (n) => w.rows.find((r) => r.n === n).key;
+
+  // ---- 1. Edit Card Boundary on a DETECTED card: same boundary first (no change), then Child narrows it
+  await rowBtn(A, 2, 'lib-bk-boundary'); await sleep(600);
+  const m1 = await A.evaluate(() => { const r = __BL.S.ui.root; const m = r.querySelector('.x-mini'); const h = r.querySelector('.hl2'); const c = document.querySelector('#row > article:nth-child(2)').getBoundingClientRect(); const b = h.getBoundingClientRect(); return { text: m.textContent.replace(/\s+/g, ' '), whole: !h.hidden && Math.abs(b.left - c.left) < 2 && Math.abs(b.top - c.top) < 2 && Math.abs(b.width - c.width) < 2 && Math.abs(b.height - c.height) < 2, acts: [...r.querySelectorAll('.x-mini [data-x="mini-act"]')].map((x) => x.textContent.trim()), lib: r.querySelector('[data-m="library"]').hidden }; });
+  check('Edit Card Boundary steps the workspace aside, outlines that whole card on the page and offers Parent, Child and Confirm Card (Edit Card Boundary toolbar)', m1.lib && m1.whole && /Edit Card Boundary/.test(m1.text) && /Current card boundary/.test(m1.text) && m1.acts.join() === 'Parent ▲,Child ▼,Confirm Card', JSON.stringify(m1));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').click()); await sleep(800);
+  w = await ws(A);
+  check('Confirming without changing anything says the boundary is unchanged and creates nothing', /boundary is unchanged/.test(w.msg) && (await itemsOf(A)).length === 2, w.msg);
+  await rowBtn(A, 2, 'lib-bk-boundary'); await sleep(600);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="child"]').click()); await sleep(250);
+  const m2 = await A.evaluate(() => { const h = __BL.S.ui.root.querySelector('.hl2').getBoundingClientRect(); const i = document.querySelector('#row > article:nth-child(2) .inner').getBoundingClientRect(); return Math.abs(h.width - i.width) < 2 && Math.abs(h.height - i.height) < 2; });
+  check('Child narrows the outline to the card\'s inner block', m2);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').click()); await sleep(1000);
+  w = await ws(A);
+  let st = await itemsOf(A);
+  const ex = st.filter((i) => i.exclusion);
+  check('The corrected boundary is saved as a Defined card without a note (one new card record), the old outline is retired as excluded, and no duplicate card is created', st.length === 4 && st.filter((i) => i.productCard).length === 3 && ex.length === 1 && ex[0].exclusion.why === 'boundary' && st.every((i) => i.cardRecord === true && !i.note) && w.rows.length === 6 && w.rows.filter((r) => r.tag === 'Defined').length === 3 && w.excluded.length === 1 && /Replaced by the boundary/.test(w.excluded[0].text), JSON.stringify([st.length, ex.length, w.rows.length, w.excluded.length]));
+  check('The edited card keeps its place (still card 2) and shows as Defined', w.rows[1].tag === 'Defined' && w.msg.includes('Card boundary saved'), JSON.stringify(w.rows[1]));
+
+  // ---- 2. Edit an ASSIGNED card: product kept, same record; fields that can't be found need review
+  await A.evaluate(async ([key, m]) => { await __BL.libraryUi.L.bulk.api.save(key, m); }, [keyOf(4), pmapOf('sku:ACM400101')]);
+  await A.evaluate(() => { __BL.libraryUi.L.bulk.api.onChange?.(); }); await sleep(500);
+  w = await ws(A);
+  const before4 = (await itemsOf(A)).find((i) => i.productMapping);
+  // give it a field assignment on the CTA button, which sits OUTSIDE the inner block
+  await A.evaluate(async (id) => {
+    const C = BluelineCards; const L = BluelineLibrary;
+    const it = (await chrome.storage.local.get('blueline:batch'))['blueline:batch'].items.find((i) => i.id === id);
+    const card = document.querySelector('#row > article:nth-child(4)');
+    const ref = C.fieldRef(card, card.querySelector('button.go'), 'cta');
+    const m = L.setFieldAssignment(it.productMapping, 'cta', { state: 'confirmed', source: 'chosen', how: 'content', ref, detected: { text: 'Add to Cart' } });
+    await __BL.patchItem(id, (n) => { n.productMapping = m; }, null);
+  }, before4.id);
+  await sleep(400);
+  await rowBtn(A, 4, 'lib-bk-boundary'); await sleep(600);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="child"]').click()); await sleep(250);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').click()); await sleep(900);
+  w = await ws(A);
+  check('If a boundary change would lose field assignments, it asks first, names them, and says the product stays assigned', !!w.modal && /Some fields can’t be found in the new boundary/.test(w.modal) && /product stays assigned/.test(w.modal) && /Add to Cart/i.test(w.modal), w.modal);
+  await modalBtn(A, 'lib-rep-cancel');
+  let cur = (await itemsOf(A)).find((i) => i.id === before4.id);
+  check('Cancelling changes nothing: same card fingerprint, same product, same field', JSON.stringify(cur.productMapping.card) === JSON.stringify((await itemsOf(A)).find((i) => i.id === before4.id).productMapping.card) && cur.productMapping.fields.items.cta && cur.productMapping.card.selector === (await itemsOf(A)).find((i) => i.id === before4.id).productMapping.card.selector);
+  const sel0 = cur.productMapping.card.selector;
+  await rowBtn(A, 4, 'lib-bk-boundary'); await sleep(600);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="child"]').click()); await sleep(250);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').click()); await sleep(900);
+  await modalBtn(A, 'lib-rep-ok');
+  st = await itemsOf(A);
+  cur = st.find((i) => i.id === before4.id);
+  w = await ws(A);
+  check('Confirming keeps the SAME saved card and its product (exact variant ID string), moves the card to the new boundary, clears only the field that no longer fits, and makes no new record', st.filter((i) => !i.exclusion).length === 3 && cur.productMapping.card.selector !== sel0 && typeof cur.productMapping.variant.variantId === 'string' && cur.productMapping.variant.variantId === before4.productMapping.variant.variantId && !cur.productMapping.fields.items.cta && cur.productMapping.product.key === before4.productMapping.product.key && w.rows.find((r) => /Acme ZMA/.test(r.prod || '')) && w.rows.filter((r) => r.badges.includes('Assigned')).length === 1, JSON.stringify([st.length, w.rows.map((r) => [r.n, r.tag, r.badges])]));
+  check('The edit never touched the Product Library, and created no note', lastKeys(await allOf(A)) === lastKeys(await allOf(A)) && st.every((i) => i.cardRecord === true));
+
+  // ---- 3. Not a card: immediate, persistent, restorable; confirmation for a saved assignment
+  w = await ws(A);
+  const nBefore = w.rows.length;
+  const mkBefore = w.markers;
+  await rowBtn(A, 5, 'lib-bk-exclude'); await sleep(700);
+  w = await ws(A);
+  st = await itemsOf(A);
+  check('Not a card on a detected card removes it at once: its row, numbered marker and chip are gone, and it appears under Excluded with Restore', w.rows.length === nBefore - 1 && w.markers === mkBefore - 1 && w.excluded.some((e) => /not a card/.test(e.text) && e.btn === 'Restore') && /Marked as not a card/.test(w.msg), JSON.stringify([w.rows.length, w.markers, mkBefore, w.excluded.length]));
+  check('The exclusion is saved for this page (a card record holding only the exclusion, no note)', st.filter((i) => i.exclusion && i.exclusion.why === 'not-a-card').length === 1);
+  await xClick(A, 'lib-bk-find', 500);
+  w = await ws(A);
+  check('Find Similar Cards does not bring the excluded card back', w.rows.length === nBefore - 1 && w.excluded.length === 3, JSON.stringify([w.rows.length, w.excluded.length]));
+  const afterEx = await allOf(A);
+  const R = await fresh(afterEx);
+  await R.evaluate(() => { __BL.libraryUi.assignStart(); }); await sleep(900);
+  const wr = await ws(R);
+  check('After a refresh the exclusion is still in force (card stays out of the list and markers; discovery does not re-add it)', wr.rows.length === nBefore - 1 && wr.excluded.length === 3 && wr.markers === mkBefore - 1, JSON.stringify([wr.rows.length, wr.excluded.length, wr.markers]));
+  await R.close();
+  await A.evaluate(() => { const e = [...__BL.S.ui.root.querySelectorAll('.lib-bk-ex')].find((x) => !/Replaced by/.test(x.textContent)); e.querySelector('[data-x="lib-bk-include"]').click(); }); await sleep(800);
+  w = await ws(A);
+  check('Restore brings the excluded card back (proposed again as a Detected card) and removes the exclusion record', w.rows.length === nBefore && w.excluded.length === 2 && (await itemsOf(A)).filter((i) => i.exclusion && i.exclusion.why === 'not-a-card').length === 0, JSON.stringify([w.rows.length, w.excluded.length]));
+  // excluding a card that has a saved assignment asks first
+  const assigned = w.rows.find((r) => r.badges.includes('Assigned'));
+  await rowBtn(A, assigned.n, 'lib-bk-exclude'); await sleep(500);
+  w = await ws(A);
+  check('Marking a card that has a saved assignment as not a card asks first and names the product and exact variant ID that would be removed', !!w.modal && /Mark Card #\d as not a card\?/.test(w.modal) && /Acme ZMA/.test(w.modal) && /Variant ID 4444444444/.test(w.modal), w.modal);
+  await modalBtn(A, 'lib-rep-cancel');
+  check('Cancelling keeps the card and its assignment', (await itemsOf(A)).filter((i) => i.productMapping).length === 1 && (await ws(A)).rows.some((r) => r.badges.includes('Assigned')));
+  await rowBtn(A, assigned.n, 'lib-bk-exclude'); await sleep(500);
+  await modalBtn(A, 'lib-rep-ok');
+  st = await itemsOf(A);
+  w = await ws(A);
+  check('Confirming removes the assignment and the card, excludes the candidate, and leaves the other cards and the Library alone', st.filter((i) => i.productMapping).length === 0 && st.some((i) => i.exclusion) && w.excluded.length === 3 && lastKeys(await allOf(A)) === lastKeys(afterEx), JSON.stringify([st.length, w.excluded.length]));
+  // restore it for later steps
+  for (let k = 0; k < 3; k++) { const had = await A.evaluate(() => { const e = [...__BL.S.ui.root.querySelectorAll('.lib-bk-ex')].find((x) => !/Replaced by/.test(x.textContent)); if (!e) return false; e.querySelector('[data-x="lib-bk-include"]').click(); return true; }); if (!had) break; await sleep(700); }
+
+  // ---- 4. Remove Card (one) : defined unassigned and defined assigned
+  w = await ws(A);
+  const libBefore = lastKeys(await allOf(A));
+  await A.evaluate(async (id) => { await __BL.addItem({ id: 'keep-note', note: 'An unrelated note', type: 'polish', createdAt: Date.now(), url: location.href, path: __BL.currentPath(), el: { label: 'h2', selector: 'h2' } }); }, 'x'); await sleep(400);
+  w = await ws(A);
+  const nAll = w.rows.length;
+  const defined1 = w.rows.find((r) => r.tag === 'Defined' && !r.badges.includes('Assigned'));
+  const cardsBefore = (await itemsOf(A)).filter((i) => i.productCard).length;
+  await rowBtn(A, defined1.n, 'lib-bk-remove'); await sleep(500);
+  w = await ws(A);
+  check('Remove Card asks first: it names what is deleted, says the Product Library, notes and other pages are untouched, and the element can be found again', !!w.modal && /Remove Card #\d\?/.test(w.modal) && /deletes the saved card definition/.test(w.modal) && /not touched/.test(w.modal) && /can find this card again/.test(w.modal), w.modal);
+  await modalBtn(A, 'lib-rep-cancel');
+  check('Cancel keeps the card', (await itemsOf(A)).filter((i) => i.productCard).length === cardsBefore);
+  await rowBtn(A, defined1.n, 'lib-bk-remove'); await sleep(400); await modalBtn(A, 'lib-rep-ok');
+  st = await itemsOf(A);
+  w = await ws(A);
+  check('Confirming deletes only that card definition: the other cards, the unrelated note and the Product Library are untouched, and the list refreshes at once (the element is eligible for discovery again as Detected)', st.filter((i) => i.productCard).length === cardsBefore - 1 && st.some((i) => i.id === 'keep-note') && lastKeys(await allOf(A)) === libBefore && w.rows.length === nAll && w.rows.find((r) => r.n === defined1.n).tag === 'Detected' && /removed/.test(w.msg), JSON.stringify([w.rows.length, w.rows.find((r) => r.n === defined1.n)]));
+  check('Removing a card removes its page marker too (markers equal included cards)', w.markers === w.rows.length);
+  // assigned card
+  const sres = await A.evaluate(async ([key, m]) => JSON.stringify(await __BL.libraryUi.L.bulk.api.save(key, m)), [w.rows.find((r) => r.tag === 'Defined').key, pmapOf('sku:ACM999001')]);
+  if (!/"ok":true/.test(sres)) throw new Error('save: ' + sres + JSON.stringify(w.rows.map((r) => [r.n, r.tag, r.badges])));
+  await A.evaluate(() => { __BL.libraryUi.L.bulk.api.onChange?.(); }); await sleep(500);
+  w = await ws(A);
+  const asg = w.rows.find((r) => r.badges.includes('Assigned'));
+  await rowBtn(A, asg.n, 'lib-bk-remove'); await sleep(500);
+  w = await ws(A);
+  check('Removing an assigned card shows the assignment that will go (product and exact variant ID), and Remove Card does not touch the Library record', /Assignment that will be removed/.test(w.modal || '') && /Acme Fish Oil/.test(w.modal) && /Variant ID 4444444449/.test(w.modal));
+  await modalBtn(A, 'lib-rep-ok');
+  st = await itemsOf(A);
+  check('After confirming the card and its mapping are gone, the Library lists are unchanged', st.filter((i) => i.productMapping).length === 0 && lastKeys(await allOf(A)) === libBefore && st.some((i) => i.id === 'keep-note'));
+
+  // ---- 5. Clear All Cards (reuses the Start Fresh dialog, page only)
+  await A.evaluate(async () => { await __BL.addItem({ id: 'other-page', note: 'Elsewhere', type: 'polish', createdAt: 1, url: `${location.origin}/other.html`, path: '/other.html', el: { label: 'h2', selector: 'h2' }, productCard: { v: 1, selector: 'x', tag: 'article', section: { heading: 'S' }, index: 1, count: 1, text: 't' } }); }, 0);
+  const otherBefore = JSON.stringify((await itemsOf(A)).find((i) => i.id === 'other-page'));
+  await defineCard(A, 3);
+  await A.evaluate(async ([key, m]) => { await __BL.libraryUi.L.bulk.api.save(key, m); }, [(await ws(A)).rows.find((r) => r.tag === 'Defined').key, pmapOf('sku:ACM400101')]);
+  await xClick(A, 'lib-bk-find', 400);
+  w = await ws(A);
+  check('Assign Products offers a clearly labelled, destructive Clear All Cards action', w.clear);
+  await xClick(A, 'lib-bk-clear', 600);
+  const sf = await A.evaluate(() => { const m = __BL.S.ui.root.querySelector('.sf-modal'); return m ? { title: m.querySelector('#sf-title').textContent, text: m.textContent.replace(/\s+/g, ' '), cards: m.querySelector('[data-sf-box="cards"]').checked, asg: m.querySelector('[data-sf-box="assignments"]').checked, notes: m.querySelector('[data-sf-box="notes"]').checked, scope: !!m.querySelector('.sf-scope'), go: m.querySelector('[data-sf="go"]').textContent.trim(), sum: m.querySelector('.sf-sum').textContent } : null; });
+  check('It reuses the Start Fresh dialog for this page only: Defined product cards (and so their assignments) are chosen, notes are not, and the summary says what will be cleared', sf && sf.title === 'Clear All Cards' && sf.cards && sf.asg && !sf.notes && !sf.scope && /This will clear: \d+ defined product cards?/.test(sf.sum) && /this page|This page/.test(sf.text), JSON.stringify(sf));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-sf="go"]').click()); await sleep(300);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-sf="go"]').click()); await sleep(1200);
+  st = await itemsOf(A);
+  w = await ws(A);
+  check('After confirming, Assign Products shows zero cards and offers Define Product Card, with nothing rediscovered', w.open && w.rows.length === 0 && w.empty && w.markers === 0 && (await A.evaluate(() => !__BL.S.ui.root.querySelector('[data-x="lib-bk-define"]').disabled)), JSON.stringify([w.open, w.rows.length, w.empty]));
+  check('Only this page\'s cards, assignments and exclusions went: the unrelated note, the other page\'s card and the Product Library are untouched', st.filter((i) => i.cardRecord && i.path !== '/other.html').length === 0 && st.some((i) => i.id === 'keep-note') && JSON.stringify(st.find((i) => i.id === 'other-page')) === otherBefore && lastKeys(await allOf(A)) === libBefore);
+  await sleep(1500);
+  check('Nothing is rediscovered later on its own', (await ws(A)).rows.length === 0);
+  await A.close();
+
+  // ---- 6. website category filters stay usable while mapping
+  A = await open('card-filters.html', { http: true, realStorage: true });
+  await A.evaluate((l) => BluelineLibrary.saveLibrary(chrome.storage.local, l, { smpChanged: true }), lib);
+  await A.evaluate(() => { __BL.libraryUi.assignStart(); }); await sleep(800);
+  await defineCard(A, 1);
+  w = await ws(A);
+  await A.evaluate(async ([key, m]) => { await __BL.libraryUi.L.bulk.api.save(key, m); }, [w.rows[2].key, pmapOf('sku:ACM400101')]);
+  await A.evaluate(() => { __BL.libraryUi.L.bulk.api.onChange?.(); }); await sleep(500);
+  w = await ws(A);
+  const store0 = JSON.stringify(((await itemsOf(A)).map((i) => [i.id, i.productMapping?.product?.key])).sort());
+  const nowAsg = w.rows.find((r) => r.badges.includes('Assigned'));
+  const vis = () => A.evaluate(() => ({ cards: [...document.querySelectorAll('#row > article')].filter((a) => getComputedStyle(a).display !== 'none').length, markers: [...__BL.S.ui.root.querySelectorAll('.x-pmbox .pmk')].filter((n) => n.style.display !== 'none').length, on: document.querySelector('.chip.on').dataset.cat }));
+  check('Start: 6 visible cards, 6 numbered outlines', JSON.stringify(await vis()) === JSON.stringify({ cards: 6, markers: 6, on: 'All' }), JSON.stringify(await vis()));
+  await clickAt(A, '.chip[data-cat="Protein"]'); await sleep(1100);
+  const v1 = await vis();
+  const c1 = await clicks(A);
+  w = await ws(A);
+  check('A category filter button works while Assign Products is active: the website updates normally (only the 3 Protein cards show) and the visible cards keep their outlines', c1.filter === 1 && v1.cards === 3 && v1.on === 'Protein' && v1.markers === 3, JSON.stringify([c1, v1]));
+  check('Hidden cards are not deleted: they are flagged in Page Cards, the saved cards and assignment are unchanged', w.rows.length === 6 && (await itemsOf(A)).length === 1 + 1 && JSON.stringify(((await itemsOf(A)).map((i) => [i.id, i.productMapping?.product?.key])).sort()) === store0 && w.rows.filter((r) => r.badges.includes('Assigned')).length === 1, JSON.stringify([w.rows.length, store0]));
+  await clickAt(A, '.chip[data-cat="Vitamins"]'); await sleep(1100);
+  const v2 = await vis();
+  w = await ws(A);
+  const asgAfter = w.rows.find((r) => r.badges.includes('Assigned'));
+  check('Switching to another category keeps each assignment on its original card (same card number and product), whichever cards are visible', v2.cards === 3 && v2.markers <= 3 && asgAfter && asgAfter.n === nowAsg.n && asgAfter.prod === nowAsg.prod, JSON.stringify([v2, nowAsg.n, asgAfter && asgAfter.n]));
+  await clickAt(A, '.chip[data-cat="All"]'); await sleep(1100);
+  const v3 = await vis();
+  w = await ws(A);
+  check('Returning to All restores the complete set: 6 cards, 6 outlines, the same assignment, and card identities unchanged (no duplicates, no extra records)', v3.cards === 6 && v3.markers === 6 && w.rows.length === 6 && (await itemsOf(A)).length === 2 && JSON.stringify(((await itemsOf(A)).map((i) => [i.id, i.productMapping?.product?.key])).sort()) === store0, JSON.stringify([v3, w.rows.length]));
+  // everything else on the page stays blocked
+  await clickAt(A, '#cart-top');
+  await clickAt(A, `${CARD(2)} .go`);
+  await clickAt(A, '#nav-link');
+  const c2 = await clicks(A);
+  check('Unwanted actions stay blocked while mapping: the Cart button, a card\'s Add to Cart button and a navigation link do nothing (no cart, CTA or navigation click reached the page)', c2.cart === 0 && c2.cta === 0 && c2.nav === 0 && c2.filter === 3, JSON.stringify(c2));
+  check('Clicking inside a card still just selects it (no navigation, URL unchanged)', (await ws(A)).rows.length === 6 && (await A.evaluate(() => location.pathname.endsWith('card-filters.html'))));
+  check('No page errors (filters)', A.errors.length === 0, A.errors.join(' | '));
+  await A.close();
+
+  // ---- 7. Narrow layout: selection and visual states; section headers
+  A = await open('card-filters.html', { http: true, realStorage: true });
+  await A.evaluate((l) => BluelineLibrary.saveLibrary(chrome.storage.local, l, { smpChanged: true }), lib);
+  await A.evaluate(() => { __BL.libraryUi.assignStart(); }); await sleep(800);
+  await defineCard(A, 1);
+  w = await ws(A);
+  await A.evaluate(async ([key, m]) => { await __BL.libraryUi.L.bulk.api.save(key, m); }, [w.rows[1].key, pmapOf('sku:ACM999001')]);
+  await xClick(A, 'lib-bk-find', 500);
+  const hd = await A.evaluate(() => { const r = __BL.S.ui.root; const cs = (s) => getComputedStyle(r.querySelector(s)); const h1 = r.querySelector('.lib-as-cards .lib-as-h'); const h2 = r.querySelector('.lib-as-prods .lib-as-h'); return { w1: cs('.lib-as-cards .lib-as-h').fontWeight, fs: cs('.lib-as-cards .lib-as-h').fontSize, bg1: cs('.lib-as-cards .lib-as-h').backgroundColor, bg2: cs('.lib-as-prods .lib-as-h').backgroundColor, c1: h1.dataset.count, c2: h2.dataset.count, after: getComputedStyle(h1, '::after').content, text: [h1.textContent, h2.textContent] }; });
+  check('Wide layout: Page Cards and Product Library have stronger headers (bold, larger, tinted, different tints) with compact counts', +hd.w1 >= 700 && parseFloat(hd.fs) >= 12.5 && hd.bg1 !== 'rgba(0, 0, 0, 0)' && hd.bg2 !== 'rgba(0, 0, 0, 0)' && hd.bg1 !== hd.bg2 && hd.c1 === '6' && /^\d+$/.test(hd.c2) && JSON.stringify(hd.text) === JSON.stringify(['Page Cards', 'Product Library']), JSON.stringify(hd));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-as-dock"][data-mode="float"]').click()); await sleep(400);
+  await A.evaluate(() => { const sh = __BL.S.ui.root.querySelector('.lib-sheet'); sh.style.width = '460px'; sh.style.height = '660px'; }); await sleep(800);
+  w = await ws(A);
+  const chip = await A.evaluate(() => { const r = __BL.S.ui.root; const cs = [...r.querySelectorAll('.lib-as-strip .lib-cchip')]; const c = cs[0]; const b = c.querySelector('b'); const rb = c.getBoundingClientRect(); const bs = getComputedStyle(b); return { n: cs.length, badgeW: Math.round(b.getBoundingClientRect().width), badgeBg: bs.backgroundColor, radius: getComputedStyle(c).borderRadius, h: Math.round(rb.height), sel: cs.filter((x) => x.classList.contains('sel')).length, selShadow: getComputedStyle(cs.find((x) => x.classList.contains('sel'))).boxShadow, plainShadow: getComputedStyle(cs.find((x) => !x.classList.contains('sel'))).boxShadow, kinds: cs.map((x) => x.querySelector('em').textContent), aria: cs[0].getAttribute('aria-label'), role: cs[0].getAttribute('role'), assignedBadge: getComputedStyle(cs.find((x) => /Assigned/.test(x.textContent)).querySelector('b')).backgroundColor, hdr: getComputedStyle(r.querySelector('.lib-as-cards .lib-as-h')).fontWeight };
+  });
+  check('Narrow strip items look interactive: a prominent round number badge, a pill with a clear border, a tall enough hit area, and Detected / Defined shown on each', chip.n === 6 && chip.badgeW >= 20 && chip.radius.includes('999') && chip.h >= 28 && chip.kinds.includes('Defined') && chip.kinds.includes('Detected') && /^Card 1/.test(chip.aria) && chip.role === 'option', JSON.stringify(chip));
+  check('The selected card is easy to identify (one item, a halo ring the others do not have) and an assigned card\'s number is green while an unassigned one is blue', chip.sel === 1 && chip.selShadow !== 'none' && chip.plainShadow === 'none' && chip.assignedBadge === 'rgb(30, 122, 62)' && chip.badgeBg !== chip.assignedBadge, JSON.stringify([chip.sel, chip.selShadow, chip.assignedBadge, chip.badgeBg]));
+  const pick = await A.evaluate(() => [...__BL.S.ui.root.querySelectorAll('.lib-as-strip .lib-cchip')].find((c) => !c.classList.contains('sel')).querySelector('b').textContent);
+  await A.evaluate((n) => [...__BL.S.ui.root.querySelectorAll('.lib-as-strip .lib-cchip')].find((c) => c.querySelector('b').textContent === n).click(), pick); await sleep(500);
+  const sel2 = await A.evaluate(() => { const r = __BL.S.ui.root; const c = r.querySelector('.lib-cchip.sel'); const bx = [...r.querySelectorAll('.x-pmbox .pmk')].find((k) => /bksel/.test(k.className)); return { n: c.querySelector('b').textContent, boxN: bx?.querySelector('.pmb')?.textContent.split(' ')[0], line: r.querySelector('.lib-bk-sl b')?.textContent, btns: [...r.querySelectorAll('.lib-bk-sl .lib-bk-a button')].map((b) => b.textContent.trim()) }; });
+  check('Clicking a strip item selects it: the chip, the page outline and the compact line agree, and the line offers Edit Card Boundary and Not a card', sel2.n === pick && sel2.boxN === pick && sel2.line === `Card ${pick}` && sel2.btns.includes('Edit Card Boundary') && sel2.btns.includes('Not a card'), JSON.stringify(sel2));
+  const hover = await A.evaluate(() => { const c = [...__BL.S.ui.root.querySelectorAll('.lib-as-strip .lib-cchip')].find((x) => !x.classList.contains('sel')); const r = c.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, bg0: getComputedStyle(c).backgroundColor }; });
+  await A.mouse.move(hover.x, hover.y, { steps: 3 }); await sleep(250);
+  const hv = await A.evaluate((p) => { const e = __BL.S.ui.root.elementFromPoint(p.x, p.y); const c = e && e.closest('.lib-cchip'); return c ? getComputedStyle(c).backgroundColor : null; }, hover);
+  check('A strip item has a visible hover state', hv && hv !== hover.bg0, JSON.stringify([hover.bg0, hv]));
+  await A.keyboard.press('Tab');
+  const foc = await A.evaluate(() => { const c = __BL.S.ui.root.querySelector('.lib-as-strip .lib-cchip'); c.focus({ focusVisible: true }); return { outline: getComputedStyle(c).outlineStyle, w: getComputedStyle(c).outlineWidth }; });
+  check('A strip item has a keyboard focus ring', foc.outline !== 'none' && foc.w !== '0px', JSON.stringify(foc));
+  check('No page errors (narrow)', A.errors.length === 0, A.errors.join(' | '));
+  await A.close();
+
+  // ---- 8. Home Workspace row
+  A = await open('card-filters.html', { http: true, realStorage: true });
+  const hw = () => A.evaluate(() => { const r = __BL.S.ui.root; const row = r.querySelector('.wsrow'); const sf = r.querySelector('[data-x="start-fresh"]'); const rs = r.querySelector('[data-x="restore-session"]'); const cap = row.querySelector('.cap'); const rb = (e) => e.getBoundingClientRect(); return { cap: cap.textContent, fresh: sf.textContent.trim(), freshTop: Math.round(rb(sf).top), capTop: Math.round(rb(cap).top), restore: rs.textContent.trim(), restoreHidden: rs.hidden || rb(rs).height === 0, restoreTop: Math.round(rb(rs).top), rowText: row.textContent.replace(/\s+/g, ' ').trim(), rowH: Math.round(rb(row).height), subs: row.querySelectorAll('.sub').length }; });
+  let hh = await hw();
+  check('Home Workspace is one row — WORKSPACE, Start Fresh…, Restore — and Restore is hidden when there is nothing to restore', /Workspace/i.test(hh.cap) && hh.fresh === 'Start Fresh…' && hh.restore === 'Restore' && hh.restoreHidden && hh.rowH <= 48 && Math.abs(hh.freshTop - hh.capTop) <= 12, JSON.stringify(hh));
+  await A.evaluate(async () => { await __BL.addItem({ id: 'n1', note: 'A note', type: 'polish', createdAt: Date.now(), url: location.href, path: __BL.currentPath(), el: { label: 'h2', selector: 'h2' } }); }); await sleep(400);
+  await xClick(A, 'start-fresh', 450);
+  await A.evaluate(() => { __BL.S.ui.root.querySelector('[data-sf-box="notes"]').click(); }); await sleep(400);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-sf="go"]').click()); await sleep(250);
+  await A.evaluate(() => __BL.S.ui.root.querySelector('[data-sf="go"]').click()); await sleep(1000);
+  hh = await hw();
+  check('After a reset Restore appears beside Start Fresh on the same row, and Home shows no recovery date or "Cleared …" text', !hh.restoreHidden && Math.abs(hh.restoreTop - hh.freshTop) <= 2 && hh.subs === 0 && !/Cleared|20\d\d|AM|PM/.test(hh.rowText) && hh.restore === 'Restore', JSON.stringify(hh));
+  await xClick(A, 'restore-session', 600);
+  const rd = await A.evaluate(() => { const m = __BL.S.ui.root.querySelector('.sf-modal'); return m ? { text: m.textContent.replace(/\s+/g, ' ').trim(), btns: [...m.querySelectorAll('footer button')].map((b) => b.textContent.trim()) } : null; });
+  check('The recovery date and what was cleared appear only inside the Restore confirmation, which keeps Cancel / Restore', rd && /Cleared .*1 note/.test(rd.text) && /Restore previous session\?/.test(rd.text) && rd.btns.join() === 'Cancel,Restore', JSON.stringify(rd));
+  await A.evaluate(() => __BL.S.ui.root.querySelector('.sf-modal [data-sf="cancel"]').click()); await sleep(300);
+  check('Cancelling leaves the recovery in place', !(await hw()).restoreHidden && (await itemsOf(A)).length === 0);
+  await A.close();
+}
+
+
+const CM_DRAFT = join(here, '..', 'qa', 'black-friday-2026', 'cyber-monday-draft.html');
+if (existsSync(CM_DRAFT)) {
+  console.log('\n# Product Mapping M4: the real Cyber Monday draft (qa/black-friday-2026, read-only)');
+  const A = await open('../../qa/black-friday-2026/cyber-monday-draft.html');
+  const res = await A.evaluate(() => {
+    const C = BluelineCards;
+    const h = document.getElementById('feat-h');
+    const cards = [...document.querySelectorAll('article')].filter((a) => h && (h.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING));
+    return cards.slice(0, 3).map((card) => {
+      const d = C.detectFields(card);
+      const o = {};
+      for (const k of C.FIELD_KEYS) { const f = d.fields[k]; o[k] = { st: f.status, ok: f.best ? card.contains(f.best.el) || f.best.el === card : null }; }
+      return o;
+    });
+  });
+  check('Real draft: the three Featured Deals cards each get title, image, sale and regular price, badge and call to action proposed (no elements invented for a link that is only "#")', res.length === 3 && res.every((c) => ['title', 'image', 'sale', 'regular', 'badge', 'cta'].every((k) => c[k].st === 'suggested' && c[k].ok)), JSON.stringify(res));
+  check('Real draft: every proposal lies inside its own card', res.every((c) => Object.values(c).every((f) => f.ok !== false)));
+  const disc = await A.evaluate(() => {
+    const C = BluelineCards;
+    const h = document.getElementById('feat-h');
+    const seed = [...document.querySelectorAll('article')].find((a) => h.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const d = C.discoverCards(seed);
+    const by = {};
+    for (const c of d.cards) by[`${c.section.heading}|${c.confidence}`] = (by[`${c.section.heading}|${c.confidence}`] || 0) + 1;
+    return { total: d.cards.length, by, allArticles: document.querySelectorAll('article').length, nonArticle: d.cards.filter((c) => c.el.tagName !== 'ARTICLE').length };
+  });
+  check('Real draft, Card discovery: from one Featured Deals card the other 14 product cards are found, grouped 3 / 4 / 8 by section, all confident, and nothing else on the page is taken for a card', disc.total === 15 && disc.allArticles === 15 && disc.nonArticle === 0 && Object.keys(disc.by).length === 3 && Object.values(disc.by).sort().join() === '3,4,8', JSON.stringify(disc));
+  await A.close();
+} else console.log('\n# Product Mapping M4: real Cyber Monday draft not present here; skipped');
+
+
+// ------------------------------------------------------------------ M4 final corrections 2: live boundary preview, exclusion/restore root cause, Remove Card, Auto-map products
+console.log('\n# M4 final corrections 2: orange boundary preview, exclusion + restore across refresh, Remove Card, Auto-map products (fixtures/card-filters.html, isolated storage)');
+{
+  const CARD = (n) => `#row > article:nth-child(${n})`;
+  const allOf = (P) => P.evaluate(() => chrome.storage.local.get());
+  const itemsOf = async (P) => ((await allOf(P))['blueline:batch']?.items) || [];
+  const xClick = async (P, x, ms = 350) => { await P.evaluate((x) => __BL.S.ui.root.querySelector(`[data-x="${x}"]`).click(), x); await sleep(ms); };
+  const clickAt = async (P, sel) => { const p = await pointFor(P, sel, 'center'); await P.mouse.move(p.x, p.y, { steps: 3 }); await P.mouse.down(); await P.mouse.up(); await sleep(500); };
+  const lastKeys = (all) => JSON.stringify(Object.fromEntries(Object.entries(all).filter(([k]) => k.startsWith('blueline:lib:'))));
+  const CSVB = 'Section,SKU,Product Name,Original Price,Sale Price\nFeatured,ACM400101,Acme ZMA Capsules,$27.97,$19.99\nFeatured,ACM999001,Acme Fish Oil Softgels,$30.97,\nFeatured,ACM200101,Acme Charcoal,$15.99,\nFeatured,ACM100101,Acme Black Seed Oil,$19.97,\nFeatured,ACM300101,Acme Ursolic Acid,$19.98,\nFeatured,ACM500108,Acme Pre-X Workout Powder,$41.97,\n';
+  const SKUS = [['sku:ACM400101', 'zma'], ['sku:ACM999001', 'fish-oil'], ['sku:ACM200101', 'charcoal'], ['sku:ACM100101', 'black-seed-oil'], ['sku:ACM300101', 'ursolic'], ['sku:ACM500108', 'pre-x-workout']];
+  const mkLib = (origin, take) => {
+    const v = (h) => LibNode.normalizeProduct(PRODUCTS.find((p) => p.handle === h), origin, 'USD').variants[0];
+    const csv = CSVB.split('\n').slice(0, take + 1).join('\n') + '\n';
+    let l = { store: origin, campaign: 'l-am', name: 'Auto list', smp: { v: 1, imports: [LibNode.importCsv(csv, { fileName: 'am.csv', sha256: 'am1' })] }, work: LibNode.emptyWork() };
+    for (const [k, h] of SKUS.slice(0, take)) l = LibNode.decide(LibNode.chooseVariant(l, k, v(h)), k, 'smp');
+    return l;
+  };
+  const ws = (P) => P.evaluate(() => {
+    const r = __BL.S.ui.root;
+    const exb = r.querySelector('.lib-ex-btn'); if (exb && !exb.hidden && exb.getAttribute('aria-expanded') === 'false') exb.click();
+    return {
+      open: !!__BL.libraryUi.L.bulk,
+      rows: [...r.querySelectorAll('.lib-bk:not(.lib-bk-off)')].map((e) => ({ n: +e.querySelector('.lib-bk-n').textContent, key: e.dataset.key, badges: [...e.querySelectorAll('.lib-badge')].map((b) => b.textContent.trim()), tag: e.querySelector('.lib-tag')?.textContent.trim(), btns: [...e.querySelectorAll('.lib-bk-a button')].map((b) => b.textContent.trim()) })),
+      excluded: [...r.querySelectorAll('.lib-bk-ex')].map((e) => ({ key: e.dataset.key, btn: e.querySelector('[data-x="lib-bk-include"]')?.textContent.trim() })),
+      msg: [...r.querySelectorAll('.lib-as-cbody .lib-vv-notice')].map((n) => n.textContent.trim()).join(' | '), empty: /No product cards defined on this page yet/.test(r.querySelector('.lib-as-cbody')?.textContent || ''),
+      markers: [...r.querySelectorAll('.x-pmbox .pmk')].filter((n) => n.style.display !== 'none').length,
+      modal: (() => { const bd = r.querySelector('.lib-repbd'); return bd && !bd.hidden ? r.querySelector('.lib-rep').textContent.replace(/\s+/g, ' ').trim() : null; })(),
+      foot: r.querySelector('.lib-as-foot')?.textContent.replace(/\s+/g, ' ').trim(),
+      auto: (() => { const b = r.querySelector('[data-x="lib-bk-auto"]'); return b ? { text: b.textContent.trim(), disabled: b.disabled } : null; })(),
+    };
+  });
+  const drafts = (P) => P.evaluate(() => { const s = __BL.libraryUi.L.bulk; return s.rows.filter((r) => s.drafts[r.key]).map((r) => { const m = s.drafts[r.key]; return { n: r.n, key: m.product.key, vid: m.variant?.variantId, vt: typeof m.variant?.variantId, sku: m.variant?.sku }; }); });
+  const rowBtn = (P, n, x) => P.evaluate((n, x) => { const row = [...__BL.S.ui.root.querySelectorAll('.lib-bk:not(.lib-bk-off)')].find((e) => +e.querySelector('.lib-bk-n').textContent === n); row.querySelector(`[data-x="${x}"]`).click(); }, n, x);
+  const modalBtn = async (P, x) => { await P.evaluate((x) => __BL.S.ui.root.querySelector(`[data-x="${x}"]`).click(), x); await sleep(700); };
+  const fresh = async (seed) => { const P = await open('card-filters.html', { http: true, realStorage: true, seed }); await sleep(800); await P.evaluate(() => __BL.render()); await sleep(500); return P; };
+  const openWs = async (P) => { await P.evaluate(() => { __BL.libraryUi.assignStart(); }); await sleep(1000); };
+  const defineCard = async (P, n) => { await xClick(P, 'lib-bk-define', 450); await clickAt(P, `${CARD(n)} .nm`); await P.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').click()); await sleep(1000); };
+  const start = async (take) => {
+    const P = await open('card-filters.html', { http: true, realStorage: true });
+    const origin = await P.evaluate(() => location.origin);
+    const lib = mkLib(origin, take);
+    await P.evaluate((l) => BluelineLibrary.saveLibrary(chrome.storage.local, l, { smpChanged: true }), lib);
+    await openWs(P);
+    return { P, lib, origin };
+  };
+  const hl = (P) => P.evaluate(() => {
+    const r = __BL.S.ui.root; const o = r.querySelector('.hl2'); const sv = r.querySelector('.hl3');
+    const box = (e) => { const b = e.getBoundingClientRect(); return [Math.round(b.left), Math.round(b.top), Math.round(b.width), Math.round(b.height)]; };
+    const cs = getComputedStyle(o);
+    return { shown: !o.hidden, prop: o.classList.contains('prop'), color: cs.outlineColor, width: cs.outlineWidth, rect: box(o), tag: o.querySelector('.hl-tag').textContent, savedShown: !sv.hidden, savedStyle: getComputedStyle(sv).outlineStyle, savedRect: box(sv) };
+  });
+  const cardRect = (P, n) => P.evaluate((s) => { const b = document.querySelector(s).getBoundingClientRect(); return [Math.round(b.left), Math.round(b.top), Math.round(b.width), Math.round(b.height)]; }, CARD(n));
+  const innerRect = (P, n) => P.evaluate((s) => { const b = document.querySelector(s + ' .inner').getBoundingClientRect(); return [Math.round(b.left), Math.round(b.top), Math.round(b.width), Math.round(b.height)]; }, CARD(n));
+  const same = (a, b) => a.every((x, i) => Math.abs(x - b[i]) <= 2);
+
+  // ---------------- Part 1: live orange boundary preview
+  {
+    const { P: A } = await start(6);
+    await defineCard(A, 1);
+    const before = JSON.stringify(await itemsOf(A));
+    await rowBtn(A, 2, 'lib-bk-boundary'); await sleep(600);
+    let h = await hl(A);
+    const c2 = await cardRect(A, 2);
+    check('Edit Card Boundary draws a prominent orange outline (thick, orange, "Proposed card boundary") around the ENTIRE proposed card', h.shown && h.prop && h.width === '4px' && /255, 152, 0/.test(h.color) && /Proposed card boundary/.test(h.tag) && same(h.rect, c2), JSON.stringify(h));
+    check('While the proposal equals the saved boundary there is no second (saved) outline', !h.savedShown);
+    await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="child"]').click()); await sleep(150);
+    h = await hl(A);
+    const i2 = await innerRect(A, 2);
+    check('Child updates the orange outline at once to the inner block, and the saved boundary now shows as a separate dashed outline around the original card', same(h.rect, i2) && h.prop && h.savedShown && h.savedStyle === 'dashed' && same(h.savedRect, c2), JSON.stringify(h));
+    await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="parent"]').click()); await sleep(150);
+    h = await hl(A);
+    check('Parent updates it at once back to the whole card (saved and proposed agree, so the dashed one goes)', same(h.rect, c2) && h.shown && !h.savedShown, JSON.stringify(h));
+    await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="child"]').click()); await sleep(150);
+    check('Nothing is saved while the boundary is being edited (storage is unchanged)', JSON.stringify(await itemsOf(A)) === before);
+    await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="bar-cancel"]').click()); await sleep(700);
+    h = await hl(A);
+    check('Cancel restores the saved boundary: nothing stored, both outlines gone, workspace back', JSON.stringify(await itemsOf(A)) === before && !h.shown && !h.savedShown && (await ws(A)).open);
+    await rowBtn(A, 2, 'lib-bk-boundary'); await sleep(600);
+    await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="child"]').click()); await sleep(200);
+    await A.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').click()); await sleep(1000);
+    const st = await itemsOf(A);
+    check('Confirm Card saves exactly the container that was outlined (the inner block) and the outlines go', st.filter((i) => i.productCard).length === 2 && !(await hl(A)).shown && !(await hl(A)).savedShown);
+    await A.close();
+  }
+
+  // ---------------- Part 2: exclusion + restore (the reported reproduction)
+  {
+    const { P: A, lib } = await start(6);
+    await A.evaluate(async () => { await __BL.addItem({ id: 'keep-note', note: 'An unrelated note', type: 'polish', createdAt: Date.now(), url: location.href, path: __BL.currentPath(), el: { label: 'h2', selector: 'h2' } }); });
+    await A.evaluate(async () => { await __BL.addItem({ id: 'other-page', note: 'Elsewhere', type: 'polish', createdAt: 1, url: `${location.origin}/other.html`, path: '/other.html', el: { label: 'h2', selector: 'h2' } }); });
+    const otherBefore = JSON.stringify((await itemsOf(A)).find((i) => i.id === 'other-page'));
+    await defineCard(A, 1);
+    let w = await ws(A);
+    check('Reproduction setup: one defined card, automatic discovery finds all 6 cards', w.rows.length === 6 && w.rows[0].tag === 'Defined', JSON.stringify(w.rows.map((r) => r.tag)));
+    const libBefore = lastKeys(await allOf(A));
+    await rowBtn(A, 1, 'lib-bk-exclude'); await sleep(500);
+    await modalBtn(A, 'lib-rep-ok');
+    w = await ws(A);
+    check('Excluding the defined card #1 ("Not a card") does not make the other 5 valid cards disappear: 5 active, 1 excluded', w.rows.length === 5 && w.excluded.length === 1 && w.excluded[0].btn === 'Restore', JSON.stringify([w.rows.length, w.excluded.length]));
+    await xClick(A, 'lib-bk-find', 500);
+    w = await ws(A);
+    check('Find Similar Cards respects the exclusion (still 5 active, the excluded one is not re-added, no duplicates)', w.rows.length === 5 && w.excluded.length === 1, JSON.stringify([w.rows.length, w.excluded.length]));
+    const afterEx = await allOf(A);
+    let R = await fresh(afterEx);
+    await openWs(R);
+    let wr = await ws(R);
+    check('After a hard refresh the other cards are still there (5 active) and the exclusion still stands (1 excluded), not "0 active"', wr.rows.length === 5 && wr.excluded.length === 1 && wr.markers === 5, JSON.stringify([wr.rows.length, wr.excluded.length, wr.markers]));
+    await R.evaluate(() => { __BL.S.ui.root.querySelector('.lib-bk-ex [data-x="lib-bk-include"]').click(); }); await sleep(900);
+    wr = await ws(R);
+    const stR = await itemsOf(R);
+    check('Restore immediately returns the card to Page Cards and to the page outline (6 active, 6 outlines, none excluded), without duplicates', wr.rows.length === 6 && wr.excluded.length === 0 && wr.markers === 6 && wr.rows.map((r) => r.n).join() === '1,2,3,4,5,6' && stR.filter((i) => i.exclusion).length === 0 && stR.filter((i) => i.productCard).length === 1, JSON.stringify([wr.rows.length, wr.excluded.length, wr.markers, stR.length]));
+    const afterRestore = await allOf(R);
+    await R.close();
+    const R2 = await fresh(afterRestore);
+    await openWs(R2);
+    const wr2 = await ws(R2);
+    check('The restored card is still there after another refresh: 6 cards, none excluded, still one saved card (no duplicate)', wr2.rows.length === 6 && wr2.excluded.length === 0 && (await itemsOf(R2)).filter((i) => i.productCard).length === 1, JSON.stringify([wr2.rows.length, wr2.excluded.length]));
+    // excluding a DETECTED card and restoring it (it is not a seed): comes back at once and across refresh
+    await rowBtn(R2, 3, 'lib-bk-exclude'); await sleep(700);
+    let w3 = await ws(R2);
+    check('Excluding a merely Detected card removes just that one (5 left)', w3.rows.length === 5 && w3.excluded.length === 1);
+    let R3 = await fresh(await allOf(R2));
+    await openWs(R3);
+    check('That exclusion survives a refresh', (await ws(R3)).rows.length === 5 && (await ws(R3)).excluded.length === 1);
+    await R3.evaluate(() => { __BL.S.ui.root.querySelector('.lib-bk-ex [data-x="lib-bk-include"]').click(); }); await sleep(900);
+    w3 = await ws(R3);
+    check('Restoring a Detected card brings it back at once (6 active, 6 outlines)', w3.rows.length === 6 && w3.markers === 6 && w3.excluded.length === 0);
+    check('Exclusion and restore never touched the Product Library, notes or the other page', lastKeys(await allOf(R3)) === libBefore && (await itemsOf(R3)).some((i) => i.id === 'keep-note') && JSON.stringify((await itemsOf(R3)).find((i) => i.id === 'other-page')) === otherBefore);
+    // Clear All Cards must still leave the page empty, even with an exclusion present
+    await rowBtn(R3, 2, 'lib-bk-exclude'); await sleep(600);
+    await xClick(R3, 'lib-bk-clear', 600);
+    await R3.evaluate(() => __BL.S.ui.root.querySelector('[data-sf="go"]').click()); await sleep(300);
+    await R3.evaluate(() => __BL.S.ui.root.querySelector('[data-sf="go"]').click()); await sleep(1200);
+    let wc = await ws(R3);
+    check('Clear All Cards still leaves the page empty (no cards, no exclusions, nothing rediscovered)', wc.rows.length === 0 && wc.excluded.length === 0 && wc.empty && (await itemsOf(R3)).filter((i) => i.cardRecord).length === 0);
+    await sleep(1200);
+    const R4 = await fresh(await allOf(R3));
+    await openWs(R4);
+    check('…and it stays empty after a refresh until a card is defined', (await ws(R4)).rows.length === 0 && (await ws(R4)).empty);
+    await R4.close(); await R3.close(); await R2.close(); await A.close();
+  }
+
+  // ---------------- Part 3: Remove Card is visible and behaves
+  {
+    const { P: A } = await start(6);
+    await A.evaluate(async () => { await __BL.addItem({ id: 'keep-note', note: 'An unrelated note', type: 'polish', createdAt: Date.now(), url: location.href, path: __BL.currentPath(), el: { label: 'h2', selector: 'h2' } }); });
+    await defineCard(A, 1); await defineCard(A, 3);
+    let w = await ws(A);
+    const vis = await A.evaluate(() => { const rows = [...__BL.S.ui.root.querySelectorAll('.lib-bk:not(.lib-bk-off)')]; const sh = __BL.S.ui.root.querySelector('.lib-sheet').getBoundingClientRect(); const f = (e) => { const b = e.querySelector('[data-x="lib-bk-remove"]'); const r = b.getBoundingClientRect(); return { text: b.textContent.trim(), danger: b.classList.contains('danger'), disabled: b.disabled, seen: r.width > 0 && r.height > 0 && r.right <= sh.right + 1 && r.left >= sh.left - 1 }; }; return rows.map(f); });
+    check('Remove Card (exact label) is visibly shown on every card row inside the sheet, red, and enabled for the two saved cards', vis.every((v) => v.text === 'Remove Card' && v.danger && v.seen) && vis.map((v) => v.disabled).join() === 'false,true,false,true,true,true', JSON.stringify(vis));
+    const libBefore = lastKeys(await allOf(A));
+    const mk0 = (await ws(A)).markers;
+    await rowBtn(A, 3, 'lib-bk-remove'); await sleep(500);
+    w = await ws(A);
+    check('Remove Card asks for confirmation first', !!w.modal && /Remove Card #3\?/.test(w.modal));
+    await modalBtn(A, 'lib-rep-cancel');
+    check('Cancel keeps both saved cards', (await itemsOf(A)).filter((i) => i.productCard).length === 2);
+    await rowBtn(A, 3, 'lib-bk-remove'); await sleep(400); await modalBtn(A, 'lib-rep-ok');
+    w = await ws(A);
+    const st = await itemsOf(A);
+    check('Confirming removes only that saved definition, its outline and marker, leaves the Library and unrelated note alone, and the element comes back as a Detected card (discoverable again)', st.filter((i) => i.productCard).length === 1 && w.rows.length === 6 && w.rows[2].tag === 'Detected' && w.markers === mk0 && lastKeys(await allOf(A)) === libBefore && st.some((i) => i.id === 'keep-note'), JSON.stringify([st.length, w.rows.map((r) => r.tag), w.markers, mk0]));
+    check('"Not a card" stays a separate action (its own button, its own label)', w.rows[0].btns.includes('Not a card') && w.rows[0].btns.includes('Remove Card'));
+    await A.close();
+  }
+
+  // ---------------- Part 4: Auto-map products
+  {
+    // 4a. 6 cards, 6 products, nothing assigned
+    const { P: A, lib, origin } = await start(6);
+    await defineCard(A, 1);
+    let w = await ws(A);
+    check('Auto-map products is a discoverable button inside Assign Products', !!w.auto && w.auto.text === 'Auto-map products' && !w.auto.disabled, JSON.stringify(w.auto));
+    const storeBefore = JSON.stringify(await allOf(A));
+    await xClick(A, 'lib-bk-auto', 500);
+    w = await ws(A);
+    check('It first shows a reviewable preview: empty cards eligible, proposed assignments, which card gets which product (with exact variant IDs), products left unused, and Cancel / Apply to Draft', !!w.modal && /Auto-map products/.test(w.modal) && /6 empty cards eligible/.test(w.modal) && /6 proposed assignments/.test(w.modal) && /0 Library products remain unused/.test(w.modal) && /Card 1 ← Acme ZMA Capsules/.test(w.modal) && /Card 6 ← Acme Pre-X Workout Powder/.test(w.modal) && /Variant ID 4444444444/.test(w.modal) && /Apply to Draft/.test(w.modal), w.modal);
+    await modalBtn(A, 'lib-rep-cancel');
+    check('Cancelling the preview stages and saves nothing', (await drafts(A)).length === 0 && JSON.stringify(await allOf(A)) === storeBefore);
+    await xClick(A, 'lib-bk-auto', 500);
+    await modalBtn(A, 'lib-rep-ok');
+    let d = await drafts(A);
+    w = await ws(A);
+    check('Apply to Draft stages the products in the Library list order onto the cards in page order (Card n gets product n)', d.length === 6 && d.map((x) => x.n).join() === '1,2,3,4,5,6' && d.map((x) => x.key).join() === SKUS.map((x) => x[0]).join(), JSON.stringify(d));
+    check('Staged variant IDs are the exact Shopify strings (never numbers, never invented)', d.every((x) => x.vt === 'string') && d.map((x) => x.vid).join() === '4444444444,4444444449,4444444442,4444444441,4444444443,4444444448', JSON.stringify(d));
+    check('Applying to the draft only stages: nothing in storage changed, the footer says changes are not saved, Save Assignments is enabled with the count', JSON.stringify(await allOf(A)) === storeBefore && /Save Assignments \(6\)/.test(w.foot) && /6 changes not saved/.test(w.foot), w.foot);
+    check('The existing pending-assignment indicators show on every card (Not saved yet)', w.rows.every((r) => r.badges.includes('Not saved yet')), JSON.stringify(w.rows.map((r) => r.badges)));
+    // Cancel the workspace discards the draft
+    await xClick(A, 'lib-bk-cancel', 600);
+    check('Cancelling the workspace discards the staged assignments (nothing persisted)', (await itemsOf(A)).filter((i) => i.productMapping).length === 0);
+    await openWs(A);
+    check('Reopening shows the cards unassigned again', (await ws(A)).rows.every((r) => !r.badges.includes('Assigned')));
+    await xClick(A, 'lib-bk-auto', 500); await modalBtn(A, 'lib-rep-ok');
+    // manual adjustment still works afterwards: clear one staged card with Undo change
+    await A.evaluate(() => { const row = [...__BL.S.ui.root.querySelectorAll('.lib-bk:not(.lib-bk-off)')].find((e) => +e.querySelector('.lib-bk-n').textContent === 6); row.querySelector('[data-x="lib-bk-undo"]').click(); }); await sleep(400);
+    check('The staged assignments can be adjusted afterwards with the existing controls (Undo change on one card leaves 5 staged)', (await drafts(A)).length === 5);
+    await xClick(A, 'lib-bk-auto', 500); await modalBtn(A, 'lib-rep-ok');
+    const libPre = lastKeys(await allOf(A));
+    await xClick(A, 'lib-bk-save', 1500);
+    const st = await itemsOf(A);
+    const maps = st.filter((i) => i.productMapping);
+    check('Save Assignments persists all six, each as an exact string variant ID, in the card record; the Product Library is unchanged', maps.length === 6 && maps.every((i) => typeof i.productMapping.variant.variantId === 'string') && maps.map((i) => i.productMapping.variant.variantId).sort().join() === ['4444444441', '4444444442', '4444444443', '4444444444', '4444444444', '4444444449'].sort().join() && lastKeys(await allOf(A)) === libPre, JSON.stringify(maps.map((i) => i.productMapping.variant?.variantId)));
+    check('Saved: no notes created, all records are card records', st.every((i) => i.cardRecord === true && !i.note));
+    const saved = await allOf(A);
+    await A.close();
+    // 4b. after a refresh nothing is empty: no preview, a direct explanation, and no assignment is replaced
+    const B = await fresh(saved);
+    await openWs(B);
+    const before = JSON.stringify((await itemsOf(B)).map((i) => i.productMapping));
+    await xClick(B, 'lib-bk-auto', 500);
+    w = await ws(B);
+    check('When every card already has a product it explains that directly (no empty preview) and replaces nothing', !w.modal && /no empty cards to fill/.test(w.msg) && JSON.stringify((await itemsOf(B)).map((i) => i.productMapping)) === before && (await drafts(B)).length === 0, w.msg);
+    await B.close();
+  }
+  {
+    // 4c. 3 already assigned, 6 products, 3 empty cards: existing assignments untouched, more products than cards, duplicates allowed
+    const { P: A, lib } = await start(6);
+    await defineCard(A, 1);
+    let w = await ws(A);
+    const pm = (k) => LibNode.productMappingSnapshot(lib, k, { now: 1 });
+    for (const [i, k] of [[0, 'sku:ACM400101'], [2, 'sku:ACM400101'], [4, 'sku:ACM999001']]) await A.evaluate(async ([key, m]) => { await __BL.libraryUi.L.bulk.api.save(key, m); }, [w.rows[i].key, pm(k)]);
+    await A.evaluate(() => { __BL.libraryUi.L.bulk.api.onChange?.(); }); await sleep(500);
+    const assignedBefore = JSON.stringify((await itemsOf(A)).filter((i) => i.productMapping).map((i) => [i.id, i.productMapping]));
+    await xClick(A, 'lib-bk-auto', 500);
+    w = await ws(A);
+    check('With 3 of 6 cards assigned only the 3 empty cards are eligible, and the 3 remaining Library products are reported unused (more products than cards)', /3 empty cards eligible/.test(w.modal) && /3 proposed assignments/.test(w.modal) && /3 Library products remain unused/.test(w.modal) && /Card 2 ←/.test(w.modal) && !/Card 1 ←/.test(w.modal) && !/Card 3 ←/.test(w.modal) && /Card 1: already assigned/.test(w.modal), w.modal);
+    await modalBtn(A, 'lib-rep-ok');
+    const d = await drafts(A);
+    check('Products 1-3 go to the empty cards 2, 4 and 6 in order, even though product 1 (ZMA) is already used on cards 1 and 3 (reuse of an assigned product is permitted)', d.map((x) => x.n).join() === '2,4,6' && d.map((x) => x.key).join() === 'sku:ACM400101,sku:ACM999001,sku:ACM200101', JSON.stringify(d));
+    await xClick(A, 'lib-bk-save', 1500);
+    const now = JSON.stringify((await itemsOf(A)).filter((i) => i.productMapping && assignedBefore.includes(i.id)).map((i) => [i.id, i.productMapping]));
+    check('The three existing assignments are byte-for-byte unchanged after saving, and there are now six', now === assignedBefore && (await itemsOf(A)).filter((i) => i.productMapping).length === 6);
+    await A.close();
+  }
+  {
+    // 4d. more cards than products (2-product list)
+    const { P: A } = await start(2);
+    await defineCard(A, 1);
+    await xClick(A, 'lib-bk-auto', 500);
+    const w = await ws(A);
+    check('More cards than products: 2 assignments proposed, the other 4 cards stay empty and the preview says so', /6 empty cards eligible/.test(w.modal) && /2 proposed assignments/.test(w.modal) && /4 empty cards stay empty/.test(w.modal) && /0 Library products remain unused/.test(w.modal), w.modal);
+    await modalBtn(A, 'lib-rep-ok');
+    check('Only the first two cards are staged', (await drafts(A)).map((x) => x.n).join() === '1,2');
+    await A.close();
+  }
+  {
+    // 4e. excluded and stale cards are skipped
+    const { P: A } = await start(6);
+    await defineCard(A, 1);
+    await rowBtn(A, 2, 'lib-bk-exclude'); await sleep(700);
+    // a saved card whose identity no longer resolves on the page (stale): listed for review, never assigned or guessed at
+    await A.evaluate(async () => { const fake = JSON.parse(JSON.stringify((await chrome.storage.local.get('blueline:batch'))['blueline:batch'].items.find((i) => i.productCard).productCard)); Object.assign(fake, { selector: '#gone > .nothing', explicit: null, textHash: 'zzz', groupHash: 'zzz', text: 'Gone product', neighbors: [], index: 9, count: 9 }); await __BL.addItem({ id: 'stale-card', cardRecord: true, note: '', type: 'change', createdAt: Date.now(), url: location.href, path: __BL.currentPath(), el: { label: 'article', selector: '#gone' }, productCard: fake }); });
+    await sleep(400);
+    await xClick(A, 'lib-bk-find', 600);
+    await xClick(A, 'lib-bk-auto', 500);
+    const w = await ws(A);
+    check('An excluded card is never assigned, and a stale card is listed as skipped for review rather than guessed at (5 eligible: 6 cards minus the excluded one)', !!w.modal && /Cards skipped/.test(w.modal) && /needs review/.test(w.modal) && /marked Not a card/.test(w.modal) && /5 empty cards eligible/.test(w.modal), JSON.stringify([w.modal, w.msg, w.rows.length, w.excluded.length]));
+    await modalBtn(A, 'lib-rep-ok');
+    const d = await drafts(A);
+    check('Only the 5 live, non-excluded cards (1, 3, 4, 5, 6) are staged, with products 1-5 in list order; nothing goes to the excluded or stale cards', d.length === 5 && d.map((x) => x.n).join() === '1,2,3,4,5' && d.map((x) => x.key).join() === SKUS.slice(0, 5).map((x) => x[0]).join(), JSON.stringify(d));
+    await A.close();
+  }
+  {
+    // 4f. page isolation
+    const { P: A } = await start(6);
+    await A.evaluate(async () => { await __BL.addItem({ id: 'other-page', note: 'Elsewhere', type: 'polish', createdAt: 1, url: `${location.origin}/other.html`, path: '/other.html', el: { label: 'h2', selector: 'h2' } }); });
+    const o0 = JSON.stringify((await itemsOf(A)).find((i) => i.id === 'other-page'));
+    await defineCard(A, 1);
+    await xClick(A, 'lib-bk-auto', 500); await modalBtn(A, 'lib-rep-ok'); await xClick(A, 'lib-bk-save', 1500);
+    const st = await itemsOf(A);
+    check('Auto-map affects only this page: another page\'s item is untouched and every mapping belongs to this page', JSON.stringify(st.find((i) => i.id === 'other-page')) === o0 && st.filter((i) => i.productMapping).every((i) => i.path === '/card-filters.html'), JSON.stringify(st.map((i) => i.path)));
+    await A.close();
+  }
+  // BEGIN assign-cleanup
+  {
+    const modalBtn = async (P, x) => { await P.evaluate((x) => __BL.S.ui.root.querySelector(`[data-x="${x}"]`).click(), x); await sleep(700); };
+    const rowBtn = (P, n, x) => P.evaluate((n, x) => { const row = [...__BL.S.ui.root.querySelectorAll('.lib-bk:not(.lib-bk-off)')].find((e) => +e.querySelector('.lib-bk-n').textContent === n); row.querySelector(`[data-x="${x}"]`).click(); }, n, x);
+    const U = (P) => P.evaluate(() => {
+      const r = __BL.S.ui.root; const L = __BL.libraryUi.L; const sh = r.querySelector('.lib-sheet'); const b = sh.getBoundingClientRect();
+      const loc = r.querySelector('.x-pmbox .pmk.bkloc'); const cs = loc ? getComputedStyle(loc) : null;
+      const rows = [...r.querySelectorAll('.lib-bk:not(.lib-bk-off)')].map((e) => ({ n: +e.querySelector('.lib-bk-n').textContent, sel: e.classList.contains('sel'), badge: e.querySelector('.lib-badge')?.textContent.trim(), btns: [...e.querySelectorAll('.lib-bk-a button')].map((x) => x.textContent.trim()) }));
+      return {
+        open: !!L.bulk, hidden: r.querySelector('[data-m="library"]').hidden, rect: [Math.round(b.left), Math.round(b.top), Math.round(b.width), Math.round(b.height)], sel: L.bulk && L.bulk.sel,
+        acts: [...r.querySelectorAll('.lib-bk-acts > button')].map((x) => x.textContent.trim()), allText: r.querySelector('.lib-as-cbody').textContent,
+        add: !!r.querySelector('[data-x="lib-bk-add"]'), edit: !!r.querySelector('[data-x="lib-bk-edit"]'), rows,
+        unmap: [...r.querySelectorAll('[data-x="lib-bk-unmap"]')].length, undo: [...r.querySelectorAll('[data-x="lib-bk-undo"]')].map((x) => x.textContent.trim()),
+        save: r.querySelector('[data-x="lib-bk-save"]')?.textContent.trim(), saveOff: r.querySelector('[data-x="lib-bk-save"]')?.disabled,
+        modal: (() => { const bd = r.querySelector('.lib-repbd'); return bd && !bd.hidden ? r.querySelector('.lib-rep').textContent.replace(/\s+/g, ' ').trim() : null; })(),
+        loc: loc ? { color: cs.outlineColor, width: cs.outlineWidth, anim: cs.animationName, dur: cs.animationDuration, iter: cs.animationIterationCount, tag: loc.querySelector('.bkloc-tag')?.textContent || '' } : null,
+        locCount: r.querySelectorAll('.x-pmbox .pmk.bkloc').length, tags: r.querySelectorAll('.bkloc-tag').length,
+        msg: [...r.querySelectorAll('.lib-as-cbody .lib-vv-notice')].map((n) => n.textContent.trim()).join(' | '),
+      };
+    });
+    const cardBox = (P, n) => P.evaluate((s) => { const b = document.querySelector(s).getBoundingClientRect(); return { l: Math.round(b.left), t: Math.round(b.top), r: Math.round(b.right), b: Math.round(b.bottom) }; }, CARD(n));
+    const dock = async (P, mode) => { await P.evaluate((m) => __BL.S.ui.root.querySelector(`[data-x="lib-as-dock"][data-mode="${m}"]`).click(), mode); await sleep(700); };
+    const { P: A, lib } = await start(6);
+    await defineCard(A, 1);
+    let u = await U(A);
+    check('Define Product Card is the one way to add a card: "Add a card Blueline missed" is gone, the primary actions are Define / Find Similar / Auto-map', !u.add && !/Add a card Blueline missed/.test(u.allText) && u.acts[0] === 'Define Product Card' && u.acts[1] === 'Find Similar Cards' && u.acts[2] === 'Auto-map products', JSON.stringify(u.acts));
+    check('Defining a card still works and discovery finds the six cards (nothing about discovery changed)', u.rows.length === 6 && u.rows[0].badge !== undefined, JSON.stringify(u.rows.length));
+    check('Edit fields is gone from every card row (not offered, even disabled)', !u.edit && u.rows.every((r) => !r.btns.includes('Edit fields')) && !/Edit fields/.test(u.allText), JSON.stringify(u.rows[0]));
+    check('A card without a product offers no Remove Mapping and no Discard change', u.unmap === 0 && u.undo.length === 0);
+    await xClick(A, 'lib-bk-auto', 500); await modalBtn(A, 'lib-rep-ok'); await xClick(A, 'lib-bk-save', 1500);
+    let st = await itemsOf(A);
+    const mappedBefore = st.filter((i) => i.productMapping);
+    u = await U(A);
+    check('Fixture: six cards are assigned and saved', mappedBefore.length === 6 && u.rows.every((r) => r.badge === 'Assigned'), JSON.stringify([mappedBefore.length, u.rows.map((r) => r.badge)]));
+    check('Every assigned card shows a red "Remove Mapping" (one per card) and no Discard change while nothing is unsaved', u.rows.every((r) => r.btns.includes('Remove Mapping')) && u.undo.length === 0 && !u.edit, JSON.stringify(u.rows[2].btns));
+    const libBefore = lastKeys(await allOf(A));
+    const snap = (items) => JSON.stringify(items.map((i) => [i.id, i.productMapping ? i.productMapping.variant?.variantId : null, !!i.productCard, i.cardRecord === true]));
+    const id3 = st.find((i) => i.productMapping && /* card 3 */ true) && (await A.evaluate(() => { const L = __BL.libraryUi.L.bulk; return L.rows.find((r) => r.n === 3).noteId; }));
+    const it3 = st.find((i) => i.id === id3);
+    // ---- Remove Mapping: confirm, stage, Cancel restores
+    await rowBtn(A, 3, 'lib-bk-unmap'); await sleep(500);
+    u = await U(A);
+    check('Remove Mapping on a SAVED assignment asks first and says the card, its boundary and the Library stay', !!u.modal && /Remove the product from Card #3/.test(u.modal) && /card and its boundary stay/.test(u.modal), String(u.modal));
+    await modalBtn(A, 'lib-rep-cancel');
+    u = await U(A);
+    check('Cancelling that question stages nothing', !u.modal && u.save.indexOf('(') === -1 && u.rows[2].badge === 'Assigned' && u.undo.length === 0, JSON.stringify([u.save, u.rows[2].badge]));
+    await rowBtn(A, 3, 'lib-bk-unmap'); await sleep(400); await modalBtn(A, 'lib-rep-ok');
+    u = await U(A);
+    st = await itemsOf(A);
+    check('Confirming stages the removal only: card 3 shows "Mapping removal not saved", Save Assignments (1) is offered, and nothing is stored yet', u.rows[2].badge === 'Mapping removal not saved' && /Save Assignments \(1\)/.test(u.save) && snap(st) === snap(await itemsOf(A)) && st.find((i) => i.id === id3).productMapping && u.rows.filter((r) => r.badge === 'Assigned').length === 5, JSON.stringify([u.rows.map((r) => r.badge), u.save]));
+    check('While staged, card 3 offers a small Discard change and no second Remove Mapping; the other cards are unaffected', u.rows[2].btns.includes('Discard change') && !u.rows[2].btns.includes('Remove Mapping') && u.rows.filter((r) => r.btns.includes('Discard change')).length === 1, JSON.stringify(u.rows[2].btns));
+    const mk = await A.evaluate(() => [...__BL.S.ui.root.querySelectorAll('.x-pmbox .pmb.bk')].map((b) => b.textContent));
+    check('The page marker for card 3 says it will be unassigned, not saved', mk.some((t) => /^3 · Will be unassigned · not saved/.test(t)), JSON.stringify(mk));
+    await modalBtn(A, 'lib-bk-cancel');
+    u = await U(A);
+    st = await itemsOf(A);
+    check('Cancel discards the staged removal: the workspace closes and card 3 is still assigned in storage, unchanged', !u.open && st.find((i) => i.id === id3).productMapping.variant.variantId === it3.productMapping.variant.variantId && snap(st) === snap([...st]) && JSON.stringify(st.find((i) => i.id === id3)) === JSON.stringify(it3));
+    await A.evaluate(() => { __BL.libraryUi.assignStart(); }); await sleep(900);
+    u = await U(A);
+    check('Reopening shows card 3 still Assigned (the removal was not kept)', u.rows.length === 6 && u.rows[2].badge === 'Assigned' && /Save Assignments$/.test(u.save), JSON.stringify([u.rows[2].badge, u.save]));
+    await rowBtn(A, 3, 'lib-bk-unmap'); await sleep(400); await modalBtn(A, 'lib-rep-ok');
+    await rowBtn(A, 3, 'lib-bk-undo'); await sleep(400);
+    u = await U(A);
+    check('Discard change brings the saved assignment back at once', u.rows[2].badge === 'Assigned' && u.undo.length === 0 && /Save Assignments$/.test(u.save), JSON.stringify([u.rows[2].badge, u.save]));
+    await rowBtn(A, 3, 'lib-bk-unmap'); await sleep(400); await modalBtn(A, 'lib-rep-ok');
+    await xClick(A, 'lib-bk-save', 1500);
+    u = await U(A);
+    st = await itemsOf(A);
+    const n3 = st.find((i) => i.id === id3);
+    check('Save Assignments applies the removal: card 3 stays a defined card (boundary kept) with no product; the five others are untouched', n3 && !n3.productMapping && !!n3.productCard && JSON.stringify(n3.productCard) === JSON.stringify(it3.productMapping.card) && st.filter((i) => i.productMapping).length === 5 && st.filter((i) => i.productMapping).every((i) => JSON.stringify(i) === JSON.stringify(mappedBefore.find((m) => m.id === i.id))), JSON.stringify([!!n3, n3 && Object.keys(n3)]));
+    check('No stale product or variant identity remains on card 3, and the Product Library records are unchanged', !/variantId|"product"|sku:/.test(JSON.stringify(n3.productMapping || {})) && !/ACM|variantId/.test(JSON.stringify({ ...n3, note: '', el: undefined, productCard: undefined, path: undefined, url: undefined, page: undefined })) && lastKeys(await allOf(A)) === libBefore, '');
+    check('After saving, card 3 is "Not mapped", the others are Assigned, and "Removed 1 mapping" is reported', u.rows[2].badge === 'Not mapped' && u.rows.filter((r) => r.badge === 'Assigned').length === 5 && /Removed 1 mapping/.test(u.msg) && !u.rows[2].btns.includes('Remove Mapping'), JSON.stringify([u.rows.map((r) => r.badge), u.msg]));
+    const after = await allOf(A);
+    const R = await fresh(after);
+    await R.evaluate(() => { __BL.libraryUi.assignStart(); }); await sleep(900);
+    const ur = await U(R);
+    check('The removal persists through a refresh: card 3 is still defined and unassigned, five cards assigned', ur.rows.length === 6 && ur.rows[2].badge === 'Not mapped' && ur.rows.filter((r) => r.badge === 'Assigned').length === 5, JSON.stringify(ur.rows.map((r) => r.badge)));
+    await R.close();
+    await xClick(A, 'lib-bk-auto', 500); await modalBtn(A, 'lib-rep-ok');
+    u = await U(A);
+    check('The emptied card can immediately receive another product (Auto-map stages one for card 3 only)', u.rows[2].badge === 'Not saved yet' && /Save Assignments \(1\)/.test(u.save), JSON.stringify([u.rows[2].badge, u.save]));
+    await rowBtn(A, 3, 'lib-bk-unmap'); await sleep(400);
+    u = await U(A);
+    check('Remove Mapping on an UNSAVED draft clears it with no confirmation question', !u.modal && u.rows[2].badge === 'Not mapped' && !/Save Assignments \(/.test(u.save), JSON.stringify([u.modal, u.rows[2].badge, u.save]));
+    await xClick(A, 'lib-bk-auto', 500); await modalBtn(A, 'lib-rep-ok'); await xClick(A, 'lib-bk-save', 1500);
+    st = await itemsOf(A);
+    check('A new product saved on card 3 afterwards works as normal (six assigned again, card 3 holds one record)', st.filter((i) => i.productMapping).length === 6 && st.filter((i) => i.id === id3).length === 1, String(st.filter((i) => i.productMapping).length));
+
+    // ---- Locate: workspace stays open and in place; lime highlight; cleanup; no changes
+    const locCheck = async (mode, n, label) => {
+      const before = await U(A); const itemsBefore = JSON.stringify(await itemsOf(A));
+      await rowBtn(A, n, 'lib-bk-show'); await sleep(350);
+      const mid = await U(A); const box = await cardBox(A, n);
+      await sleep(2300);
+      const end = await U(A);
+      check(`Locate (${label}): the workspace stays open at the same place and size, the card is selected and the whole card is outlined lime #A3E635 (4px) with the "Located · Card #${n}" label`,
+        mid.open && !mid.hidden && JSON.stringify(mid.rect) === JSON.stringify(before.rect) && mid.sel === before.rows.find((r) => r.n === n) && true || (mid.open && !mid.hidden && JSON.stringify(mid.rect) === JSON.stringify(before.rect) && mid.rows.find((r) => r.n === n).sel && mid.loc && mid.loc.color === 'rgb(163, 230, 53)' && mid.loc.width === '4px' && mid.loc.tag === `Located · Card #${n}` && mid.locCount === 1),
+        JSON.stringify([mid.open, mid.hidden, mid.rect, before.rect, mid.loc, mid.locCount, mid.rows.find((r) => r.n === n)]));
+      check(`Locate (${label}): the card is scrolled into the part of the page the workspace leaves free`, box.t >= -1 && box.b <= 900 + 1 && (mode === 'right' ? box.r <= before.rect[0] + 1 : mode === 'left' ? box.l >= before.rect[0] + before.rect[2] - 1 : mode === 'bottom' ? box.b <= before.rect[1] + 1 : true), JSON.stringify([box, before.rect]));
+      check(`Locate (${label}): after about 1.5 s the lime outline and label are gone, the workspace and selection are as before, and nothing was saved`, end.locCount === 0 && end.tags === 0 && end.open && !end.hidden && JSON.stringify(end.rect) === JSON.stringify(before.rect) && end.rows.find((r) => r.n === n).sel && JSON.stringify(await itemsOf(A)) === itemsBefore, JSON.stringify([end.locCount, end.tags, end.rect, before.rect]));
+      return mid;
+    };
+    await A.evaluate(() => window.scrollTo(0, 0)); await sleep(300);
+    let m = await locCheck('right', 6, 'docked right, card far down the page');
+    check('Locate pulses twice over about 1.5 s (0.75 s × 2) and respects prefers-reduced-motion', m.loc && m.loc.anim === 'bkloc-pulse' && m.loc.dur === '0.75s' && m.loc.iter === '2', JSON.stringify(m.loc));
+    await A.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+    await rowBtn(A, 2, 'lib-bk-show'); await sleep(400);
+    m = await U(A);
+    check('With prefers-reduced-motion the highlight is shown without pulsing', m.loc && m.loc.anim === 'none' && m.loc.color === 'rgb(163, 230, 53)', JSON.stringify(m.loc));
+    await A.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
+    await sleep(2000);
+    await dock(A, 'bottom'); await A.evaluate(() => window.scrollTo(0, 0)); await sleep(300);
+    await locCheck('bottom', 5, 'docked bottom');
+    await dock(A, 'left'); await A.evaluate(() => window.scrollTo(0, 0)); await sleep(300);
+    await locCheck('left', 4, 'docked left');
+    await dock(A, 'float'); await A.evaluate(() => window.scrollTo(0, 0)); await sleep(300);
+    const f0 = await U(A);
+    await rowBtn(A, 1, 'lib-bk-show'); await sleep(450);
+    const f1 = await U(A);
+    await sleep(2600);
+    const f2 = await U(A);
+    check('Locate (float): the workspace stays visible (never hidden), a covered card gets the lime outline, and the workspace returns to its place afterwards', f1.open && !f1.hidden && f1.locCount === 1 && f1.loc.color === 'rgb(163, 230, 53)' && !f2.hidden && JSON.stringify(f2.rect) === JSON.stringify(f0.rect) && f2.locCount === 0, JSON.stringify([f0.rect, f1.rect, f2.rect, f1.loc]));
+    await dock(A, 'right');
+    // ---- narrow layout
+    await dock(A, 'float');
+    await A.evaluate(() => { const sh = __BL.S.ui.root.querySelector('.lib-sheet'); sh.style.width = '460px'; sh.style.height = '640px'; }); await sleep(800);
+    u = await U(A);
+    check('Fixture: the narrow Assign Products layout is active', await A.evaluate(() => __BL.S.ui.root.querySelector('.lib-sheet').classList.contains('lib-narrow')));
+    await A.evaluate(() => { __BL.S.ui.root.querySelectorAll('.lib-as-strip .lib-cchip')[2].click(); }); await sleep(500);
+    const nr = await A.evaluate(() => { const r = __BL.S.ui.root; return { edit: !!r.querySelector('[data-x="lib-bk-edit"]'), add: !!r.querySelector('[data-x="lib-bk-add"]'), unmap: !!r.querySelector('.lib-bk-sl [data-x="lib-bk-unmap"]'), more: r.querySelector('.lib-bk-more > summary')?.textContent || '', line: r.querySelector('.lib-bk-sl')?.textContent || '' }; });
+    check('Narrow: the selected-card line has Remove Mapping, no Edit fields, and "Add a card Blueline missed" is gone from More', nr.unmap && !nr.edit && !nr.add && !/add a card/i.test(nr.more), JSON.stringify(nr));
+    await A.evaluate(() => { __BL.S.ui.root.querySelector('.lib-bk-sl [data-x="lib-bk-show"]').click(); }); await sleep(400);
+    const nl = await U(A);
+    check('Narrow: Locate keeps the workspace open and the selected chip selected, with the lime highlight', nl.open && !nl.hidden && nl.locCount === 1 && nl.loc.color === 'rgb(163, 230, 53)', JSON.stringify([nl.hidden, nl.locCount, nl.loc]));
+    await sleep(2200);
+    await A.evaluate(() => { __BL.S.ui.root.querySelector('.lib-bk-sl [data-x="lib-bk-unmap"]').click(); }); await sleep(500);
+    await modalBtn(A, 'lib-rep-ok');
+    const nu = await A.evaluate(() => { const r = __BL.S.ui.root; return { chip: r.querySelector('.lib-cchip.sel')?.textContent.replace(/\s+/g, ' ').trim(), save: r.querySelector('[data-x="lib-bk-save"]').textContent.trim(), undo: !!r.querySelector('.lib-bk-sl [data-x="lib-bk-undo"]') }; });
+    check('Narrow: Remove Mapping stages the removal (chip says Will unassign, Save Assignments (1), Discard change offered)', /Will unassign/.test(nu.chip) && /Save Assignments \(1\)/.test(nu.save) && nu.undo, JSON.stringify(nu));
+    await A.close();
+  }
+  // END assign-cleanup
+}
+
+// BEGIN excluded-ux
+console.log('\n# Excluded (N) button on Page Cards (fixtures/card-filters.html)');
+{
+  const CARD = (n) => `#row > article:nth-child(${n})`;
+  const xClick = async (P, x, ms = 350) => { await P.evaluate((x) => __BL.S.ui.root.querySelector(`[data-x="${x}"]`).click(), x); await sleep(ms); };
+  const rowBtn = (P, n, x) => P.evaluate((n, x) => { const row = [...__BL.S.ui.root.querySelectorAll('.lib-bk:not(.lib-bk-off)')].find((e) => +e.querySelector('.lib-bk-n').textContent === n); row.querySelector(`[data-x="${x}"]`).click(); }, n, x);
+  const clickAt = async (P, sel) => { const p = await pointFor(P, sel, 'center'); await P.mouse.move(p.x, p.y, { steps: 3 }); await P.mouse.down(); await P.mouse.up(); await sleep(500); };
+  const st = (P) => P.evaluate(() => {
+    const r = __BL.S.ui.root; const b = r.querySelector('.lib-ex-btn'); const body = r.querySelector('.lib-as-cbody'); const pan = r.querySelector('.lib-bk-expanel');
+    const hb = b ? b.getBoundingClientRect() : null; const hh = r.querySelector('.lib-as-cards .lib-as-h').getBoundingClientRect(); const bb = body.getBoundingClientRect(); const pb = pan ? pan.getBoundingClientRect() : null;
+    return {
+      narrow: r.querySelector('.lib-sheet').classList.contains('lib-narrow'),
+      shown: !!b && !b.hidden, label: b ? b.textContent.trim() : '', expanded: b ? b.getAttribute('aria-expanded') : null,
+      inHeading: !!hb && hb.width > 0 && hb.left >= hh.left - 1 && hb.right <= hh.right + 1 && hb.top >= hh.top - 1 && hb.bottom <= hh.bottom + 1,
+      panels: r.querySelectorAll('.lib-bk-expanel').length, items: r.querySelectorAll('.lib-bk-ex').length, heads: r.querySelectorAll('.lib-bk-exh').length,
+      inDetails: !!(pan && pan.closest('details')), first: body.firstElementChild === pan,
+      visible: !!pb && pb.top >= bb.top - 1 && pb.top < bb.bottom - 20, scrollTop: body.scrollTop,
+      rows: r.querySelectorAll('.lib-bk:not(.lib-bk-off)').length + r.querySelectorAll('.lib-as-strip .lib-cchip').length,
+      locate: [...r.querySelectorAll('.lib-bk-ex [data-x="lib-bk-show"]')].length, restore: [...r.querySelectorAll('.lib-bk-ex [data-x="lib-bk-include"]')].length,
+    };
+  });
+  const P = await open('card-filters.html', { http: true, realStorage: true });
+  await P.evaluate(() => { __BL.libraryUi.assignStart(); }); await sleep(800);
+  await xClick(P, 'lib-bk-define', 450); await clickAt(P, `${CARD(1)} .nm`); await P.evaluate(() => __BL.S.ui.root.querySelector('.x-mini [data-id="ok"]').click()); await sleep(1000);
+  let s = await st(P);
+  check('Excluded button is hidden while nothing is excluded', s.rows >= 6 && !s.shown && s.panels === 0, JSON.stringify(s));
+  await rowBtn(P, 5, 'lib-bk-exclude'); await sleep(700);
+  s = await st(P);
+  check('Excluding a card shows "Excluded (1)" in the Page Cards heading at once, list closed (no second copy at the bottom)', s.shown && s.label === 'Excluded (1)' && s.expanded === 'false' && s.inHeading && s.items === 0 && s.panels === 0, JSON.stringify(s));
+  await xClick(P, 'lib-bk-exlist', 300);
+  s = await st(P);
+  check('Clicking it opens the excluded list at the top of Page Cards, visible without scrolling, with Locate and Restore', s.expanded === 'true' && s.panels === 1 && s.items === 1 && s.first && s.visible && s.scrollTop === 0 && s.locate === 1 && s.restore === 1 && s.heads === 1, JSON.stringify(s));
+  await rowBtn(P, 2, 'lib-bk-exclude'); await sleep(700);
+  s = await st(P);
+  check('A second exclusion updates the count to 2 and the open list immediately; still one list only', s.label === 'Excluded (2)' && s.items === 2 && s.panels === 1 && s.heads === 1 && s.expanded === 'true', JSON.stringify(s));
+  const sy = await P.evaluate(() => scrollY);
+  await P.evaluate(() => { __BL.S.ui.root.querySelector('.lib-bk-ex [data-x="lib-bk-show"]').click(); }); await sleep(600);
+  const hid = await P.evaluate(() => __BL.S.ui.root.querySelector('[data-m="library"]').hidden);
+  await sleep(600);
+  s = await st(P);
+  check('Locate works from the excluded list (the workspace stays open, nothing restored or lost)', !hid && s.items === 2 && s.panels === 1 && s.label === 'Excluded (2)' && s.expanded === 'true', JSON.stringify([hid, s]));
+  const rowsBefore = s.rows;
+  await P.evaluate(() => { __BL.S.ui.root.querySelector('.lib-bk-ex [data-x="lib-bk-include"]').click(); }); await sleep(900);
+  s = await st(P);
+  check('Restore updates the count to 1 at once and returns the card to Page Cards', s.label === 'Excluded (1)' && s.items === 1 && s.rows === rowsBefore + 1, JSON.stringify([s, rowsBefore]));
+  await xClick(P, 'lib-bk-exlist', 300);
+  s = await st(P);
+  check('The button closes the list again and the count stays', s.expanded === 'false' && s.panels === 0 && s.label === 'Excluded (1)', JSON.stringify(s));
+  await xClick(P, 'lib-bk-exlist', 300);
+  await P.evaluate(() => { __BL.S.ui.root.querySelector('.lib-bk-ex [data-x="lib-bk-include"]').click(); }); await sleep(900);
+  s = await st(P);
+  check('Restoring the last card hides the button and the list', !s.shown && s.panels === 0 && s.items === 0, JSON.stringify(s));
+  // narrow layout
+  await P.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-as-dock"][data-mode="float"]')?.click()); await sleep(400);
+  await P.evaluate(() => { const sh = __BL.S.ui.root.querySelector('.lib-sheet'); sh.style.width = '460px'; sh.style.height = '640px'; }); await sleep(800);
+  s = await st(P);
+  check('Fixture: the narrow Assign Products layout is active', s.narrow, JSON.stringify(s));
+  await P.evaluate(() => { __BL.S.ui.root.querySelector('.lib-as-strip .lib-cchip').click(); }); await sleep(400);
+  await P.evaluate(() => { const r = __BL.S.ui.root; r.querySelector('.lib-as-strip .lib-cchip.sel, .lib-as-strip .lib-cchip').click(); }); await sleep(300);
+  const key = await P.evaluate(() => { const r = __BL.S.ui.root; return r.querySelector('.lib-as-strip .lib-cchip.sel')?.dataset.key || null; });
+  await P.evaluate(() => { const b = __BL.S.ui.root.querySelector('[data-x="lib-bk-exclude"]'); b && b.click(); }); await sleep(900);
+  await P.evaluate(() => { const o = __BL.S.ui.root.querySelector('[data-x="lib-rep-ok"]'); if (o) o.click(); }); await sleep(900);
+  s = await st(P);
+  check('Narrow: excluding shows "Excluded (1)" inside the Page Cards heading, list closed', s.narrow && s.shown && s.label === 'Excluded (1)' && s.inHeading && s.items === 0, JSON.stringify([s, key]));
+  await xClick(P, 'lib-bk-exlist', 300);
+  s = await st(P);
+  check('Narrow: opening shows the list at the top, outside the "More" fold, visible without scrolling, one copy', s.expanded === 'true' && s.panels === 1 && s.items === 1 && !s.inDetails && s.first && s.visible && s.locate === 1 && s.restore === 1, JSON.stringify(s));
+  await P.evaluate(() => { __BL.S.ui.root.querySelector('.lib-bk-ex [data-x="lib-bk-include"]').click(); }); await sleep(900);
+  s = await st(P);
+  check('Narrow: Restore updates the count and hides the button', !s.shown && s.panels === 0, JSON.stringify(s));
+  await P.close();
+}
+// END excluded-ux
+
 
 await browser.close();
 server.close();

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Card filters fixture (category filter buttons, cart / CTA / navigation decoys, synthetic)</title>
+<style>
+  body { margin: 0; font: 14px/1.4 sans-serif; padding-bottom: 600px; }
+  nav { display: flex; gap: 14px; padding: 8px 16px; background: #eef; }
+  .filters { display: flex; gap: 8px; padding: 10px 16px; align-items: center; }
+  .chip { padding: 4px 12px; border: 1px solid #999; border-radius: 999px; background: #fff; cursor: pointer; } .chip.on { background: #06c; color: #fff; }
+  .cart { margin-left: auto; padding: 4px 12px; }
+  section.grp { padding: 12px 16px; }
+  .row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .deal { border: 1px solid #ccc; padding: 6px; min-height: 130px; }
+  .deal .inner { border: 1px dashed #bbb; padding: 4px; }
+  .deal .shot { height: 40px; background: #eee; } .deal .nm { font-weight: 600; font-size: 16px; }
+  .deal .pr { display: flex; gap: 8px; } .deal .sale { font-weight: 700; } .deal .reg { text-decoration: line-through; }
+  .deal .go { margin-top: 6px; padding: 3px 8px; background: #06c; color: #fff; border: 0; }
+</style>
+</head>
+<body>
+<nav><a href="/deals" id="nav-link">Deals</a> <a href="/best">Best Sellers</a></nav>
+<div class="filters" id="filters">
+  <button type="button" class="chip on" data-cat="All" aria-pressed="true">All</button>
+  <button type="button" class="chip" data-cat="Protein" aria-pressed="false">Protein</button>
+  <button type="button" class="chip" data-cat="Vitamins" aria-pressed="false">Vitamins</button>
+  <button type="button" class="cart" id="cart-top" aria-pressed="false">Cart (0)</button>
+</div>
+<section class="grp">
+  <h2>Featured Deals</h2>
+  <div class="row" id="row">
+    <article class="deal" data-cat="Protein"><div class="inner"><div class="shot">[Product shot 1]</div><div class="nm">[Product Name]</div><div class="pr"><span class="sale">[$Sale]</span><span class="reg">[$Reg]</span></div></div><button type="button" class="go">Add to Cart</button></article>
+    <article class="deal" data-cat="Vitamins"><div class="inner"><div class="shot">[Product shot 2]</div><div class="nm">[Product Name]</div><div class="pr"><span class="sale">[$Sale]</span><span class="reg">[$Reg]</span></div></div><button type="button" class="go">Add to Cart</button></article>
+    <article class="deal" data-cat="Protein"><div class="inner"><div class="shot">[Product shot 3]</div><div class="nm">[Product Name]</div><div class="pr"><span class="sale">[$Sale]</span><span class="reg">[$Reg]</span></div></div><button type="button" class="go">Add to Cart</button></article>
+    <article class="deal" data-cat="Vitamins"><div class="inner"><div class="shot">[Product shot 4]</div><div class="nm">[Product Name]</div><div class="pr"><span class="sale">[$Sale]</span><span class="reg">[$Reg]</span></div></div><button type="button" class="go">Add to Cart</button></article>
+    <article class="deal" data-cat="Protein"><div class="inner"><div class="shot">[Product shot 5]</div><div class="nm">[Product Name]</div><div class="pr"><span class="sale">[$Sale]</span><span class="reg">[$Reg]</span></div></div><button type="button" class="go">Add to Cart</button></article>
+    <article class="deal" data-cat="Vitamins"><div class="inner"><div class="shot">[Product shot 6]</div><div class="nm">[Product Name]</div><div class="pr"><span class="sale">[$Sale]</span><span class="reg">[$Reg]</span></div></div><button type="button" class="go">Add to Cart</button></article>
+  </div>
+</section>
+<script>
+  window.__clicks = { filter: 0, cart: 0, cta: 0, nav: 0 };
+  document.getElementById('filters').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.id === 'cart-top') { window.__clicks.cart++; return; }
+    window.__clicks.filter++;
+    for (const c of document.querySelectorAll('.chip')) { const on = c === b; c.classList.toggle('on', on); c.setAttribute('aria-pressed', String(on)); }
+    const cat = b.dataset.cat;
+    for (const a of document.querySelectorAll('.deal')) a.style.display = cat === 'All' || a.dataset.cat === cat ? '' : 'none';
+  });
+  document.querySelectorAll('.go').forEach((g) => g.addEventListener('click', () => { window.__clicks.cta++; }));
+  document.getElementById('nav-link').addEventListener('click', (e) => { e.preventDefault(); window.__clicks.nav++; });
+</script>
+</body>
+</html>

@@ -67,6 +67,11 @@
   };
   const currentPath = () => location.pathname + location.search + (/^#[/!]/.test(location.hash) ? location.hash.split('?')[0] : '');
   const findItem = (id) => (S.batch?.items || []).find((i) => i.id === id);
+  // Card records (a remembered product card, with or without an assigned product) are not notes: they are not counted,
+  // listed, pinned or numbered as notes, and deleting a note never removes one.
+  const isNote = (it) => !it || it.cardRecord !== true;
+  const notesOf = () => (S.batch?.items || []).filter(isNote);
+  const lib = () => globalThis.BluelineLibrary;
   const uid = () => Math.random().toString(36).slice(2, 10);
   const frames = (n) => new Promise((r) => { const step = () => (n-- <= 0 ? r() : requestAnimationFrame(step)); step(); });
   const query = (sel) => { try { return document.querySelector(sel); } catch { return null; } };
@@ -1100,6 +1105,25 @@
     S.all = back; rescope(); render();
     return { ok: true, item: stored };
   }
+  // Adds ONE new note to what storage holds right now and reads it back, like patchItem. Nothing else is touched. On any
+  // failure the stored batch is put back as it was and { ok: false, error } says why.
+  async function addItem(item, verify) {
+    if (orphaned()) return { ok: false, error: 'Blueline was reloaded. Reload this page and try again.' };
+    const get = async () => (await chrome.storage.local.get(BATCH_KEY))[BATCH_KEY] || null;
+    let before;
+    try { before = await get(); } catch (e) { return { ok: false, error: `The browser storage couldn’t be read (${e.message || e}).` }; }
+    const all = before ? JSON.parse(JSON.stringify(before)) : { ...newBatch(), items: [] };
+    all.items = [...(all.items || []), item];
+    const restore = async () => { try { if (before) await chrome.storage.local.set({ [BATCH_KEY]: before }); else await chrome.storage.local.remove(BATCH_KEY); } catch { /* nothing was stored */ } };
+    try { await chrome.storage.local.set({ [BATCH_KEY]: all }); } catch (e) { return { ok: false, error: `The browser refused to save (${e.message || e}).` }; }
+    let back;
+    try { back = await get(); } catch (e) { await restore(); return { ok: false, error: `The saved note couldn’t be read back (${e.message || e}).` }; }
+    const stored = back && (back.items || []).find((i) => i.id === item.id);
+    const problem = !stored ? 'The note is missing from storage after saving.' : verify ? verify(stored) : null;
+    if (problem) { await restore(); return { ok: false, error: problem }; }
+    S.all = back; rescope(); render();
+    return { ok: true, item: stored };
+  }
   const savePrefs = () => (orphaned() ? Promise.resolve() : chrome.storage.local.set({ [PREFS_KEY]: S.prefs }));
 
   function ensureBatch() {
@@ -1324,7 +1348,7 @@
       <div class="x-step2"></div>
       <textarea class="pop-note" rows="3" placeholder="What should change?"></textarea>
       <div class="x-top"></div>
-      <label class="broken" title="Tick this when something doesn\u2019t work. The export then adds recent clicks, console errors and failed requests, when Blueline has recorded them."><input type="checkbox" class="pop-broken"><span><b>Broken / error</b><span>Something doesn\u2019t work as it should</span></span></label>
+      <label class="broken" title="Tick this when something doesn\u2019t work. The export then adds recent clicks, console errors and failed requests, when Blueline has recorded them."><input type="checkbox" class="pop-broken"><span><b>Broken / error</b></span></label>
       <ul class="issues" hidden></ul>
       <div class="x-link"></div>
       <div class="pop-foot">
@@ -1432,7 +1456,7 @@
   function render() {
     if (!S.ui) return;
     const $ = S.ui.$;
-    const items = S.batch?.items || [];
+    const items = notesOf();
     const here = currentPath();
 
     const panel = $('.panel');
@@ -1445,7 +1469,7 @@
     $('.count').textContent = items.length || '';
     $('.mode').textContent = MODE_LABEL[modeOf(S.page)];
     $('.empty').hidden = items.length > 0;
-    $('[data-act="export"]').disabled = !items.length;
+    $('[data-act="export"]').disabled = !items.length && !(S.batch?.items || []).some((it) => it.productMapping);
     $('[data-act="clear"]').disabled = !items.length;
     $('.pick').classList.toggle('on', S.picking);
     $('.pick-label').textContent = S.picking ? 'Picking. Esc to stop' : 'Pick an element';
@@ -1484,7 +1508,7 @@
     const box = S.ui.$('.pins');
     box.textContent = '';
     const here = currentPath();
-    (S.batch?.items || []).forEach((it, i) => {
+    notesOf().forEach((it, i) => {
       if (it.path !== here || it.kind === 'region') return;
       const pin = document.createElement('button');
       pin.className = `pin ${it.type || 'polish'}`;
@@ -1845,13 +1869,15 @@
     if (!S.batch) return;
     const gone = findItem(id);
     if (gone && BL.hooks.onItemDeleted) BL.hooks.onItemDeleted(gone);
-    S.batch.items = S.batch.items.filter((i) => i.id !== id);
+    // A note that carries a product card or assignment hands it to a card record (same id): deleting a note never deletes them.
+    const keep = gone && isNote(gone) ? lib()?.toCardRecord?.(gone) : null;
+    S.batch.items = keep ? S.batch.items.map((i) => (i.id === id ? keep : i)) : S.batch.items.filter((i) => i.id !== id);
     if (BL.hooks.afterItemDeleted) BL.hooks.afterItemDeleted();
     chrome.storage.local.remove([shotKey(id), shotKey(id) + ':markup']);
     if (!S.batch.items.length) S.batch = null;
     await saveBatch();
     render();
-    toast('Note deleted');
+    toast(keep ? 'Note deleted. Its product card stays in Assign Products.' : 'Note deleted');
   }
 
   async function clearBatch(btn) {
@@ -1869,10 +1895,12 @@
     S.clearArmed = 0;
     btn.textContent = 'Clear batch';
     btn.classList.remove('armed');
-    const keys = (S.batch?.items || []).flatMap((i) => [shotKey(i.id), shotKey(i.id) + ':markup']);
+    const keys = notesOf().flatMap((i) => [shotKey(i.id), shotKey(i.id) + ':markup']);
     if (keys.length) chrome.storage.local.remove(keys);
     if (BL.hooks.onClear) BL.hooks.onClear();
-    S.batch = null;
+    // Notes go; product cards and assignments stay (as card records).
+    const kept = (S.batch?.items || []).map((it) => (isNote(it) ? lib()?.toCardRecord?.(it) : it)).filter(Boolean);
+    if (kept.length && S.batch) S.batch = { ...S.batch, items: kept, guides: [], priceReport: undefined }; else S.batch = null;
     await saveBatch();
     render();
     toast('Batch cleared');
@@ -2024,10 +2052,190 @@
     setActive(false);
   });
 
+  // ---------------------------------------------------------------- Start Fresh and Restore Previous Session
+  // Clears chosen kinds of saved data for the CURRENT PAGE ONLY (this origin + path): notes, defined product cards, product
+  // assignments. Before anything is cleared a recovery copy of the page's items (and their screenshots) is stored under
+  // RESTORE_KEY, one per page, replaced by the next Start Fresh on that page. Product Library data, other pages, other
+  // websites and preferences are never read or written here.
+  const RESTORE_KEY = 'blueline:restore';
+  const pageKey = () => `${originNow()}${currentPath()}`;
+  const storedAll = async () => (await chrome.storage.local.get(BATCH_KEY))[BATCH_KEY] || null;
+  const shotKeysOf = (ids) => ids.flatMap((id) => [shotKey(id), shotKey(id) + ':markup']);
+  const pageItemsOf = (all) => (all?.items || []).filter(itemHere);
+  const workspace = {
+    pageKey,
+    pageLabel: () => `${location.protocol === 'file:' ? 'file://' : location.host}${currentPath()}`,
+    // What is saved for this page right now, and what clearing the given choices would remove.
+    async summary(scope) {
+      const L = lib();
+      const items = pageItemsOf(await storedAll());
+      const have = L.pageCounts(items);
+      const plan = scope ? L.planReset(items, scope) : null;
+      return { have, cleared: plan ? plan.cleared : null };
+    },
+    async snapshotInfo() {
+      let snap = null;
+      try { snap = ((await chrome.storage.local.get(RESTORE_KEY))[RESTORE_KEY] || {})[pageKey()] || null; } catch { snap = null; }
+      return snap ? { at: snap.at, cleared: snap.cleared, scope: snap.scope, page: snap.page } : null;
+    },
+    async reset(scope) {
+      const L = lib();
+      if (orphaned()) return { ok: false, error: 'Blueline was reloaded. Reload this page and try again.' };
+      let all;
+      try { all = await storedAll(); } catch (e) { return { ok: false, error: `The browser storage couldn’t be read (${e.message || e}).` }; }
+      all = all ? JSON.parse(JSON.stringify(all)) : null;
+      const items = pageItemsOf(all);
+      const plan = L.planReset(items, scope);
+      const c = plan.cleared;
+      if (!c.notes && !c.cards && !c.assignments) return { ok: false, empty: true, error: 'There is nothing to clear for those choices.' };
+      // 1. The recovery copy first, read back. If it can't be stored, nothing is cleared.
+      const ids = items.map((i) => i.id);
+      let shots = {};
+      try { shots = await chrome.storage.local.get(shotKeysOf(ids)); } catch { shots = {}; }
+      const snap = L.makeSnapshot({ pageKey: pageKey(), page: { origin: originNow(), path: currentPath(), url: location.href }, before: items, after: plan.items, scope: plan.scope, cleared: c, shots, now: Date.now() });
+      try {
+        const cur = (await chrome.storage.local.get(RESTORE_KEY))[RESTORE_KEY] || {};
+        await chrome.storage.local.set({ [RESTORE_KEY]: { ...cur, [snap.pageKey]: snap } });
+        const back = ((await chrome.storage.local.get(RESTORE_KEY))[RESTORE_KEY] || {})[snap.pageKey];
+        if (!back || back.at !== snap.at || back.before.length !== items.length) throw new Error('the recovery copy was not stored');
+      } catch (e) { return { ok: false, error: `Nothing was cleared: the recovery copy couldn’t be saved (${e.message || e}).` }; }
+      // 2. Clear: only this page's items change; everything else stays exactly as stored.
+      const next = new Map(plan.items.map((i) => [i.id, i]));
+      const rest = [];
+      for (const it of all?.items || []) {
+        if (!itemHere(it)) rest.push(it);
+        else if (next.has(it.id)) { rest.push(next.get(it.id)); next.delete(it.id); }
+      }
+      rest.push(...next.values());
+      // Notes that go (or become card records) take their live previews with them.
+      const gone = new Set(plan.notesGone);
+      for (const it of S.batch?.items || []) if (gone.has(it.id) && BL.hooks.onItemDeleted) BL.hooks.onItemDeleted(it);
+      const out = { ...all, items: rest };
+      try {
+        if (rest.length || out.guides || out.priceReport) await chrome.storage.local.set({ [BATCH_KEY]: out }); else await chrome.storage.local.remove(BATCH_KEY);
+        if (plan.notesGone.length) await chrome.storage.local.remove(shotKeysOf(plan.notesGone));
+      } catch (e) { return { ok: false, error: `The browser refused to save (${e.message || e}). The recovery copy was kept.` }; }
+      S.all = rest.length || out.guides || out.priceReport ? out : null;
+      rescope();
+      if (BL.hooks.afterItemDeleted) BL.hooks.afterItemDeleted();
+      render();
+      return { ok: true, cleared: c };
+    },
+    // What Restore would do, without doing it: the recovery copy's details and what changed on the page since.
+    async restorePreview() {
+      const L = lib();
+      let snap; let all;
+      try { snap = ((await chrome.storage.local.get(RESTORE_KEY))[RESTORE_KEY] || {})[pageKey()]; all = await storedAll(); } catch { return null; }
+      if (!snap) return null;
+      const plan = L.restorePlan(snap, pageItemsOf(all));
+      const c = plan.conflict;
+      return { at: snap.at, cleared: snap.cleared, count: c ? { changed: c.changed.length, added: c.added.length, removed: c.removed.length } : null, dropped: plan.dropped };
+    },
+    // Puts the recovery copy back. If anything on this page changed since the reset, nothing happens until `confirmed`.
+    async restore(confirmed) {
+      const L = lib();
+      if (orphaned()) return { ok: false, error: 'Blueline was reloaded. Reload this page and try again.' };
+      let store;
+      let all;
+      try { store = (await chrome.storage.local.get(RESTORE_KEY))[RESTORE_KEY] || {}; all = await storedAll(); } catch (e) { return { ok: false, error: `The browser storage couldn’t be read (${e.message || e}).` }; }
+      const snap = store[pageKey()];
+      if (!snap) return { ok: false, error: 'There is no earlier session to restore for this page.' };
+      all = all ? JSON.parse(JSON.stringify(all)) : { ...newBatch(), items: [] };
+      const cur = pageItemsOf(all);
+      const plan = L.restorePlan(snap, cur);
+      if (plan.conflict && !confirmed) return { ok: false, needsConfirm: true, conflict: plan.conflict, dropped: plan.dropped, count: { changed: plan.conflict.changed.length, added: plan.conflict.added.length, removed: plan.conflict.removed.length } };
+      const rest = (all.items || []).filter((it) => !itemHere(it));
+      all.items = [...rest, ...plan.items];
+      try {
+        await chrome.storage.local.set({ [BATCH_KEY]: all });
+        if (snap.shots && Object.keys(snap.shots).length) await chrome.storage.local.set(snap.shots);
+        const left = { ...store }; delete left[pageKey()];
+        if (Object.keys(left).length) await chrome.storage.local.set({ [RESTORE_KEY]: left }); else await chrome.storage.local.remove(RESTORE_KEY);
+      } catch (e) { return { ok: false, error: `The browser refused to save (${e.message || e}). Nothing was restored.` }; }
+      S.all = all;
+      rescope();
+      render();
+      return { ok: true, restored: L.pageCounts(snap.before) };
+    },
+  };
+  // One verified change to this page's saved items (used by card management: remove a card, exclude one, restore one).
+  // `fn(items)` gets this page's stored items and returns the page's items afterwards; every other page's items stay as stored.
+  workspace.edit = async function edit(fn) {
+    if (orphaned()) return { ok: false, error: 'Blueline was reloaded. Reload this page and try again.' };
+    let all;
+    try { all = await storedAll(); } catch (e) { return { ok: false, error: `The browser storage couldn\u2019t be read (${e.message || e}).` }; }
+    all = all ? JSON.parse(JSON.stringify(all)) : { ...newBatch(), items: [] };
+    const mine = pageItemsOf(all);
+    let next;
+    try { next = fn(JSON.parse(JSON.stringify(mine))); } catch (e) { return { ok: false, error: e.message || String(e) }; }
+    const byId = new Map(next.map((i) => [i.id, i]));
+    const items = [];
+    for (const it of all.items || []) { if (!itemHere(it)) items.push(it); else if (byId.has(it.id)) { items.push(byId.get(it.id)); byId.delete(it.id); } }
+    items.push(...byId.values());
+    all.items = items;
+    try { await chrome.storage.local.set({ [BATCH_KEY]: all }); } catch (e) { return { ok: false, error: `The browser refused to save (${e.message || e}).` }; }
+    S.all = all; rescope(); render();
+    return { ok: true };
+  };
+  BL.workspace = workspace;
+
+  // ---- Reset all Blueline work (every page and website). Only keys Blueline itself owns are ever listed or removed, by
+  // these exact names or prefixes; there is no global clear, and nothing outside chrome.storage.local's `blueline:` keys is
+  // read or changed (no page data, no files, no other extension's storage).
+  //   work     : notes, cards, assignments, guides, reports (the batch), recovery copies, the design overlay, the price sheet, screenshots
+  //   library  : the Product Library lists, imports, approvals and the "last list used" references (only when asked)
+  //   settings : panel side, collapsed, outlines, previews, docking (only when asked)
+  const OWNED = {
+    work: (k) => k === BATCH_KEY || k === RESTORE_KEY || k === 'blueline:overlay' || k === 'blueline:sheet' || k.startsWith('blueline:shot:'),
+    library: (k) => k === 'blueline:lib:index' || k.startsWith('blueline:lib:smp:') || k.startsWith('blueline:lib:work:'),
+    settings: (k) => k === PREFS_KEY,
+  };
+  const DEFAULT_PREFS = () => ({ side: 'right', collapsed: false, previews: true });
+  const ownedKeys = async () => Object.keys((await chrome.storage.local.get(null)) || {}).filter((k) => k.startsWith('blueline:'));
+  workspace.globalSummary = async function globalSummary() {
+    const L = lib();
+    const all = (await chrome.storage.local.get(null)) || {};
+    const batch = all[BATCH_KEY] || null;
+    const items = batch?.items || [];
+    const c = L.pageCounts(items);
+    const pages = new Set(items.map((i) => `${originOf(i.url) || ''}${i.path}`));
+    const sites = new Set(items.map((i) => originOf(i.url) || ''));
+    const keys = Object.keys(all).filter((k) => k.startsWith('blueline:'));
+    let lists = 0;
+    let products = 0;
+    try { const sm = await L.listSummaries(chrome.storage.local); lists = sm.length; products = sm.reduce((n, x) => n + (x.products || 0), 0); } catch { /* none */ }
+    const guides = (batch?.guides || []).length;
+    const reports = batch?.priceReport ? 1 : 0;
+    const copies = Object.keys(all[RESTORE_KEY] || {}).length;
+    const other = keys.filter((k) => OWNED.work(k) && k !== BATCH_KEY && k !== RESTORE_KEY && !k.startsWith('blueline:shot:')).length;
+    const shots = keys.filter((k) => k.startsWith('blueline:shot:')).length;
+    const work = c.notes + c.cards + c.assignments + guides + reports + copies + other + shots;
+    return { ...c, pages: pages.size, sites: sites.size, guides, reports, copies, shots, extras: other, lists, products, hasSettings: keys.some(OWNED.settings), work };
+  };
+  workspace.resetAll = async function resetAll({ library = false, settings = false } = {}) {
+    if (orphaned()) return { ok: false, error: 'Blueline was reloaded. Reload this page and try again.' };
+    let keys;
+    try { keys = await ownedKeys(); } catch (e) { return { ok: false, error: `The browser storage couldn’t be read (${e.message || e}).` }; }
+    const remove = keys.filter((k) => OWNED.work(k) || (library && OWNED.library(k)) || (settings && OWNED.settings(k)));
+    const sum = await workspace.globalSummary().catch(() => null);
+    // live previews come off the page first (they are built from the notes being removed)
+    if (BL.hooks.onClear) BL.hooks.onClear();
+    try { if (remove.length) await chrome.storage.local.remove(remove); } catch (e) { return { ok: false, error: `The browser refused to clear (${e.message || e}). Nothing else was changed.` }; }
+    let left = [];
+    try { left = (await ownedKeys()).filter((k) => remove.includes(k)); } catch { /* verified below */ }
+    if (left.length) return { ok: false, error: `${left.length} saved item${left.length === 1 ? ' was' : 's were'} still there after clearing. Reload the page and try again.` };
+    S.all = null; S.batch = null; S.scopeIds = new Set();
+    if (settings) S.prefs = DEFAULT_PREFS();
+    rescope();
+    render();
+    if (BL.hooks.onFullReset) BL.hooks.onFullReset({ library, settings });
+    return { ok: true, removed: remove.length, summary: sum, library, settings };
+  };
+
   Object.assign(BL, {
     S, send, runtimeAlive, orphaned, hook, uid, query, clip, plural, code, bp, label, cssPath, describe, detectIssues, findSection, sectionLine,
     routeGuess, bestSource, modeOf, inspectReact, decodeModule, isStableClass, stylingOf, cssRulesFor, splitTop, rgba, hex, fromUI, openPop, closePop,
-    setPicking, cursorStyle, render, saveBatch, patchItem, savePrefs, savePop, ensureBatch, findItem, currentPath, toast, frames, loadImg,
+    setPicking, cursorStyle, render, saveBatch, patchItem, addItem, savePrefs, savePop, ensureBatch, findItem, currentPath, toast, frames, loadImg,
     TYPES, typeLabel, shotKey, placePop, whereShort, drawHL, hideHL, setPopType, INK,
   });
 
