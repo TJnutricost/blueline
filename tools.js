@@ -54,6 +54,7 @@
   const clip = (s, n) => BL.clip(s, n);
   const here = () => BL.currentPath();
   const mine = (el) => !!S.ui && (el === S.ui.host || S.ui.host.contains(el));
+  const noteNo = (it) => (S.batch?.items || []).filter((i) => i.cardRecord !== true).indexOf(it) + 1;
   const itemsHere = () => (S.batch?.items || []).filter((i) => i.path === here());
   // Annotation outlines are off by default so they never cover the page's own borders, shadows and colors.
   const outlinesOn = () => S.prefs.marks === 'full';
@@ -448,7 +449,7 @@
     const saved = S.pop ? null : lastUndoable();
     b.disabled = S.pop ? !undoStack.length : !saved;
     b.title = b.disabled ? `Nothing to undo (${UNDO_KEY})`
-      : saved ? `Undo the last change in note ${S.batch.items.indexOf(saved) + 1}. It reopens so you can update or cancel (${UNDO_KEY})`
+      : saved ? `Undo the last change in note ${noteNo(saved)}. It reopens so you can update or cancel (${UNDO_KEY})`
         : `Undo the last annotation change (${UNDO_KEY})`;
   }
 
@@ -857,6 +858,20 @@
     .addnote kbd { margin-left: auto; opacity: .8; font-size: 11px; }
     .xb.plib { display: flex; align-items: center; gap: 8px; width: 100%; margin: 6px 0 0; padding: 10px 12px; border: 0; border-radius: 9px; background: #1E7A3E; color: #fff; font-weight: 650; font-size: 13px; line-height: normal; min-height: 38px; text-align: left; cursor: pointer; box-sizing: border-box; }
     .xb.plib:hover { background: #176B34; } .xb.plib[hidden] { display: none; }
+    .wsrow { margin-top: 8px; padding-top: 6px; border-top: 1px dashed #D9DCE4; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .wsrow .cap { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #6B7183; margin-right: 2px; }
+    .wsrow .sub { flex-basis: 100%; } .wsrow .xb[hidden], .wsrow .sub[hidden] { display: none; }
+    .sf-sheet { width: min(520px, 100%); } .sf-sheet > header { cursor: default; } .sf-sheet > header b { font-size: 15px; font-weight: 700; color: #B42318; }
+    .sf-page { font-size: 12px; } .sf-page code, .sf-final code { word-break: break-all; }
+    .sf-opts { display: flex; flex-direction: column; gap: 6px; }
+    .sf-opt { display: flex; gap: 9px; align-items: flex-start; padding: 8px 10px; border: 1px solid #E2E5EC; border-radius: 8px; cursor: pointer; font-size: 12.5px; }
+    .sf-opt.on { border-color: #E8B4AE; background: #FEF7F6; } .sf-opt input { margin-top: 3px; }
+    .sf-opt em { display: block; font-style: normal; color: #4A5163; font-size: 12px; } .sf-opt em.sf-dep { color: #6B7183; font-size: 11.5px; } .sf-n { display: block; font-size: 11.5px; color: #1E2230; font-weight: 600; margin-top: 2px; }
+    .sf-scope { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; } .sf-scope label { display: flex; gap: 6px; align-items: center; cursor: pointer; } .sf-scope-all span { color: #B42318; font-weight: 700; } .sf-scope[hidden] { display: none; }
+    .sf-all { display: flex; flex-direction: column; gap: 6px; } .sf-all[hidden], .sf-opts[hidden], .sf-page[hidden], .sf-final .sub[hidden] { display: none; } .sf-warn { margin: 0; font-size: 12.5px; padding: 8px 10px; border: 1px solid #E8B4AE; border-radius: 8px; background: #FEF3F2; color: #7A271A; }
+    .sf-sum, .sf-final { font-size: 12.5px; padding: 8px 10px; background: #FEF3F2; border: 1px solid #F4C7C2; border-radius: 8px; color: #7A271A; }
+    .sf-final { display: flex; flex-direction: column; gap: 6px; } .sf-final[hidden], .sf-sum[hidden], .sf-opts[hidden] { display: none; } .sf-final .sub { color: #7A271A; }
+    .sf-sheet > footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; } .sf-sheet > footer [hidden] { display: none; }
     .hintline { font-size: 11.5px; color: #6B7183; margin-top: -2px; }
     .panel .pop { position: static; width: auto; flex: 1 1 auto; min-height: 0; overflow: auto; border: 0; border-radius: 0; box-shadow: none; padding: 10px 12px 0; gap: 8px; }
     .pop > * { flex-shrink: 0; }
@@ -1016,9 +1031,23 @@
     .mk.bug .bd { background: ${GUIDE}; }
     .mk .bd:hover { transform: scale(1.12); }
     .pmk { position: fixed; pointer-events: none; }
+    .pmk.bkst-unmapped { outline: 2px solid #2B4EFF; outline-offset: -2px; }
+    .pmk.bkst-mapped { outline: 2px solid #1E7A3E; outline-offset: -2px; background: rgba(30,122,62,.05); }
+    .pmk.bkst-pending { outline: 2px dashed #B7791F; outline-offset: -2px; background: rgba(224,164,0,.12); }
+    .pmk.bkst-attn { outline: 2px solid #E0A400; outline-offset: -2px; background: rgba(224,164,0,.12); }
+    .pmk.bksel { outline-width: 5px; box-shadow: 0 0 0 3px rgba(255,255,255,.85), 0 0 14px 4px rgba(30,34,48,.35); }
+    .pmk.bkelig { outline-style: dashed; }
+    .pmk.bkloc { outline: 4px solid #A3E635; outline-style: solid; outline-offset: -2px; background: rgba(163,230,53,.10); box-shadow: 0 0 0 2px rgba(255,255,255,.7), 0 0 18px 5px rgba(163,230,53,.55); animation: bkloc-pulse .75s ease-in-out 2; }
+    @keyframes bkloc-pulse { 0%, 100% { box-shadow: 0 0 0 2px rgba(255,255,255,.7), 0 0 14px 3px rgba(163,230,53,.45); } 50% { box-shadow: 0 0 0 3px rgba(255,255,255,.9), 0 0 34px 14px rgba(163,230,53,.85); } }
+    @media (prefers-reduced-motion: reduce) { .pmk.bkloc { animation: none; } }
+    .bkloc-tag { position: absolute; left: 6px; padding: 4px 9px; border-radius: 999px; background: #A3E635; color: #1A2E05; font: 700 11.5px/1 system-ui, sans-serif; box-shadow: 0 1px 4px rgba(0,0,0,.35); white-space: nowrap; }
+    .pmk.bkdrop { outline: 6px solid #7B2CFF; outline-offset: -3px; background: rgba(123,44,255,.2); box-shadow: 0 0 0 3px rgba(255,255,255,.9), 0 0 18px 6px rgba(123,44,255,.55); }
     .pmb { position: absolute; right: 6px; max-width: calc(100% - 12px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: auto; cursor: pointer; font: 600 11px/1.5 -apple-system, Segoe UI, sans-serif; padding: 1px 9px; border-radius: 11px; background: #1E7A3E; color: #fff; border: 0; box-shadow: 0 0 0 2px #fff, 0 2px 6px rgba(30,34,48,.28); opacity: .94; }
     .pmb:hover, .pmb:focus-visible { opacity: 1; } .pmb:focus-visible { outline: 3px solid #1E1E1E; outline-offset: 2px; }
     .pmb.attn { background: #E0A400; color: #3D2A00; }
+    .pmb.bk { left: 6px; right: auto; } .pmb.bk.unmapped { background: #2B4EFF; } .pmb.bk.mapped { background: #1E7A3E; } .pmb.bk.attn { background: #E0A400; color: #3D2A00; }
+    .pmb.bk.pending { background: #FFF9E6; color: #5C3B00; box-shadow: 0 0 0 2px #B7791F, 0 2px 6px rgba(30,34,48,.28); border: 2px dashed #B7791F; padding: 0 8px; }
+    .pmb.bk.sel { opacity: 1; outline: 3px solid #1E1E1E; outline-offset: 2px; }
     .pmb.pend { background: #FFF9E6; color: #5C3B00; box-shadow: 0 0 0 2px #B7791F, 0 2px 6px rgba(30,34,48,.28); border: 2px dashed #B7791F; padding: 0 8px; }
     .x-pmbox.quiet .pmb { display: none; }
     .selb { position: fixed; outline: 1px solid rgba(43,78,255,.6); outline-offset: 3px; border-radius: 3px; pointer-events: none; }
@@ -1030,6 +1059,10 @@
     .hl2.ink { outline-color: rgba(43,78,255,.6); }
     .hl2 .hl-tag { background: ${WARM}; }
     .hl2.ink .hl-tag { background: ${INK}; }
+    .hl2.prop { outline: 4px solid #FF9800; outline-offset: 0; border-radius: 3px; background: rgba(255,171,0,.10); box-shadow: 0 0 0 2px rgba(255,255,255,.85), 0 0 14px 4px rgba(255,152,0,.55); z-index: 3; }
+    .hl2.prop .hl-tag { background: #E65100; color: #fff; font-weight: 700; }
+    .hl3 { position: fixed; pointer-events: none; outline: 2px dashed rgba(43,78,255,.85); outline-offset: 0; border-radius: 2px; z-index: 2; }
+    .hl3 .hl-tag { background: ${INK}; }
     .x-bar { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #1E2230; color: #fff; padding: 7px 8px 7px 14px; border-radius: 9px; display: flex; gap: 10px; align-items: center; font-size: 12.5px; pointer-events: none; box-shadow: 0 8px 24px rgba(30,34,48,.3); z-index: 3; max-width: min(560px, 60vw); }
     .x-bar button { pointer-events: auto; flex: none; }
     /* Compact toolbar shown in place of the panel while picking elements to measure or align to. */
@@ -1039,6 +1072,8 @@
     .x-mini .mini-h { font-weight: 700; font-size: 11.5px; color: #1A33C7; }
     .x-mini .mini-step { color: #1E2230; }
     .x-mini .xb { flex: none; }
+    .x-mini .mini-acts { display: flex; flex-wrap: wrap; gap: 6px; } .x-mini .mini-acts:empty { display: none; }
+    .x-mini.wide { max-width: min(560px, calc(100vw - 32px)); flex-wrap: wrap; }
     .x-bar .ghost { color: #fff; border: 1px solid rgba(255,255,255,.3); padding: 3px 9px; }
     .x-bar .ghost:hover { background: rgba(255,255,255,.12); }
     .xtxt { position: fixed; z-index: 4; font-size: 15px; font-weight: 700; border: 1px solid ${INK}; border-radius: 4px; padding: 2px 5px; pointer-events: auto; background: #fff; }
@@ -1190,9 +1225,10 @@
       <svg class="x-svg"><defs><marker id="xa" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="${INK}"/></marker></defs><g class="x-marks"></g><g class="x-arrows"></g><g class="x-meas"></g></svg>
       <div class="dr" hidden><span class="sz"></span></div>
       <div class="hl2" hidden><span class="hl-tag"></span></div>
+      <div class="hl3" hidden><span class="hl-tag">Saved boundary</span></div>
     </div>
     <div class="x-bar" hidden><span class="x-msg"></span><button class="ghost" data-x="bar-cancel">Esc</button></div>
-    <div class="x-mini" hidden role="status" aria-live="polite"><div class="mini-txt"><span class="mini-h">Blueline · <span class="mini-tool"></span></span><span class="mini-step"></span></div><button class="xb" data-x="bar-cancel" title="Cancel (Esc)">Cancel</button></div>
+    <div class="x-mini" hidden role="status" aria-live="polite"><div class="mini-txt"><span class="mini-h">Blueline · <span class="mini-tool"></span></span><span class="mini-step"></span></div><span class="mini-acts"></span><button class="xb" data-x="bar-cancel" title="Cancel (Esc)">Cancel</button></div>
     <div class="xov" hidden>
       <div class="xov-h"><b>Design overlay</b><button class="icon" data-x="ov-close" aria-label="Close">✕</button></div>
       <div class="xrow"><label class="xb xb-file">Choose image… <input type="file" accept="image/*" data-x="ov-file" hidden></label><span class="sub">or paste one</span></div>
@@ -1482,11 +1518,18 @@
       <button class="sbtn" data-x="start-area" title="Drag a rectangle over an element, several elements, or an empty spot. Blueline finds the elements inside it"><b>Select area</b><span>Drag a rectangle</span></button></div>
       <div class="sub">Tip: Shift+click to select an element. Shift+drag to select an area.</div></div>`);
     const libBtn = mk('<button class="xb plib" data-x="lib-home" hidden title="Open your Product Library">Product Library</button>');
+    const asgBtn = mk('<button class="xb plib" data-x="assign-home" hidden title="Give Product Library products to the product cards on this page">Assign Products</button>');
+    const wsRow = mk(`<div class="wsrow" role="group" aria-label="Workspace"><span class="cap">Workspace</span><button class="xb danger" data-x="start-fresh" title="Clear saved notes, product cards or assignments for this page only">Start Fresh…</button><button class="xb" data-x="restore-session" hidden title="Restore what Start Fresh cleared on this page">Restore</button></div>`);
     body.insertBefore(add, body.firstChild);
     add.after(libBtn);
-    libBtn.after(startRow);
+    const defBtn = mk('<button class="xb plib pdef" data-x="define-home" title="Click a product card on the page and save it, with no note or product needed">Define Product Card</button>');
+    libBtn.after(asgBtn);
+    asgBtn.after(defBtn);
+    defBtn.after(startRow);
     syncLibBtn();
     body.appendChild(root.querySelector('.x-tools'));
+    body.appendChild(wsRow);
+    syncWorkspace();
     const tools = root.querySelector('.bar .tools');
     tools.insertBefore(mk(`<button class="icon hd-undo" data-x="undo" title="Undo the last annotation change (${UNDO_KEY})" aria-label="Undo" disabled>${UNDO_ICON}</button>`), tools.firstChild);
     tools.insertBefore(mk(`<button class="icon mk-toggle" data-x="marks" aria-pressed="true" aria-label="Outlines">${OUTLINE_ICON}</button>`), tools.firstChild);
@@ -1630,12 +1673,12 @@
 
   // While picking, the panel is hidden so the page is free to click. With `mini` ({ tool, step }) a small
   // Blueline toolbar takes the panel's corner instead, so it is clear Blueline is still open and how to cancel.
-  function pickOne(msg, live, mini) {
+  function pickOne(msg, live, mini, scope, opts) {
     cancelTools();
     stopDrawing();
     setAnnotate(false, true);
     return new Promise((resolve) => {
-      T.pick = { resolve, live };
+      T.pick = { resolve, live, scope, peek: !!(opts && opts.peek), onAct: opts && opts.onAct };
       const panel = q('.panel');
       if (mini) showMini(mini, panel); else showBar(msg);
       syncCursor();
@@ -1648,12 +1691,33 @@
     if (!m) return;
     m.querySelector('.mini-tool').textContent = mini.tool;
     m.querySelector('.mini-step').textContent = mini.step;
+    const back = m.querySelector('[data-x="bar-cancel"]');
+    back.textContent = mini.back || 'Cancel';
+    back.title = mini.back || 'Cancel (Esc)';
+    back.classList.toggle('pri', !!mini.back && !mini.actions);
+    const acts = m.querySelector('.mini-acts');
+    acts.innerHTML = (mini.actions || []).map((a) => `<button class="xb${a.pri ? ' pri' : ''}" data-x="mini-act" data-id="${esc(a.id)}">${esc(a.label)}</button>`).join('');
+    m.classList.toggle('wide', !!mini.actions);
     const r = panel?.getBoundingClientRect();
     const W = document.documentElement.clientWidth || innerWidth;
     if (r && r.width) Object.assign(m.style, { right: `${Math.max(4, Math.round(W - r.right))}px`, bottom: `${Math.max(4, Math.round(innerHeight - r.bottom))}px` });
     m.hidden = false;
   }
   const hideMini = () => { const m = q('.x-mini'); if (m) m.hidden = true; };
+
+  // Shows one element clearly, with the window out of the way, until the person comes back (button or Esc). Page links and
+  // buttons are not activated: while a pick is active every pointer and click event outside Blueline is swallowed.
+  function peekEl(el, mini) {
+    if (!el || !el.isConnected) return Promise.resolve(false);
+    const r0 = el.getBoundingClientRect();
+    if (r0.bottom < 0 || r0.top > innerHeight || r0.right < 0 || r0.left > innerWidth) el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+    const redraw = () => { if (T.pick && T.pick.peek && el.isConnected) drawHl2(el, true); };
+    const done = pickOne('', null, { back: 'Back to Card Mapping (Esc)', ...mini }, null, { peek: true });
+    redraw();
+    window.addEventListener('scroll', redraw, true);
+    window.addEventListener('resize', redraw);
+    return done.then(() => { window.removeEventListener('scroll', redraw, true); window.removeEventListener('resize', redraw); return true; });
+  }
 
   function endPick(val) {
     const p = T.pick;
@@ -1662,6 +1726,7 @@
     hideBar();
     hideMini();
     drawHl2(null);
+    drawSaved(null);
     clearMeas();
     syncCursor();
     const panel = q('.panel');
@@ -1669,17 +1734,29 @@
     p.resolve(val);
   }
 
+  // `ink` true = blue; 'prop' = the orange PROPOSED card boundary (Define Product Card / Edit Card Boundary).
   function drawHl2(el, ink) {
     const h = q('.hl2');
     if (!h) return;
-    if (!el) { h.hidden = true; return; }
+    if (!el) { h.hidden = true; h.classList.remove('prop'); return; }
     const r = el.getBoundingClientRect();
     h.hidden = false;
-    h.classList.toggle('ink', !!ink);
+    h.classList.toggle('prop', ink === 'prop');
+    h.classList.toggle('ink', !!ink && ink !== 'prop');
     Object.assign(h.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
     const tag = h.querySelector('.hl-tag');
-    tag.textContent = `${BL.label(el)}  ${Math.round(r.width)}×${Math.round(r.height)}`;
+    tag.textContent = `${ink === 'prop' ? 'Proposed card boundary · ' : ''}${BL.label(el)}  ${Math.round(r.width)}×${Math.round(r.height)}`;
     tag.classList.toggle('below', r.top < 24);
+  }
+  // The boundary as currently saved, a thin dashed blue outline under the orange proposal while a boundary is edited.
+  function drawSaved(el) {
+    const h = q('.hl3');
+    if (!h) return;
+    if (!el || !el.isConnected) { h.hidden = true; return; }
+    const r = el.getBoundingClientRect();
+    h.hidden = false;
+    Object.assign(h.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+    h.querySelector('.hl-tag').classList.toggle('below', r.top < 24);
   }
 
   function drawDr(x0, y0, x1, y1) {
@@ -1709,6 +1786,15 @@
       if (e.type === 'click') T.eatClick = false;
       e.preventDefault();
       e.stopImmediatePropagation();
+      return;
+    }
+    // Card Mapping overview open (docked): the page's own links and buttons must not fire; only Blueline's markers and window respond.
+    if (bulk.dock && !(T.pick || A.on || D.tool) && !BL.fromUI(e) && /^(pointerdown|pointerup|mousedown|mouseup|click|dblclick|auxclick|dragstart|selectstart)$/.test(e.type)) {
+      // A website's own filter control (a category button that shows or hides cards) is allowed through; everything else is not.
+      if (isFilterControl(e)) { if (e.type === 'click') { setTimeout(() => bulk.onChange?.(), 250); setTimeout(() => bulk.onChange?.(), 800); } return; }
+      e.preventDefault(); e.stopImmediatePropagation();
+      // A click anywhere inside a detected card selects that card (the page itself never sees the click).
+      if (e.type === 'click' && (e.button || 0) <= 0) { const k = bulkCardAt(e.clientX, e.clientY); if (k) bulk.onMark?.(k, true); }
       return;
     }
     if (!(T.pick || A.on || D.tool)) { shiftSelect(e); return; }
@@ -1817,7 +1903,10 @@
   }
 
   function pickPointer(e) {
+    if (T.pick.peek) return; // "Show on the page": nothing can be chosen, and (because the pick is active) nothing reaches the page
     const el = pickable(e);
+    // A scoped pick (Product Mapping fields) ignores anything outside its area: no highlight, no choice.
+    if (T.pick.scope && el && !T.pick.scope(el)) { if (e.type === 'pointermove') drawHl2(null); else if (e.type === 'pointerup' && e.button <= 0) toast('Pick an element inside the product card.'); return; }
     if (e.type === 'pointermove') { drawHl2(el); if (T.pick.live) T.pick.live(el, e); }
     else if (e.type === 'pointerup' && e.button <= 0 && el) { eatNextClick(); endPick({ el, x: e.clientX, y: e.clientY }); }
   }
@@ -2502,6 +2591,130 @@
     return h + '</div></div>';
   }
 
+  // ---- M4: the card's page elements (title, image, prices, badge, Add to Cart, link)
+  // The Product Mapping window shows what cards.js proposes and lets the person accept, change, pick or clear each
+  // element. This is the page side of that: it finds the confirmed card, scans or re-checks it, hands the window plain
+  // data and short-lived ids (the window never holds an element), highlights, and runs the scoped picker. Nothing here
+  // changes the page or stores anything; the window decides what the draft holds and Save Mapping writes it.
+  function cardElFor(card) {
+    const C = cardsApi();
+    if (!C || !card?.v) return null;
+    const r = C.evaluate(card);
+    return (r.state === 'confirmed' || r.state === 'hidden') && r.el?.isConnected ? r.el : null;
+  }
+  function fieldCheckFor(m) {
+    const C = cardsApi();
+    const Lb = libApi();
+    if (!C || !Lb || !Lb.isMapping(m)) return null;
+    const items = Lb.fieldItems(m);
+    const keys = Object.keys(items).filter((k) => items[k].state === 'confirmed');
+    if (!keys.length) return null;
+    const el = cardElFor(m.card);
+    const out = {};
+    for (const k of keys) {
+      if (!el) { out[k] = { state: 'missing', reasons: ['the card is not confirmed on the page right now'], value: null }; continue; }
+      const x = C.resolveFieldRef(el, k, items[k].ref);
+      out[k] = { state: x.state, reasons: x.reasons, value: x.state === 'ok' ? C.fieldValue(x.el, k) : null };
+    }
+    return { items: out };
+  }
+  let fieldFlashT = 0;
+  function fieldFlash(el) {
+    if (!el || !el.isConnected) return;
+    const r0 = el.getBoundingClientRect();
+    if (r0.bottom < 0 || r0.top > innerHeight) el.scrollIntoView({ block: 'center', behavior: 'instant' });
+    drawHl2(el, true);
+    clearTimeout(fieldFlashT);
+    fieldFlashT = setTimeout(() => { if (!T.pick) drawHl2(null); }, 1800);
+  }
+  // A short-lived name for an element, the same every time it is asked for in this page session. It lets the window tell
+  // whether a candidate is the element already chosen without ever holding the element.
+  const elTokens = new WeakMap();
+  let elTokenN = 0;
+  const elToken = (el) => { if (!el) return null; if (!elTokens.has(el)) elTokens.set(el, `e${++elTokenN}`); return elTokens.get(el); };
+  function fieldApi(card) {
+    const C = cardsApi();
+    const Lb = libApi();
+    if (!C || !Lb || !card?.v) return null;
+    const reg = new Map();
+    let seq = 0;
+    const NOCARD = 'The product card isn’t confirmed on this page right now (it may have changed), so its elements can’t be checked. Close this window, open the note and confirm the card again.';
+    const where = (el, el0, key) => { const ref = C.fieldRef(el0, el, key); return ref.path === '^' ? 'the link around the card' : ref.sel || ref.path || tagOfEl(el); };
+    const tagOfEl = (el) => el.tagName.toLowerCase();
+    const brief = (key, c, el0) => {
+      const id = `f${++seq}`;
+      reg.set(id, { key, el: c.el, card: el0 });
+      const v = c.value || C.fieldValue(c.el, key);
+      return { id, ek: elToken(c.el), tag: tagOfEl(c.el), how: c.how || null, score: c.score ?? null, reasons: c.reasons || [], value: v, where: where(c.el, el0, key), visible: c.visible !== false };
+    };
+    return {
+      available: () => !!cardElFor(card),
+      noCard: NOCARD,
+      scan(draft) {
+        const el = cardElFor(card);
+        if (!el) return { ok: false, reason: NOCARD, items: {} };
+        const ev = Lb.effectiveValues(draft);
+        const det = C.detectFields(el, { promo: Number.isInteger(ev.promoCents) });
+        const items = {};
+        for (const k of C.FIELD_KEYS) {
+          const f = det.fields[k];
+          items[k] = { status: f.status, confidence: f.confidence, best: f.best ? brief(k, f.best, el) : null, candidates: f.candidates.map((c) => brief(k, c, el)), reasons: f.reasons };
+        }
+        return { ok: true, items, multi: det.multi.map((m) => ({ text: m.text })) };
+      },
+      resolve(draft) {
+        const el = cardElFor(card);
+        const items = {};
+        for (const [k, it] of Object.entries(Lb.fieldItems(draft))) {
+          if (it.state !== 'confirmed') continue;
+          if (!el) { items[k] = { state: 'missing', reasons: [NOCARD], value: null, candidates: [] }; continue; }
+          const x = C.resolveFieldRef(el, k, it.ref);
+          const ok = x.state === 'ok';
+          const mine = ok ? brief(k, { el: x.el }, el) : null;
+          items[k] = { state: x.state, reasons: x.reasons, value: ok ? C.fieldValue(x.el, k) : null, candidates: x.candidates.map((e) => brief(k, { el: e, how: 'content' }, el)), id: mine ? mine.id : null, ek: mine ? mine.ek : null };
+        }
+        return { ok: !!el, items };
+      },
+      // What to store for a candidate the person accepted or chose.
+      take(id) {
+        const r = reg.get(id);
+        if (!r || !r.el.isConnected) return null;
+        return { ref: C.fieldRef(r.card, r.el, r.key), detected: C.fieldValue(r.el, r.key) };
+      },
+      flash(id) { const r = reg.get(id); if (r) fieldFlash(r.el); },
+      flashRef(key, ref) {
+        const el = cardElFor(card);
+        if (!el) return;
+        const x = C.resolveFieldRef(el, key, ref);
+        fieldFlash(x.el || x.candidates[0]);
+      },
+      // Show on the page: the window steps aside until the person returns (button or Esc), so the element is clearly visible.
+      peek(id, label) { const r = reg.get(id); return r && r.el.isConnected ? peekEl(r.el, { tool: 'Card Mapping', step: `Showing the ${label || C.FIELD_LABELS[r.key].toLowerCase()} on the page` }) : Promise.resolve(false); },
+      peekRef(key, ref, label) {
+        const el = cardElFor(card);
+        if (!el) return Promise.resolve(false);
+        const x = C.resolveFieldRef(el, key, ref);
+        const t = x.el || x.candidates[0];
+        return t ? peekEl(t, { tool: 'Card Mapping', step: `Showing the ${label || C.FIELD_LABELS[key].toLowerCase()} on the page` }) : Promise.resolve(false);
+      },
+      // The scoped picker: only elements inside the card (or the link around it) can be chosen; clicks never reach the page.
+      async pick(key) {
+        const el0 = cardElFor(card);
+        if (!el0) { toast(NOCARD); return null; }
+        const inside = (n) => el0.contains(n) || (key === 'link' && (el0.parentElement?.closest('a[href]') || el0).contains(n));
+        const snap = (n) => C.snapPick(el0, key, n);
+        const label = C.FIELD_LABELS[key].toLowerCase();
+        for (;;) {
+          const r = await pickOne(`Click the ${label} inside the product card. Esc cancels.`, (n) => { drawHl2(n && inside(n) ? (snap(n)?.el || null) : null); }, { tool: 'Card Mapping', step: `Click the ${label} in the card` }, inside);
+          if (!r?.el) return null;
+          const s = snap(r.el);
+          if (s && s.el) return { ref: C.fieldRef(el0, s.el, key), detected: C.fieldValue(s.el, key) };
+          toast(`That doesn’t look like the ${label}. Click another part of the card, or press Esc.`);
+        }
+      },
+    };
+  }
+
   // ---- the Product Mapping window: the one place a mapping is changed, approved and saved
   // Opens from a green marker on the page (no note editor), or from the open note's Product Mapping section. Saving
   // writes the whole mapping at once and nothing else: other note content and any unsaved edits in an open editor are
@@ -2525,6 +2738,7 @@
     mapBusy = true;
     const res = await ui.openMapping({
       saved: saved ? clone(saved) : null, card, autoPick: saved ? null : 'product', context: 'note',
+      fields: fieldApi(card),
       getCheck: () => (P === my ? P.mapCheck : null),
       onPending: (draft) => { T.pmPending = draft && it ? { id: it.id, title: libApi().effectiveValues(draft).title || draft.product.name || draft.product.key } : null; renderPm(); },
       save: (next) => mapPersist({ id: it?.id || null, next, card: my.card, editor: true, my }),
@@ -2544,6 +2758,7 @@
     mapBusy = true;
     const res = await ui.openMapping({
       saved, card: saved.card?.v ? clone(saved.card) : null, context: 'marker',
+      fields: fieldApi(saved.card),
       getCheck: () => mapChecks.get(id) || null,
       onPending: (draft) => { T.pmPending = draft ? { id, title: libApi().effectiveValues(draft).title || draft.product.name || draft.product.key } : null; renderPm(); },
       save: (next) => mapPersist({ id, next, card: saved.card, editor: false }),
@@ -2602,6 +2817,711 @@
     toast('Mapping removed. The note, its text and CSS edits are unchanged.');
   }
 
+  // ---- Card Mapping overview: every product card on the page, numbered, in one window
+  // Starting from the confirmed card, cards.js proposes the page's other cards. This is the page side of the overview in
+  // library-ui.js: it finds them, matches them to saved notes by CARD IDENTITY (never by number or position), numbers the
+  // included ones in document order for display only, draws the numbered markers, runs the pickers, and saves. Numbers are
+  // never stored. A card matches a saved note only when the card check says "confirmed"; a changed, ambiguous or missing
+  // card is listed for review and nothing is linked to a guess. The window holds no elements, only short-lived keys.
+  const bulk = { exclIds: new Map(), onChange: null, inc: new Map(), side: null, saved: null, drop: null, drag: false, els: new Map(), notes: new Map(), excl: new Set(), incl: new Set(), manual: new Set(), marks: new Map(), dock: false, seed: null, open: false, onMark: null, count: null };
+  const bulkPanel = () => { const p = q('.panel'); if (p && !T.pick) p.style.visibility = bulk.dock ? 'hidden' : ''; };
+  function bulkClear() {
+    bulk.els.clear(); bulk.notes.clear(); bulk.inc.clear(); bulk.excl.clear(); bulk.incl.clear(); bulk.manual.clear(); bulk.marks.clear();
+    bulk.dock = false; bulk.seed = null; bulk.onMark = null; bulk.open = false; bulk.drop = null; bulk.drag = false; bulk.loc = null; clearTimeout(bulk.locT);
+    bulkRelease(); bulkPanel(); renderPm();
+  }
+  const mapTitleOf = (m) => { const Lb = libApi(); return (Lb && (Lb.effectiveValues(m).title || m.product?.name || m.product?.key)) || 'product'; };
+
+  // All the page's cards as plain data. `seedEl` is the confirmed card the search starts from.
+  function bulkScan() {
+    const C = cardsApi();
+    if (!C) return { ok: false, reason: 'Card detection did not load. Reload the page.', rows: [], review: [] };
+    // Saved items on this page, matched by identity. Only "confirmed" (or identified but hidden) links an item to a card.
+    // Cards defined in Assign Products (card records) are discovery seeds of their own, so a differently built layout the
+    // person defined is found as well as the first one; nothing is searched until a card exists or one is defined.
+    const claims = new Map();
+    const review = [];
+    const seeds = [];
+    if (bulk.seed && bulk.seed.isConnected) seeds.push(bulk.seed);
+    for (const it of S.batch?.items || []) {
+      if (it.path !== here() || it.kind === 'page' || it.kind === 'region') continue;
+      const card = savedCard(it);
+      if (!card) continue;
+      let r;
+      try { r = C.evaluate(card); } catch { continue; }
+      const has = mapped(it);
+      const rec = it.cardRecord === true;
+      if ((r.state === 'confirmed' || r.state === 'hidden') && r.el && r.el.isConnected) {
+        if (claims.has(r.el)) { if (has) review.push({ noteId: it.id, title: mapTitleOf(it.productMapping), state: 'duplicate', reasons: ['Another note already holds this card.'] }); continue; }
+        claims.set(r.el, it);
+        if (rec && !it.noSeed) seeds.push(r.el); // a card whose boundary was edited no longer stands for its layout family
+      } else if (has || rec) {
+        const why = r.state === 'ambiguous' ? 'Blueline can’t tell which card this was (the cards look alike or were reordered).' : r.state === 'not-found' ? 'Its card was not found on the page.' : 'The page changed, so Blueline can’t be sure which card this was.';
+        review.push({ noteId: it.id, title: has ? mapTitleOf(it.productMapping) : 'Defined card (no product yet)', state: r.state, reasons: [why, ...(r.reasons || []).slice(0, 2)] });
+      }
+    }
+    // Candidates the person ruled out ("Not a card"): saved per page, matched by identity like cards, never proposed again until restored.
+    const Lbx = libApi();
+    const exclEls = new Map();
+    for (const it of S.batch?.items || []) {
+      if (it.path !== here() || !Lbx?.isExclusion(it)) continue;
+      let r;
+      try { r = C.evaluate(it.exclusion.card); } catch { continue; }
+      if ((r.state === 'confirmed' || r.state === 'hidden') && r.el && r.el.isConnected && !claims.has(r.el)) { exclEls.set(r.el, it); if (it.exclusion.why === 'boundary' || it.exclusion.seed) seeds.push(r.el); } // the old outline still represents the layout the cards share
+    }
+    const entries = new Map();
+    for (const sd of seeds) { if (entries.has(sd)) continue; for (const c of C.discoverCards(sd).cards) if (!entries.has(c.el)) entries.set(c.el, c); }
+    for (const el of [...bulk.manual]) {
+      if (!el.isConnected) { bulk.manual.delete(el); continue; }
+      if (!entries.has(el)) entries.set(el, { el, family: 'manual', confidence: 'manual', why: 'added by you', section: C.sectionOf(el), hidden: C.isHidden(el), brief: C.cardBrief(el), seed: false });
+    }
+    for (const [el, it] of exclEls) if (!entries.has(el)) entries.set(el, { el, family: 'excluded', confidence: 'excluded', why: 'marked not a card', section: C.sectionOf(el), hidden: C.isHidden(el), brief: C.cardBrief(el), seed: false });
+    for (const [el, it] of claims) if (!entries.has(el)) entries.set(el, { el, family: 'saved', confidence: 'saved', why: it.cardRecord === true ? 'a card you defined' : 'a card with a saved note', section: C.sectionOf(el), hidden: C.isHidden(el), brief: C.cardBrief(el), seed: false });
+    const list = [...entries.values()].sort((a, b) => (a.el === b.el ? 0 : a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+    // A note open in the note editor is not changed from here (the editor would overwrite it when saved): close it first.
+    const open = S.pop ? P.item?.id || null : null;
+    bulk.els.clear(); bulk.notes.clear(); bulk.inc.clear(); bulk.exclIds.clear();
+    let n = 0;
+    const rows = list.map((c) => {
+      const it = claims.get(c.el) || null;
+      const key = elToken(c.el);
+      bulk.els.set(key, c.el);
+      if (it) bulk.notes.set(key, it.id);
+      const ex = it ? null : exclEls.get(c.el) || null;
+      if (ex) bulk.exclIds.set(key, ex.id);
+      const included = !ex && (!!it || (c.confidence === 'high' || c.confidence === 'manual' ? !bulk.excl.has(c.el) : bulk.incl.has(c.el)));
+      bulk.inc.set(key, included);
+      const g = C.group(c.el);
+      return {
+        key, n: included ? ++n : null, included, confidence: c.confidence, why: c.why, seed: !!c.seed,
+        label: c.brief.title || c.brief.placeholder || `${c.el.tagName.toLowerCase()} card`, image: c.brief.image || '', prices: c.brief.prices, placeholder: c.brief.placeholder,
+        section: c.section.heading || '', pos: g.count > 1 ? `card ${g.index} of ${g.count}` : '', hidden: !!c.hidden,
+        noteId: it ? it.id : null, defined: !!it, kind: it ? 'defined' : 'detected', excluded: !!ex, exclWhy: ex ? ex.exclusion.why || 'not-a-card' : '', mapping: it && mapped(it) ? clone(it.productMapping) : null,
+        locked: it && it.id === open ? 'This card’s note is open in the note editor. Close the note first, then assign its product here.' : null,
+      };
+    });
+    const heads = [...new Set(rows.filter((r) => r.included && r.section).map((r) => r.section))];
+    const title = !heads.length ? 'All Cards' : heads.length === 1 ? `All Cards — ${heads[0]}` : `All Cards — ${heads[0]} and ${heads.length - 1} more section${heads.length === 2 ? '' : 's'}`;
+    return { ok: true, rows, review, title, sections: heads.length };
+  }
+
+  // The included card under a viewport point (the innermost when cards nest), by geometry, whatever child is under the pointer.
+  // Not every button is safe: only a plain, non-submitting control outside every card that declares a filter / tab state
+  // (aria-pressed, aria-selected, aria-checked, role tab or radio, or a data-cat / filter / sort / tab attribute) and whose
+  // name does not talk about carts, buying or checkout. Links, form submits, card buttons and the page's navigation stay blocked.
+  function isFilterControl(e) {
+    const t = e.composedPath ? e.composedPath()[0] : e.target;
+    if (!(t instanceof Element)) return false;
+    const c = t.closest('button, [role="button"], [role="tab"], [role="radio"], input[type="radio"], input[type="checkbox"]');
+    if (!c) return false;
+    if (c.closest('a[href]') || c.disabled) return false;
+    if (c.tagName === 'BUTTON' && c.form && (c.getAttribute('type') || 'submit') !== 'button') return false;
+    if (c.getAttribute('type') === 'submit' || c.getAttribute('type') === 'reset') return false;
+    for (const [, el] of bulk.els) if (el.isConnected && (el === c || el.contains(c))) return false;
+    if (bulkCardAt(e.clientX, e.clientY)) return false;
+    const declared = c.hasAttribute('aria-pressed') || c.hasAttribute('aria-selected') || c.hasAttribute('aria-checked') || /^(tab|radio)$/.test(c.getAttribute('role') || '') || [...c.attributes].some((a) => /^data-(cat|category|filter|sort|tab|collection|tag|type)/.test(a.name));
+    if (!declared) return false;
+    const name = `${c.textContent} ${c.getAttribute('aria-label') || ''} ${c.getAttribute('title') || ''} ${c.getAttribute('name') || ''} ${c.id} ${c.className}`;
+    return !/cart|bag\b|basket|buy|checkout|purchase|order|\bpay\b|subscribe/i.test(name);
+  }
+  function bulkCardAt(x, y) {
+    let best = null;
+    let area = Infinity;
+    for (const [key, el] of bulk.els) {
+      if (!bulk.inc.get(key) || !el.isConnected) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0 || x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
+      const a = r.width * r.height;
+      if (a < area) { best = key; area = a; }
+    }
+    return best;
+  }
+
+
+  // The outlined card the person is adjusting: Parent / Child step through the ancestors of what they clicked; Confirm Card
+  // returns the element, Cancel / Esc returns null. A card that holds several cards (a whole section) needs a second press.
+  function adjustCard(p) {
+    const C = cardsApi();
+    let i = p.at >= 0 ? p.at : 0;
+    const cur = () => p.chain[i];
+    const okLabel = () => (p.broad[i] ? 'Confirm anyway' : 'Confirm Card');
+    const text = () => {
+      const el = cur();
+      const g = C.group(el);
+      const sec = C.sectionOf(el).heading;
+      const where = `${BL.label(el)} · ${g.count > 1 ? `card ${g.index} of ${g.count}` : 'single element'}${sec ? ` in “${sec}”` : ''}`;
+      const lead = i === p.at && p.lead ? p.lead : i === p.at ? (p.confidence === 'explicit' ? 'Marked as a product card.' : p.confidence === 'single' ? 'Possible product card.' : 'Likely product card.') : p.at < 0 && i === 0 ? 'No product card was found here. Use Parent to step up.' : 'Adjusted by you.';
+      return `${lead} ${where}${p.broad[i] ? ' · This holds several cards or a whole section.' : ''}`;
+    };
+    const redraw = () => { if (T.pick && T.pick.peek && cur().isConnected) { drawHl2(cur(), 'prop'); drawSaved(p.saved && p.saved !== cur() ? p.saved : null); } };
+    const refresh = () => { const st = q('.x-mini .mini-step'); if (st) st.textContent = text(); const ok = q('.x-mini [data-id="ok"]'); if (ok) ok.textContent = okLabel(); redraw(); };
+    const onAct = (id) => {
+      if (id === 'parent') i = Math.min(p.chain.length - 1, i + 1);
+      else if (id === 'child') i = Math.max(0, i - 1);
+      else if (id === 'ok') { endPick({ el: cur() }); return; }
+      refresh();
+    };
+    const el0 = cur();
+    const r0 = el0.getBoundingClientRect();
+    if (r0.bottom < 0 || r0.top > innerHeight) el0.scrollIntoView({ block: 'center', behavior: 'instant' });
+    const done = pickOne('', null, { tool: p.tool || 'Define Product Card', step: text(), back: 'Cancel', actions: [{ id: 'parent', label: 'Parent ▲' }, { id: 'child', label: 'Child ▼' }, { id: 'ok', label: okLabel(), pri: true }] }, null, { peek: true, onAct });
+    redraw();
+    window.addEventListener('scroll', redraw, true);
+    window.addEventListener('resize', redraw);
+    return done.then((v) => { window.removeEventListener('scroll', redraw, true); window.removeEventListener('resize', redraw); return v && v.el ? v.el : null; });
+  }
+  // Saves a confirmed card as its own item. If the same card is already saved (a defined card, or one a note holds) nothing new is made.
+  async function bulkDefine(el) {
+    const C = cardsApi();
+    const Lb = libApi();
+    if (!C || !Lb || !el || !el.isConnected) return { ok: false, msg: 'That card is no longer on the page.' };
+    const card = clone(C.describe(el));
+    const key = elToken(el);
+    for (const it of S.batch?.items || []) {
+      if (it.path !== here() || it.kind === 'page' || it.kind === 'region') continue;
+      const sc = savedCard(it);
+      if (!sc) continue;
+      let r;
+      try { r = C.evaluate(sc); } catch { continue; }
+      if ((r.state === 'confirmed' || r.state === 'hidden') && r.el === el) { bulk.seed = el; return { ok: true, already: true, el, key, assigned: mapped(it) }; }
+    }
+    let info;
+    try { info = BL.describe(el, 'change'); } catch { info = { type: 'change', url: location.href, path: BL.currentPath(), viewport: { w: innerWidth, h: innerHeight }, page: S.page, el: { label: BL.label(el), selector: BL.cssPath(el), size: '' } }; }
+    const rec = Lb.newCardRecord(info, card, BL.uid(), Date.now());
+    const r = await BL.addItem(rec, (got) => (!got.cardRecord || !got.productCard?.v ? 'The card was not stored.' : null));
+    if (!r.ok) return { ok: false, msg: `Couldn’t save the card (${r.error}).` };
+    bulk.seed = el;
+    return { ok: true, already: false, el, key, assigned: false };
+  }
+  // One card's mapping, written to the stored note (or a new card record), nothing else, and read back.
+  async function bulkPersist(key, next) {
+    const C = cardsApi();
+    const el = bulk.els.get(key);
+    if (!C || !el || !el.isConnected) return { ok: false, error: 'That card is no longer on the page.' };
+    const id = bulk.notes.get(key) || null;
+    const out = clone(next);
+    const sameMap = (got) => (!got.productMapping ? 'The mapping was not stored.' : !sameJson(got.productMapping, out) ? `The stored mapping differs from what was saved (${diffKeys(got.productMapping, out)}).` : null);
+    if (id) {
+      const it = BL.findItem(id);
+      out.card = (it && savedCard(it)) || clone(C.describe(el));
+      const r = await BL.patchItem(id, (n) => { n.productMapping = out; delete n.productCard; n.updatedAt = Date.now(); }, sameMap);
+      if (!r.ok) return { ok: false, error: `Couldn’t save the mapping (${r.error}).` };
+      mapChecks.set(id, { state: 'current', notes: [] });
+      return { ok: true, mapping: out };
+    }
+    out.card = clone(C.describe(el));
+    let info;
+    try { info = BL.describe(el, 'change'); } catch { info = { type: 'change', url: location.href, path: BL.currentPath(), viewport: { w: innerWidth, h: innerHeight }, page: S.page, el: { label: BL.label(el), selector: BL.cssPath(el), size: '' } }; }
+    const item = { id: BL.uid(), note: '', createdAt: Date.now(), ...info, cardRecord: true, productMapping: out };
+    const r = await BL.addItem(item, sameMap);
+    if (!r.ok) return { ok: false, error: `Couldn’t save the mapping (${r.error}).` };
+    bulk.notes.set(key, item.id);
+    mapChecks.set(item.id, { state: 'current', notes: [] });
+    return { ok: true, mapping: out };
+  }
+
+  const bulkApi = {
+    scan: bulkScan,
+    card(key) { const el = bulk.els.get(key); const id = bulk.notes.get(key); const it = id && BL.findItem(id); return it && savedCard(it) ? savedCard(it) : el && el.isConnected && cardsApi() ? clone(cardsApi().describe(el)) : null; },
+    cardAt: bulkCardAt,
+    // While a product is dragged from the Library: every card is a highlighted target, the one under the pointer stands out.
+    dragging(on) { bulk.drag = !!on; if (!on) bulk.drop = null; renderPm(); },
+    dropTarget(key) { if (bulk.drop !== key) { bulk.drop = key; renderPm(); } },
+    free: () => bulk.free || { left: 0, top: 0, right: innerWidth, bottom: innerHeight },
+    set onChange(fn) { bulk.onChange = fn; },
+    get onChange() { return bulk.onChange; },
+    // Card management. These change saved card items only: never a note's text, the Product Library, or another page.
+    savedFor(key) { const id = bulk.notes.get(key); const it = id ? BL.findItem(id) : null; return it ? { id: it.id, record: it.cardRecord === true, mapping: mapped(it) ? clone(it.productMapping) : null, title: mapped(it) ? mapTitleOf(it.productMapping) : '' } : null; },
+    // Locate: the workspace stays open. The card is scrolled clear of it (docked: into the free area) and outlined in lime
+    // for about 1.5 s; nothing is saved or changed. Returns the card's rectangle so a floating workspace can step aside.
+    locate(key, n) {
+      const el = bulk.els.get(key);
+      if (!el || !el.isConnected) return null;
+      const free = bulk.free || { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+      const inside = (r) => r.top >= free.top + 8 && r.bottom <= free.bottom - 8 && r.left >= free.left && r.right <= free.right;
+      let r = el.getBoundingClientRect();
+      if (!inside(r)) {
+        el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+        r = el.getBoundingClientRect();
+        const fh = free.bottom - free.top; const fw = free.right - free.left;
+        const dy = r.height + 16 >= fh ? r.top - (free.top + 8) : (r.top + r.height / 2) - (free.top + fh / 2);
+        const dx = r.width >= fw ? 0 : (r.left + r.width / 2) - (free.left + fw / 2);
+        if (Math.abs(dy) > 1 || Math.abs(dx) > 1) window.scrollBy({ left: dx, top: dy, behavior: 'auto' });
+        r = el.getBoundingClientRect();
+      }
+      bulk.loc = { key, n: n || null };
+      clearTimeout(bulk.locT);
+      bulk.locT = setTimeout(() => { bulk.loc = null; renderPm(); }, 1700);
+      renderPm();
+      return { top: r.top, left: r.left, right: r.right, bottom: r.bottom };
+    },
+    // Remove Mapping: unassign the product from a saved card. The card definition and boundary stay (the card keeps its own
+    // card data); the Product Library, other cards and other notes are not touched.
+    async removeMapping(key) {
+      const Lb = libApi();
+      const it = bulk.notes.get(key) && BL.findItem(bulk.notes.get(key));
+      if (!it || !Lb || !mapped(it)) return { ok: false, msg: 'That card has no saved assignment to remove.' };
+      const r = await BL.workspace.edit((items) => items.map((i) => (i.id === it.id ? Lb.withoutAssignment(i) : i)));
+      if (!r.ok) return { ok: false, msg: r.error };
+      mapChecks.delete(it.id);
+      return { ok: true };
+    },
+    async removeCard(key) {
+      const it = bulk.notes.get(key) && BL.findItem(bulk.notes.get(key));
+      const Lb = libApi();
+      if (!it || !Lb) return { ok: false, msg: 'That card is not saved, so there is nothing to remove.' };
+      const r = await BL.workspace.edit((items) => items.flatMap((i) => (i.id !== it.id ? [i] : i.cardRecord === true ? [] : [Lb.withoutCard(i)])));
+      if (!r.ok) return { ok: false, msg: r.error };
+      mapChecks.delete(it.id); bulk.notes.delete(key);
+      return { ok: true };
+    },
+    async exclude(key, why) {
+      const C = cardsApi(); const Lb = libApi();
+      const el = bulk.els.get(key);
+      if (!C || !Lb || !el || !el.isConnected) return { ok: false, msg: 'That card is no longer on the page.' };
+      const it = bulk.notes.get(key) && BL.findItem(bulk.notes.get(key));
+      let info;
+      try { info = BL.describe(el, 'change'); } catch { info = { type: 'change', url: location.href, path: BL.currentPath(), page: S.page, el: { label: BL.label(el), selector: BL.cssPath(el), size: '' } }; }
+      const rec = Lb.newExclusionRecord(info, clone(C.describe(el)), BL.uid(), Date.now(), why || 'not-a-card');
+      // A saved card was a discovery seed: its exclusion keeps standing for the cards built like it, so excluding it never makes the others vanish.
+      if (it) rec.exclusion.seed = true;
+      const r = await BL.workspace.edit((items) => { const out = it ? items.flatMap((i) => (i.id !== it.id ? [i] : i.cardRecord === true ? [] : [Lb.withoutCard(i)])) : items; out.push(rec); return out; });
+      if (!r.ok) return { ok: false, msg: r.error };
+      if (it) { mapChecks.delete(it.id); bulk.notes.delete(key); }
+      bulk.manual.delete(el); bulk.incl.delete(el);
+      return { ok: true };
+    },
+    async restoreExcluded(key) {
+      const id = bulk.exclIds.get(key);
+      const el = bulk.els.get(key);
+      const Lb = libApi(); const C = cardsApi();
+      if (!id) return { ok: false, msg: 'That card is not in the excluded list.' };
+      const ex = BL.findItem(id);
+      // A restored card that was a discovery seed becomes a defined card record again (same fingerprint, no duplicate); any other
+      // restored card is simply proposed again. If nothing else on the page would find it, it is saved as a defined card too.
+      const toCard = (i) => { const n = clone(i); n.productCard = clone(n.exclusion.card); delete n.exclusion; delete n.noSeed; n.updatedAt = Date.now(); return n; };
+      if (ex && ex.exclusion?.seed && ex.exclusion.why !== 'boundary') {
+        const r = await BL.workspace.edit((items) => items.map((i) => (i.id === id ? toCard(i) : i)));
+        return r.ok ? { ok: true } : { ok: false, msg: r.error };
+      }
+      const r = await BL.workspace.edit((items) => items.filter((i) => i.id !== id));
+      if (!r.ok) return { ok: false, msg: r.error };
+      if (ex && el && el.isConnected && C && Lb) {
+        bulkScan();
+        let found = false;
+        for (const e of bulk.els.values()) if (e === el) found = true;
+        if (!found) {
+          const back = clone(ex);
+          const r2 = await BL.workspace.edit((items) => { if (items.some((i) => i.id === id)) return items; return [...items, toCard(back)]; });
+          if (!r2.ok) return { ok: false, msg: r2.error };
+        }
+      }
+      return { ok: true };
+    },
+    // Edit Card Boundary: the card is outlined and the same Parent / Child / Confirm workflow runs. A boundary change keeps the
+    // card's saved record (same id), its product and its fields; only fields that can't be found in the new boundary need a decision.
+    async boundary(key) {
+      const C = cardsApi(); const Lb = libApi();
+      const el = bulk.els.get(key);
+      if (!C || !Lb || !el || !el.isConnected) return { ok: false, msg: 'That card is no longer on the page.' };
+      let leaf = el;
+      while (leaf.firstElementChild) leaf = leaf.firstElementChild;
+      let pr = C.propose(leaf);
+      let at = pr.chain.indexOf(el);
+      if (at < 0) { pr = C.propose(el); at = pr.chain.indexOf(el); }
+      if (at < 0) pr = { chain: [el], broad: [false], confidence: 'adjust' }, at = 0;
+      const el2 = await adjustCard({ chain: pr.chain, broad: pr.broad, confidence: pr.confidence, at, lead: 'Current card boundary.', tool: 'Edit Card Boundary', saved: el });
+      if (!el2) return { ok: false, cancelled: true };
+      if (el2 === el) return { ok: true, same: true, key };
+      const it = bulk.notes.get(key) && BL.findItem(bulk.notes.get(key));
+      for (const o of S.batch?.items || []) {
+        if (o.path !== here() || (it && o.id === it.id)) continue;
+        const sc = savedCard(o);
+        let r = null;
+        if (sc) { try { r = C.evaluate(sc); } catch { r = null; } }
+        if (r && (r.state === 'confirmed' || r.state === 'hidden') && r.el === el2) return { ok: false, msg: 'That boundary is already another defined card. Pick a different one.' };
+      }
+      const newCard = clone(C.describe(el2));
+      const lostKeys = [];
+      if (it && mapped(it)) {
+        const fi = Lb.fieldItems(it.productMapping);
+        for (const k of Object.keys(fi)) { const f = fi[k]; if (f && f.state === 'confirmed' && f.ref) { let x; try { x = C.resolveFieldRef(el2, k, f.ref); } catch { x = null; } if (!x || x.state !== 'ok') lostKeys.push(k); } }
+      }
+      const apply = async () => {
+        let info;
+        try { info = BL.describe(el2, 'change'); } catch { info = { type: 'change', url: location.href, path: BL.currentPath(), page: S.page, el: { label: BL.label(el2), selector: BL.cssPath(el2), size: '' } }; }
+        const oldCard = clone(C.describe(el));
+        const stale = [];
+        for (const o of S.batch?.items || []) { if (Lb.isExclusion(o) && o.path === here()) { let r; try { r = C.evaluate(o.exclusion.card); } catch { r = null; } if (r && r.el === el2) stale.push(o.id); } }
+        const nid = BL.uid();
+        const r = await BL.workspace.edit((items) => {
+          let out = items.filter((i) => !stale.includes(i.id));
+          if (it) {
+            out.push(Lb.newExclusionRecord(info, oldCard, BL.uid(), Date.now(), 'boundary'));
+            out = out.map((i) => {
+              if (i.id !== it.id) return i;
+              const n = clone(i);
+              if (n.cardRecord === true) n.noSeed = true;
+              if (n.productMapping) { n.productMapping.card = newCard; for (const k of lostKeys) if (n.productMapping.fields?.items) delete n.productMapping.fields.items[k]; } else n.productCard = newCard;
+              n.updatedAt = Date.now();
+              return n;
+            });
+          } else {
+            const nr = Lb.newCardRecord(info, newCard, nid, Date.now()); nr.noSeed = true; out.push(nr);
+            out.push(Lb.newExclusionRecord(info, oldCard, BL.uid(), Date.now(), 'boundary'));
+          }
+          return out;
+        });
+        if (!r.ok) return { ok: false, msg: r.error };
+        bulk.manual.delete(el); bulk.incl.delete(el);
+        if (it) mapChecks.set(it.id, { state: 'current', notes: [] });
+        return { ok: true, key: elToken(el2), defined: true };
+      };
+      if (lostKeys.length) return { ok: true, needsConfirm: true, lost: lostKeys.map((k) => globalThis.BluelineCards?.FIELD_LABELS?.[k] || k), apply };
+      return apply();
+    },
+    clearCards() { return startFresh({ preset: 'cards', embedded: true }); },
+    include(key, on) { const el = bulk.els.get(key); if (!el) return; if (on) { bulk.excl.delete(el); bulk.incl.add(el); } else { bulk.incl.delete(el); bulk.excl.add(el); bulk.manual.delete(el); } },
+    peek(key, n) { const el = bulk.els.get(key); return el && el.isConnected ? peekEl(el, { tool: 'Assign Products', step: n ? `Showing card ${n} on the page` : 'Showing the card on the page', back: 'Back to Assign Products (Esc)' }) : Promise.resolve(false); },
+    // Selecting a card: bring it into view (clear of the workspace where possible). The outline is drawn with the marker.
+    focus(key) {
+      const el = bulk.els.get(key);
+      if (!el || !el.isConnected) return;
+      const r = el.getBoundingClientRect();
+      const free = bulk.free || { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+      if (r.top < free.top || r.bottom > free.bottom || r.left < free.left || r.right > free.right) el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+    },
+    // The area of the viewport the workspace leaves free (so a selected card is scrolled out from under it).
+    setFree(rect) { bulk.free = rect; },
+    // Docked workspaces reserve space and let the page reflow; this is reversible and only while Assign Products is open.
+    reserve(side, px) { bulkReserve(side, px); },
+    release() { bulkRelease(); },
+    // "Add a card Blueline missed": the existing page picker, then the existing card proposal around what was clicked.
+    // First card, when nothing on this page is known yet: the existing picker and card proposal, until a card or Esc.
+    async pickFirst() {
+      const C = cardsApi();
+      for (;;) {
+        const r = await pickOne('Click any part of a product card (its image, title or price). Esc cancels.', (n) => drawHl2(n), { tool: 'Assign Products', step: 'Click a product card on the page' });
+        if (!r?.el) return { ok: false, cancelled: true };
+        const p = C.propose(r.el);
+        const el = p.at >= 0 ? p.chain[p.at] : null;
+        if (!el) { toast('That doesn’t look like a product card. Click its image, title or price.'); continue; }
+        if (p.broad[p.at]) { toast('That looks like a whole section, not one card. Click inside a single card.'); continue; }
+        bulk.seed = el;
+        return { ok: true };
+      }
+    },
+    // "Define Product Card": the existing page picker and card proposal, then the person adjusts the outlined card with
+    // Parent / Child and presses Confirm Card. The confirmed card is saved by itself (a card record): no note, no
+    // description, no product. A card that is already defined is reported, never duplicated.
+    async define() {
+      const C = cardsApi();
+      if (!C) return { ok: false, msg: 'Card detection did not load. Reload the page.' };
+      for (;;) {
+        const r = await pickOne('', (n) => drawHl2(n), { tool: 'Define Product Card', step: 'Click any part of the product card (its image, title or price)' });
+        if (!r?.el) return { ok: false, cancelled: true };
+        const p = C.propose(r.el);
+        const chosen = await adjustCard(p);
+        if (!chosen) return { ok: false, cancelled: true };
+        return bulkDefine(chosen);
+      }
+    },
+    // "Find Similar Cards": the same discovery as after confirming a card, run again from every card already defined.
+    hasSeeds() { return !!(bulk.seed && bulk.seed.isConnected) || assignFindSeed(); },
+    setSeed(key) { const el = bulk.els.get(key); if (el && el.isConnected) bulk.seed = el; },
+    async pickMissed() {
+      const C = cardsApi();
+      const r = await pickOne('Click a product card Blueline missed. Esc cancels.', (n) => drawHl2(n), { tool: 'Card Mapping', step: 'Click the product card Blueline missed' });
+      if (!r?.el) return { ok: false, cancelled: true };
+      const p = C.propose(r.el);
+      const el = p.at >= 0 ? p.chain[p.at] : null;
+      if (!el) return { ok: false, msg: 'Blueline couldn’t find a product card around that. Click inside the card (its image, title or price).' };
+      if (p.broad[p.at]) return { ok: false, msg: 'That looks like a whole section, not one card. Click inside a single card.' };
+      const key = elToken(el);
+      const known = bulk.inc.get(key); // true: already numbered; false: listed but not included; undefined: not found at all
+      if (known === true) return { ok: true, key, already: true };
+      bulk.excl.delete(el);
+      if (known === false) bulk.incl.add(el); else bulk.manual.add(el);
+      return { ok: true, key };
+    },
+    marks(list) { bulk.marks = new Map(list.map((m) => [m.key, m])); renderPm(); },
+    dock(on) { bulk.dock = !!on; bulkPanel(); },
+    set onMark(fn) { bulk.onMark = fn; },
+    save: (key, next) => bulkPersist(key, next),
+    // The individual Card Mapping window for one card: the same window, fields and Save as everywhere else.
+    async edit(key, draft) {
+      const ui = BL.libraryUi;
+      const C = cardsApi();
+      const el = bulk.els.get(key);
+      if (mapBusy || !ui?.openMapping || !C || !el || !el.isConnected) return { action: 'cancel' };
+      const id = bulk.notes.get(key) || null;
+      const it = id ? BL.findItem(id) : null;
+      const card = bulkApi.card(key);
+      const saved = it && mapped(it) ? clone(it.productMapping) : null;
+      mapBusy = true;
+      const res = await ui.openMapping({
+        saved, draft: draft ? clone(draft) : null, card, context: 'bulk', fields: fieldApi(card),
+        getCheck: () => (id ? mapChecks.get(id) || null : null),
+        save: (next) => bulkPersist(key, next),
+      }).finally(() => { mapBusy = false; });
+      if (res.action === 'saved') { toast('Mapping saved.'); pmRefresh(); }
+      return res;
+    },
+    close() { bulkClear(); },
+  };
+  // Assign Products is opened from the Product Library. The first card comes from any saved note on this page whose card is
+  // still confirmed; with none, the person clicks one product card on the page.
+  function assignFindSeed() {
+    const C = cardsApi();
+    if (!C) return false;
+    for (const it of S.batch?.items || []) {
+      if (it.path !== here() || it.kind === 'page' || it.kind === 'region') continue;
+      const card = savedCard(it);
+      if (!card) continue;
+      let r;
+      try { r = C.evaluate(card); } catch { continue; }
+      if ((r.state === 'confirmed' || r.state === 'hidden') && r.el && r.el.isConnected) { bulk.seed = r.el; return true; }
+    }
+    for (const it of S.batch?.items || []) { // an excluded card that stood for its layout still lets Find Similar Cards run
+      if (it.path !== here() || !libApi()?.isExclusion(it) || !(it.exclusion.seed || it.exclusion.why === 'boundary')) continue;
+      let r;
+      try { r = C.evaluate(it.exclusion.card); } catch { continue; }
+      if ((r.state === 'confirmed' || r.state === 'hidden') && r.el && r.el.isConnected) return true;
+    }
+    return false;
+  }
+  // Reflow: while a docked Assign Products workspace is open, the page gets a margin on <html> on that side. The previous inline
+  // values are remembered and put back exactly; nothing else on the page is touched, and nothing is added when it is closed.
+  const RESERVE_PROP = { right: 'margin-right', left: 'margin-left', bottom: 'margin-bottom' };
+  function bulkReserve(side, px) {
+    const h = document.documentElement;
+    if (!bulk.saved) bulk.saved = {};
+    for (const [sd, prop] of Object.entries(RESERVE_PROP)) {
+      if (!(prop in bulk.saved)) bulk.saved[prop] = [h.style.getPropertyValue(prop), h.style.getPropertyPriority(prop)];
+      if (sd === side && px > 0) h.style.setProperty(prop, `${Math.round(px)}px`, 'important');
+      else if (bulk.saved[prop][0]) h.style.setProperty(prop, bulk.saved[prop][0], bulk.saved[prop][1]);
+      else h.style.removeProperty(prop);
+    }
+    bulk.side = px > 0 ? side : null;
+    requestAnimationFrame(() => { renderMarks(); });
+  }
+  function bulkRelease() {
+    if (!bulk.saved) return;
+    const h = document.documentElement;
+    for (const [prop, [v, pr]] of Object.entries(bulk.saved)) { if (v) h.style.setProperty(prop, v, pr); else h.style.removeProperty(prop); }
+    if (!h.getAttribute('style')) h.removeAttribute('style');
+    bulk.saved = null; bulk.side = null; bulk.free = null;
+    requestAnimationFrame(() => { renderMarks(); });
+  }
+  bulk.free = null;
+  const assignApi = {
+    api: bulkApi,
+    reset: () => bulkClear(),
+    findSeed: assignFindSeed,
+    pickFirst: () => bulkApi.pickFirst(),
+    begin: () => { bulk.open = true; },
+  };
+
+  // ------------------------------------------------------------------ Start Fresh / Restore Previous Session (Home)
+  // A destructive, page-scoped workspace action kept apart from the creation buttons. The data rules are in library.js
+  // (planReset / restorePlan) and the storage in content.js (BL.workspace); this is only the dialog.
+  const wsApi = () => BL.workspace;
+  const when = (t) => { try { return new Date(t).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); } catch { return ''; } };
+  const clearedText = (c) => [c.notes ? plural(c.notes, 'note') : '', c.cards ? plural(c.cards, 'defined product card') : '', c.assignments ? plural(c.assignments, 'product assignment') : ''].filter(Boolean).join(', ') || 'nothing';
+  let wsT = 0;
+  async function syncWorkspace() {
+    const W = wsApi();
+    const b = q('[data-x="restore-session"]');
+    if (!W || !b) return;
+    let info = null;
+    try { info = await W.snapshotInfo(); } catch { info = null; }
+    const el = q('[data-x="restore-session"]');
+    if (!el) return;
+    el.hidden = !info;
+  }
+  const syncWorkspaceSoon = () => { clearTimeout(wsT); wsT = setTimeout(() => { if (S.ui) syncWorkspace(); }, 120); };
+  try { chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && ch['blueline:restore'] && S.ui) syncWorkspaceSoon(); }); } catch { /* no storage in this context */ }
+
+  // One small modal helper: a title, some HTML, Cancel and a confirming button. Resolves true / false.
+  function askModal({ title, html, ok, danger }) {
+    return new Promise((resolve) => {
+      const modal = mk(`<div class="xmodal sf-modal"><div class="xsheet sf-sheet" role="alertdialog" aria-modal="true" aria-labelledby="sf-title"><header><b id="sf-title">${esc(title)}</b></header>${html}<footer><button class="ghost" data-sf="cancel">Cancel</button><button class="${danger ? 'xb danger solid' : 'primary'}" data-sf="ok">${esc(ok)}</button></footer></div></div>`);
+      const root = S.ui.root;
+      const back = root.activeElement;
+      const done = (v) => { modal.remove(); if (back?.isConnected) back.focus({ preventScroll: true }); resolve(v); };
+      modal.addEventListener('click', (e) => { const b = e.target.closest('[data-sf]'); if (b?.dataset.sf === 'cancel') done(false); else if (b?.dataset.sf === 'ok') done(true); });
+      modal.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(false); return; }
+        if (e.key !== 'Tab') return;
+        const order = [...modal.querySelectorAll('button:not(:disabled)')];
+        const at = root.activeElement;
+        if (e.shiftKey && at === order[0]) { e.preventDefault(); order[order.length - 1].focus(); } else if (!e.shiftKey && at === order[order.length - 1]) { e.preventDefault(); order[0].focus(); }
+      });
+      root.appendChild(modal);
+      modal.querySelector('[data-sf="cancel"]').focus({ preventScroll: true });
+    });
+  }
+
+  async function startFresh(opts = {}) {
+    const W = wsApi();
+    if (!W || !libApi()) { toast('Start Fresh did not load. Reload the page.'); return; }
+    if (S.pop) { toast('Save or cancel the note you’re editing first.'); return; }
+    if (bulk.open && !opts.embedded) { toast('Close Assign Products first.'); return; }
+    const have = (await W.summary()).have;
+    const OPTS = [
+      ['notes', 'Notes and annotations', 'Removes the current page’s saved notes and associated CSS edits/previews.', 'Your defined cards and assignments stay.', have.notes, 'note'],
+      ['cards', 'Defined product cards', 'Removes saved product-card definitions for this page.', 'Also removes their product assignments.', have.cards, 'defined card'],
+      ['assignments', 'Product assignments', 'Removes saved product assignments and associated field-level mapping data for this page.', 'Your defined cards stay.', have.assignments, 'assignment'],
+    ];
+    const modal = mk(`<div class="xmodal sf-modal"><div class="xsheet sf-sheet" role="alertdialog" aria-modal="true" aria-labelledby="sf-title" aria-describedby="sf-sub">
+      <header><b id="sf-title">Start Fresh</b></header>
+      <p class="sub" id="sf-sub">Choose what to clear from this page.<br>Other pages and websites will not be affected.</p>
+      <div class="sf-scope" role="radiogroup" aria-label="Reset scope" data-sf-step="choose"><label><input type="radio" name="sf-scope" value="page" data-sf-scope="page" checked> <span>This page only</span></label><label class="sf-scope-all"><input type="radio" name="sf-scope" value="all" data-sf-scope="all"> <span>Reset all Blueline work</span></label></div>
+      <div class="sf-page" data-sf-mode="page"><b>This page</b> <code>${esc(W.pageLabel())}</code></div>
+      <div class="sf-opts" data-sf-step="choose" data-sf-mode="page">${OPTS.map(([k, t, d, dep, n, one]) => `<label class="sf-opt" data-opt="${k}"><input type="checkbox" data-sf-box="${k}"><span><b>${esc(t)}</b><em>${esc(d)}</em><em class="sf-dep">${esc(dep)}</em><span class="sf-n">${n ? `${plural(n, one)} saved on this page` : `No ${one}s saved on this page`}</span></span></label>`).join('')}</div>
+      <div class="sf-all" data-sf-step="choose" data-sf-mode="all" hidden>
+        <p class="sf-warn"><b>Reset all Blueline work</b> clears everything Blueline saved on <b>ALL pages and websites</b>, not just this one: notes and annotations, defined product cards, product assignments, saved page changes, guides, reports, screenshots and recovery copies.</p>
+        <label class="sf-opt" data-opt="library"><input type="checkbox" data-sf-all="library"><span><b>Also delete all Product Library lists and imported data</b><em>Removes every Product Library list, imported record and product approval, for ALL sites and pages. Without this, your lists stay (without any page mappings).</em><span class="sf-n" data-sf-libn></span></span></label>
+        <label class="sf-opt" data-opt="settings"><input type="checkbox" data-sf-all="settings"><span><b>Also reset Blueline settings and preferences</b><em>Restores the panel side, docking and other settings to their first-use defaults.</em></span></label>
+      </div>
+      <div class="sf-sum" aria-live="polite" data-sf-step="choose">Choose at least one.</div>
+      <div class="sf-final" data-sf-step="final" hidden><b>Are you sure?</b><div class="sf-fsum"></div><div class="sub" data-sf-mode="page">This page only: <code>${esc(W.pageLabel())}</code>. Your Product Library, imported product lists, approvals, settings and every other page or website are not touched. A recovery copy is saved first; you can bring it back with Restore.</div><div class="sub sf-allnote" data-sf-mode="all" hidden>This covers EVERY page and website, and it cannot be undone: recovery copies are cleared too. Only data Blueline saved itself is removed. Your files, the websites you reviewed and your other browser data are not touched.</div></div>
+      <footer><button class="ghost" data-sf="cancel">Cancel</button><button class="ghost" data-sf="back" hidden>Back</button><button class="xb danger solid" data-sf="go" disabled>Review what will be cleared</button></footer></div></div>`);
+    const root = S.ui.root;
+    const back = root.activeElement;
+    const $ = (s) => modal.querySelector(s);
+    const boxes = Object.fromEntries(OPTS.map(([k]) => [k, $(`[data-sf-box="${k}"]`)]));
+    let stage = 'choose';
+    let planned = null;
+    let busy = false;
+    let mode = 'page';
+    let gsum = null;
+    const allOpt = (k) => $(`[data-sf-all="${k}"]`).checked;
+    const scope = () => ({ notes: boxes.notes.checked, cards: boxes.cards.checked, assignments: boxes.assignments.checked || boxes.cards.checked });
+    const done = () => { modal.remove(); if (back?.isConnected) back.focus({ preventScroll: true }); };
+    const allText = () => {
+      const g = gsum;
+      const parts = [g.notes ? plural(g.notes, 'note') : '', g.cards ? plural(g.cards, 'defined product card') : '', g.assignments ? plural(g.assignments, 'product assignment') : '', g.guides ? plural(g.guides, 'guide') : '', g.reports ? plural(g.reports, 'report') : '', g.copies ? `${g.copies} recovery cop${g.copies === 1 ? 'y' : 'ies'}` : '', g.shots ? plural(g.shots, 'saved screenshot') : ''].filter(Boolean);
+      const lead = `all saved Blueline work on ${plural(g.pages, 'page')} across ${plural(g.sites, 'website')}${parts.length ? ` (${parts.join(', ')})` : ''}`;
+      const extra = [allOpt('library') ? `ALL Product Library lists (${plural(g.lists, 'list')}, ${plural(g.products, 'product')}) and their imported data, approvals and last-used references` : '', allOpt('settings') ? 'Blueline settings and preferences (reset to defaults)' : ''].filter(Boolean);
+      return { lead, extra, text: `${lead}${extra.length ? `; also ${extra.join('; and ')}` : ''}` };
+    };
+    const syncAll = async () => {
+      gsum = await W.globalSummary();
+      const t = allText();
+      const none = !gsum.work && !allOpt('library') && !allOpt('settings') && !(gsum.lists && false);
+      $('[data-sf-libn]').textContent = gsum.lists ? `${plural(gsum.lists, 'list')} with ${plural(gsum.products, 'product')} saved` : 'No Product Library lists are saved';
+      $('.sf-sum').textContent = none ? 'There is nothing saved to clear.' : `This will clear: ${t.text}.`;
+      $('[data-sf="go"]').disabled = busy || none;
+    };
+    const sync = async () => {
+      if (mode === 'all') { await syncAll(); return; }
+      // Removing cards always removes their assignments: shown, and the assignments box is locked on.
+      boxes.assignments.disabled = boxes.cards.checked;
+      if (boxes.cards.checked) boxes.assignments.checked = true;
+      for (const [k] of OPTS) $(`[data-opt="${k}"]`).classList.toggle('on', boxes[k].checked);
+      const sc = scope();
+      const any = sc.notes || sc.cards || sc.assignments;
+      const r = any ? await W.summary(sc) : { cleared: null };
+      planned = r.cleared;
+      const none = !any || (planned && !planned.notes && !planned.cards && !planned.assignments);
+      $('.sf-sum').textContent = !any ? 'Choose at least one.' : none ? 'There is nothing saved on this page for those choices.' : `This will clear: ${clearedText(planned)}.`;
+      $('[data-sf="go"]').disabled = busy || none;
+    };
+    const show = (st) => {
+      stage = st;
+      for (const el of modal.querySelectorAll('[data-sf-step], [data-sf-mode]')) el.hidden = (el.dataset.sfStep !== undefined && el.dataset.sfStep !== st) || (el.dataset.sfMode !== undefined && el.dataset.sfMode !== mode);
+      const scp = $('.sf-scope'); if (scp) scp.hidden = st !== 'choose';
+      $('[data-sf="back"]').hidden = st !== 'final';
+      const go = $('[data-sf="go"]');
+      go.textContent = st === 'final' ? (mode === 'all' ? 'Yes, reset all Blueline work' : 'Yes, clear this page’s data') : 'Review what will be cleared';
+      if (st === 'final') $('.sf-fsum').textContent = mode === 'all' ? `Reset ${allText().text}.` : `Clear ${clearedText(planned)} from ${W.pageLabel()}.`;
+      if (!opts.embedded || mode === 'all') $('#sf-sub').innerHTML = mode === 'all' ? 'Reset all Blueline work: every page and website.<br>This is not limited to the page you are on.' : 'Choose what to clear from this page.<br>Other pages and websites will not be affected.';
+    };
+    modal.addEventListener('change', (e) => {
+      if (e.target.dataset?.sfScope) { mode = e.target.dataset.sfScope; show('choose'); }
+      sync();
+    });
+    modal.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-sf]');
+      if (!b || busy) return;
+      if (b.dataset.sf === 'cancel') done();
+      else if (b.dataset.sf === 'back') { show('choose'); sync(); }
+      else if (b.dataset.sf === 'go' && !b.disabled) {
+        if (stage === 'choose') { show('final'); $('[data-sf="go"]').focus({ preventScroll: true }); return; }
+        busy = true; b.disabled = true; b.textContent = 'Clearing…';
+        const r = mode === 'all' ? await W.resetAll({ library: allOpt('library'), settings: allOpt('settings') }) : await W.reset(scope());
+        busy = false;
+        if (r.ok) {
+          if (opts.embedded) { bulk.seed = null; bulk.incl.clear(); bulk.excl.clear(); bulk.manual.clear(); } else bulkClear();
+          done();
+          if (opts.embedded) BL.libraryUi?.refreshWorkspace?.();
+          toast(mode === 'all' ? `Reset all Blueline work${r.library ? ', including the Product Library' : ''}${r.settings ? ' and settings' : ''}.` : `Cleared ${clearedText(r.cleared)}. Restore brings it back.`);
+          syncWorkspace();
+          usableSig = ''; syncLibBtn();
+        } else { show('choose'); sync(); $('.sf-sum').textContent = r.error || 'Nothing was cleared.'; }
+      }
+    });
+    modal.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (!busy) done(); return; }
+      if (e.key !== 'Tab') return;
+      const order = [...modal.querySelectorAll('input:not(:disabled), button:not(:disabled):not([hidden])')];
+      const at = root.activeElement;
+      if (e.shiftKey && at === order[0]) { e.preventDefault(); order[order.length - 1].focus(); } else if (!e.shiftKey && at === order[order.length - 1]) { e.preventDefault(); order[0].focus(); }
+    });
+    root.appendChild(modal);
+    show('choose');
+    if (opts.preset === 'cards') {
+      // "Clear All Cards" from Assign Products: this same dialog, this page only, with the card option already chosen.
+      $('.sf-scope').remove();
+      $('#sf-title').textContent = 'Clear All Cards';
+      boxes.cards.click();
+    }
+    sync();
+    (opts.preset === 'cards' ? $('[data-sf="cancel"]') : boxes.notes).focus({ preventScroll: true });
+  }
+
+  async function restoreSession() {
+    const W = wsApi();
+    if (!W) return;
+    if (S.pop) { toast('Save or cancel the note you’re editing first.'); return; }
+    const pv = await W.restorePreview();
+    if (!pv) { toast('There is no earlier session to restore for this page.'); syncWorkspace(); return; }
+    // The recovery details live here, not on Home: when it was cleared, what, and anything that changed since.
+    const n = pv.count;
+    const parts = n ? [n.changed ? `${plural(n.changed, 'item')} changed` : '', n.added ? `${plural(n.added, 'item')} added` : '', n.removed ? `${plural(n.removed, 'item')} removed` : ''].filter(Boolean).join(', ') : '';
+    const html = `<p class="sub sf-rdet">Cleared ${esc(when(pv.at))}: ${esc(clearedText(pv.cleared || {}))}.</p>` + (n ? `<p class="sub">Work on this page has changed since you cleared it (${esc(parts)}). Restoring puts back exactly what was saved before, so the cards and assignments made since will be replaced. Notes you added since are kept.</p>` : '<p class="sub">Nothing on this page has changed since, so it comes back exactly as it was.</p>');
+    const ok = await askModal({ title: 'Restore previous session?', ok: n ? 'Restore and replace' : 'Restore', danger: !!n, html });
+    if (!ok) return;
+    const r = await W.restore(true);
+    if (r.ok) { toast(`Restored ${clearedText(r.restored)}.`); syncWorkspace(); } else toast(r.error || 'Nothing was restored.');
+  }
+
+  // Home > Define Product Card: the same note-independent definition flow as inside Assign Products (bulkApi.define), available
+  // with or without a Product Library list. When a card was saved the discovered cards are shown in Assign Products.
+  let defining = false;
+  // After "Reset all Blueline work": the design overlay and price sheet held in memory go too, and a pending write of either is cancelled.
+  hooks.onFullReset = () => {
+    clearTimeout(ovSaveT);
+    OV.state = { dataUrl: null, opacity: 50, width: 0, x: 0, y: 0, diff: false, visible: true };
+    paintOverlay(); syncOverlayPanel();
+    sheet = null; try { renderSheet(); } catch { /* the sheet window is not open */ }
+    histories.clear(); historyOrder = [];
+    bulkClear();
+    BL.libraryUi?.afterReset?.();
+  };
+  async function defineFromHome() {
+    if (defining || S.pop || T.pick || bulk.open) { if (S.pop) toast('Save or cancel the note you\u2019re editing first.'); return; }
+    defining = true;
+    let r = null;
+    try { r = await bulkApi.define(); } catch { r = null; }
+    defining = false;
+    if (!r) return;
+    if (!r.ok) { if (!r.cancelled) toast(r.msg || 'That card could not be defined.'); return; }
+    toast(r.already ? 'That card is already defined.' : 'Card saved. Looking for similar cards…');
+    if (BL.libraryUi?.assignStart) BL.libraryUi.assignStart();
+  }
+
   // The "Product Library" button under + Add note: only when at least one saved list exists.
   let libCount = 0;
   async function syncLibBtn() {
@@ -2609,12 +3529,25 @@
     const Lb = libApi();
     if (!b || !Lb) return;
     let n = 0;
-    try { n = (await Lb.loadIndex(chrome.storage.local)).libs.length; } catch { n = 0; }
+    let usable = false;
+    try {
+      const idx = await Lb.loadIndex(chrome.storage.local);
+      n = idx.libs.length;
+      // "Assign Products" needs a list that has products; looked up again only when the saved lists change.
+      const sig = JSON.stringify(idx.libs.map((l) => [l.store, l.campaign, l.updatedAt]));
+      if (sig !== usableSig) { usableSig = sig; usableList = n ? (await Lb.listSummaries(chrome.storage.local)).some((l) => l.products > 0) : false; }
+      usable = usableList;
+    } catch { n = 0; }
     libCount = n;
     const el = q('[data-x="lib-home"]');
     if (el) el.hidden = n < 1;
+    const ag = q('[data-x="assign-home"]');
+    if (ag) ag.hidden = !usable;
+    syncWorkspaceSoon();
   }
-  hooks.onLibraryLists = (n) => { libCount = n; const el = q('[data-x="lib-home"]'); if (el) el.hidden = n < 1; };
+  let usableSig = '';
+  let usableList = false;
+  hooks.onLibraryLists = (n) => { libCount = n; usableSig = ''; syncLibBtn(); };
 
   function detectIssuesSafe(el) { try { return BL.detectIssues(el); } catch { return []; } }
 
@@ -2641,7 +3574,7 @@
       const n = P.els.length + P.missing.length;
       list = `<div class="sel-sum"><span class="tb-h">Selected elements (${n})</span><button class="xb" data-x="sel-showall" aria-expanded="${!!T.selOpen}">${T.selOpen ? 'Hide list' : `Show all ${n} elements`}</button></div><div class="sel-list"${T.selOpen ? '' : ' hidden'}>${[...rows, ...gone].join('')}</div>`;
     }
-    const num = editing ? S.batch.items.indexOf(P.item) + 1 : 0;
+    const num = editing ? noteNo(P.item) : 0;
     let hint = '';
     if (A.on) hint = A.keep ? 'Click each element you want to add, then press Done.' : A.mode === 'area' ? 'Drag a rectangle over what you mean.' : 'Click an element on the page (or drag around it).';
     else if (none) hint = `${PICK_HINT}${P.cleared || editing ? '' : ' Or skip this to save a general note about the whole page.'}`;
@@ -4051,9 +4984,17 @@
     const Lb = libApi();
     box.classList.toggle('quiet', !!S.picking);
     const specs = [];
+    // Card Mapping overview: ONE marker per card, numbered, in place of the green "Mapped" badge. Only while that window is open.
+    const inBulk = new Set();
+    for (const [key, bm] of bulk.marks) {
+      const el = bulk.els.get(key);
+      if (!el || !el.isConnected) continue;
+      inBulk.add(el);
+      specs.push({ k: `bk:${key}`, bk: bm, key, el });
+    }
     for (const it of S.batch?.items || []) {
       const ev = pmEval.get(it.id);
-      if (!Lb || !ev || !ev.el || !ev.el.isConnected || !mapped(it)) continue;
+      if (!Lb || !ev || !ev.el || !ev.el.isConnected || !mapped(it) || inBulk.has(ev.el)) continue;
       const m = it.productMapping;
       const title = Lb.effectiveValues(m).title || m.product.name || m.product.key;
       const pend = T.pmPending && T.pmPending.id === it.id ? T.pmPending : null; // a replacement being edited in the Product Mapping window
@@ -4067,6 +5008,22 @@
         n.style.display = off ? 'none' : '';
         Object.assign(n.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
         const b = n.querySelector('.pmb');
+        const isLoc = !!(s.bk && bulk.loc && bulk.loc.key === s.key);
+        n.className = s.bk ? `pmk bkst-${s.bk.state}${s.bk.sel ? ' bksel' : ''}${bulk.drag ? ' bkelig' : ''}${bulk.drop === s.key ? ' bkdrop' : ''}${isLoc ? ' bkloc' : ''}` : 'pmk';
+        let tg = n.querySelector('.bkloc-tag');
+        if (!isLoc) { if (tg) tg.remove(); } else {
+          if (!tg) { tg = document.createElement('span'); tg.className = 'bkloc-tag'; n.appendChild(tg); }
+          tg.textContent = `Located · Card #${bulk.loc.n}`;
+          tg.style.top = `${Math.min(Math.max(6, 6 - r.top), Math.max(6, r.height - 28)) + 32}px`;
+        }
+        if (s.bk) {
+          b.dataset.x = 'bk-mark'; b.dataset.key = s.key; delete b.dataset.id;
+          b.className = `pmb bk ${s.bk.state}${s.bk.sel ? ' sel' : ''}`;
+          b.textContent = s.bk.text; b.title = s.bk.label || s.bk.text; b.setAttribute('aria-label', s.bk.label || s.bk.text);
+          b.style.top = `${Math.min(Math.max(6, 6 - r.top), Math.max(6, r.height - 28))}px`;
+          return;
+        }
+        b.dataset.x = 'pm-open'; delete b.dataset.key; b.className = 'pmb';
         b.dataset.id = s.id;
         b.classList.toggle('attn', s.attn);
         b.classList.toggle('pend', s.pend);
@@ -4085,7 +5042,7 @@
     box.classList.toggle('quiet', badgesOnly);
     const specs = [];
     const slotOf = new Map();
-    (S.batch?.items || []).forEach((it, idx) => {
+    (S.batch?.items || []).filter((it) => it.cardRecord !== true).forEach((it, idx) => {
       if (it.path !== here() || it.kind === 'page') return;
       const cls = `${it.type === 'bug' ? 'bug' : ''}${badgesOnly ? ' badge-only' : ''}${T.hot === it.id ? ' hot' : ''}`;
       if (it.kind === 'region') { specs.push({ k: `${it.id}:r`, num: idx + 1, id: it.id, cls: `${cls} region`, rect: regionRect(it) }); return; }
@@ -4739,6 +5696,7 @@
       case 'previews': S.prefs.previews = S.prefs.previews === false; BL.savePrefs(); applyAllPreviews(); updateToolbar(); break;
       case 'undo': undoAction(); break;
       case 'marks': S.prefs.marks = outlinesOn() ? 'badges' : 'full'; BL.savePrefs(); updateToolbar(); renderAnn(); break;
+      case 'mini-act': T.pick?.onAct?.(b.dataset.id); break;
       case 'bar-cancel': if (T.pick) endPick(null); else if (D.tool) stopDrawing(); else if (A.on) setAnnotate(false); break;
       case 'g-v': addGuide('x'); break;
       case 'g-h': addGuide('y'); break;
@@ -4827,7 +5785,12 @@
       case 'card-cands': cardCandidates(); break;
       case 'card-slot': cardShowSlot(+b.dataset.i); break;
       case 'map-start': mapOpen(); break;
+      case 'bk-mark': bulk.onMark?.(b.dataset.key); break;
       case 'lib-home': if (BL.libraryUi?.open) BL.libraryUi.open({ existing: true }); break;
+      case 'define-home': defineFromHome(); break;
+      case 'assign-home': if (BL.libraryUi?.assignStart) BL.libraryUi.assignStart(); break;
+      case 'start-fresh': startFresh(); break;
+      case 'restore-session': restoreSession(); break;
       case 'card-fields': P.cardFields = !P.cardFields; renderCard(); break;
       case 'map-remove': P.mapRm = true; renderCard(); break;
       case 'map-remove-no': P.mapRm = false; renderCard(); break;
@@ -5412,7 +6375,7 @@
   // the person cancels (nothing is saved).
   function conflictDialog(list, freshNote, freshNumber) {
     return new Promise((resolve) => {
-      const items = S.batch?.items || [];
+      const items = (S.batch?.items || []).filter((i) => i.cardRecord !== true);
       const clipNote = (it) => { const n = it.note ? clip(it.note.replace(/\s+/g, ' '), 70) : noteSummary(it); return `“${esc(n)}”`; };
       const groups = new Map();
       for (const c of list) { const k = `${c.target}|${c.prop}`; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(c); }
@@ -5474,7 +6437,7 @@
     if (!list.length) return true;
     settling = true;
     try {
-      const choices = await conflictDialog(list, note, id ? (S.batch?.items || []).findIndex((i) => i.id === id) + 1 : 0);
+      const choices = await conflictDialog(list, note, id ? noteNo(BL.findItem(id)) : 0);
       if (!choices) return false;
       applyConflictChoices(list, choices);
       extra.touchedOthers = true;
@@ -5877,7 +6840,7 @@
     }
     // Product Mapping: written from the saved snapshot only, so the (synchronous) report never waits on the library.
     if (it.productMapping) {
-      const lines = globalThis.BluelineLibrary?.mappingReportLines?.(it.productMapping, { check: mapChecks.get(it.id) || null });
+      const lines = globalThis.BluelineLibrary?.mappingReportLines?.(it.productMapping, { check: mapChecks.get(it.id) || null, fieldCheck: it.path === here() ? fieldCheckFor(it.productMapping) : null });
       if (lines) L.push(...lines);
       else L.push('- A Product Mapping is saved with this note, but the Product Library module did not load. Reload the page and export again.');
     }
@@ -5893,6 +6856,7 @@
   // ------------------------------------------------------------------ exports for tests
 
   BL.toolsApi = {
+    assign: assignApi,
     elementFields, chooseElement, rememberElement, renderChanges, elKind, previewAlign, realign, layoutRect, holdPosition, restoreElementRecord, visitElement, arrowHit, editArrowPointer, setDrawingColor, applyItemPreview, revertLive, removeGuide, styleInput, togglePopHide, buildAlignRows, emptyPop,
     similarSelector, similar, groupOptions, scopeInfo, tokenHint, spacingClasses, regionContext, measureRects, measureText, parseCSV, sheetFromRows, checkPrices,
     normForVar, stepVal, normInput, compositeFor, composeCss, stepNum, cssTokens, findCssConflicts, applyConflictChoices, reviveSetAside, priceReportText, scopeLines, marksSummary, snapTo, autoSelect, pointTarget, startSelect, startArea, T, A, D, getP: () => P, setP: (p) => { P = p; }, setAnnotate, setTarget, makeDraggable,

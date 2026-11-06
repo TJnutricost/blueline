@@ -1026,6 +1026,7 @@
     else next = ensureReplacement(next);
     const sameProduct = current && current.product && current.product.key === next.product.key && current.list && current.list.id === next.list.id && (current.list.store || '') === (next.list.store || '');
     if (sameProduct && current.overrides) next.overrides = deepCopy(current.overrides);
+    if (current && current.fields) next.fields = deepCopy(current.fields); // page elements belong to the card, not to the product
     if (approve && replacementPending(next)) next = approveMappingReplacement(next, { resolutions, now });
     return next;
   }
@@ -1035,6 +1036,7 @@
     if (!isMapping(m)) throw new Error('There is no mapping.');
     const next = ensureReplacement(productMappingSnapshot(lib, m.product.key, { origin: m.origin, card: m.card || null }));
     if (m.overrides) next.overrides = deepCopy(m.overrides);
+    if (m.fields) next.fields = deepCopy(m.fields);
     return next;
   }
 
@@ -1121,10 +1123,117 @@
     return out.slice(0, limit);
   }
 
+  // ---- M4: the card's page elements (fields) and the discount they imply
+  //
+  // `fields` sits beside `overrides` on the mapping: { v: 1, items: { title, image, sale, regular, badge, cta, link } },
+  // each item `{ state: 'confirmed' | 'unmapped', source, how, ref, detected, at }`. `ref` is how the element is found again
+  // (see cards.js: path, tag, classes, fingerprint, optional unique attribute), relative to the card, never to the page.
+  // 'confirmed' means a person accepted, chose or picked that element; 'unmapped' means they said the card has none.
+  // A suggestion that was never accepted is not stored. Assigning an element changes no value: prices, title and link
+  // are still the approved values and the page-specific overrides above. None of this touches the list, the imported
+  // file, the store or the variant.
+  const FIELD_KEYS = ['title', 'image', 'sale', 'regular', 'badge', 'cta', 'link'];
+  const FIELD_LABELS = { title: 'Title', image: 'Image', sale: 'Sale price', regular: 'Regular price', badge: 'Discount badge', cta: 'Add to Cart button', link: 'Product link' };
+  const fieldItems = (m) => {
+    const it = m && m.fields && typeof m.fields === 'object' && m.fields.items && typeof m.fields.items === 'object' ? m.fields.items : {};
+    const out = {};
+    for (const k of FIELD_KEYS) if (it[k] && typeof it[k] === 'object' && (it[k].state === 'confirmed' || it[k].state === 'unmapped')) out[k] = it[k];
+    return out;
+  };
+  // Assigns (or, with null, forgets) one field. Returns a new mapping.
+  function setFieldAssignment(m, key, a, { now = Date.now() } = {}) {
+    if (!isMapping(m)) throw new Error('There is no mapping to edit.');
+    if (!FIELD_KEYS.includes(key)) throw new Error('That field can’t be mapped.');
+    const next = deepCopy(m);
+    const items = { ...fieldItems(next) };
+    if (a == null) delete items[key];
+    else if (a.state === 'confirmed' && items[key]?.state === 'confirmed' && JSON.stringify(items[key].ref) === JSON.stringify(a.ref)) { /* the same element again: nothing changes */ }
+    else if (a.state === 'unmapped' && items[key]?.state === 'unmapped') { /* already so */ }
+    else {
+      if (a.state !== 'confirmed' && a.state !== 'unmapped') throw new Error('Unknown field state.');
+      if (a.state === 'confirmed' && !(a.ref && typeof a.ref === 'object' && typeof a.ref.tag === 'string')) throw new Error('A confirmed field needs the element it points to.');
+      items[key] = a.state === 'unmapped'
+        ? { state: 'unmapped', source: 'person', at: now }
+        : { state: 'confirmed', source: a.source || 'suggested', how: a.how || null, ref: deepCopy(a.ref), detected: deepCopy(a.detected || null), at: now };
+    }
+    const ordered = {};
+    for (const k of FIELD_KEYS) if (items[k]) ordered[k] = items[k];
+    if (Object.keys(ordered).length) next.fields = { v: 1, items: ordered }; else delete next.fields;
+    return next;
+  }
+
+  // Whole-number percent off, from integer cents: ((regular - sale) / regular) * 100, rounded half up. null when either
+  // price is missing or invalid, or when the sale price is higher than the regular price. Never inferred from a badge.
+  function discountPercent(regularCents, saleCents) {
+    if (!Number.isInteger(regularCents) || !Number.isInteger(saleCents) || regularCents <= 0 || saleCents < 0 || saleCents > regularCents) return null;
+    return Math.floor(((regularCents - saleCents) * 200 + regularCents) / (2 * regularCents));
+  }
+  // The discount the approved (and page-specific) prices give, and whether a displayed badge agrees. `badge` is what the
+  // page shows ({ kind: 'percent', percent } or { kind: 'amount', cents }), or null.
+  function discountInfo(m, badge = null) {
+    const ev = effectiveValues(m);
+    const regularCents = ev.regularCents; const saleCents = ev.promoCents;
+    const percent = discountPercent(regularCents, saleCents);
+    let why = null;
+    if (percent === null) {
+      why = !Number.isInteger(regularCents) ? 'no approved regular price' : !Number.isInteger(saleCents) ? 'no approved sale price' : 'the sale price is not lower than the regular price';
+    }
+    let discrepancy = null;
+    let badgeNote = null;
+    if (badge) {
+      if (badge.placeholder) badgeNote = 'the badge is a placeholder with no number yet';
+      else if (percent === null) badgeNote = 'the badge can’t be checked without both approved prices';
+      else if (badge.kind === 'percent' && Number.isInteger(badge.percent)) { if (badge.percent !== percent) discrepancy = `the badge says ${badge.percent}% off but the approved prices give ${percent}%`; }
+      else if (badge.kind === 'amount' && Number.isInteger(badge.cents)) { const diff = regularCents - saleCents; if (badge.cents !== diff) discrepancy = `the badge says ${fmt(badge.cents, m.approved?.currency || undefined)} off but the approved prices differ by ${fmt(diff, m.approved?.currency || undefined)}`; }
+    }
+    return { regularCents: Number.isInteger(regularCents) ? regularCents : null, saleCents: Number.isInteger(saleCents) ? saleCents : null, percent, why, discrepancy, badgeNote };
+  }
+
+  const FIELD_STATE_TEXT = { ok: 'confirmed', moved: 'needs review: it moved', ambiguous: 'needs review: several look-alikes', changed: 'needs review: something else is there now', invalid: 'needs review: it no longer holds this value', missing: 'needs review: not found on the page' };
+  // Report lines for the card's mapped page elements. `check` = { items: { key: { state, reasons, value } } } from the page,
+  // when it was checked this session; without it the lines say only what was saved. Never claims Add to Cart is wired.
+  function fieldReportLines(m, { check = null } = {}) {
+    const items = fieldItems(m);
+    if (!Object.keys(items).length) return [];
+    const code = (s) => '`' + String(s).replace(/`/g, "'") + '`';
+    const ev = effectiveValues(m);
+    const cur = m.approved?.currency || undefined;
+    const money = (c) => (Number.isInteger(c) ? fmt(c, cur) : null);
+    const L = ['  - Page elements in this card (mapped by the person; where each value goes. Nothing is wired to the cart or checkout yet):'];
+    const approvedOf = { title: ev.title, sale: money(ev.promoCents), regular: money(ev.regularCents), link: ev.url, image: ev.image };
+    const unresolved = [];
+    const unmapped = [];
+    for (const k of FIELD_KEYS) {
+      const it = items[k];
+      if (!it) continue;
+      if (it.state === 'unmapped') { unmapped.push(FIELD_LABELS[k]); continue; }
+      const chk = check?.items?.[k];
+      const where = it.ref?.path === '^' ? 'the link around the card' : code(it.ref?.sel || it.ref?.path || it.ref?.tag || '?') + ' within the card';
+      const state = chk ? (FIELD_STATE_TEXT[chk.state] || chk.state) : 'as saved; not re-checked on the page yet';
+      const seen = chk?.value ? (chk.value.href || chk.value.src || chk.value.text) : (it.detected?.href || it.detected?.src || it.detected?.text);
+      const approved = approvedOf[k];
+      let line = `    - ${FIELD_LABELS[k]}: ${where} (${state})`;
+      if (seen) line += `; page ${chk?.value ? 'shows' : 'showed when mapped'} “${String(seen).slice(0, 70)}”`;
+      if (approved && seen && (k === 'sale' || k === 'regular' || k === 'title') && String(seen).replace(/\s+/g, ' ').trim() !== String(approved).replace(/\s+/g, ' ').trim()) line += `; approved ${k === 'title' ? '“' + approved + '”' : approved}`;
+      L.push(line);
+      if (chk && chk.state !== 'ok') unresolved.push(`${FIELD_LABELS[k]} (${(chk.reasons || [])[0] || chk.state})`);
+    }
+    if (unmapped.length) L.push(`    - Not on this card: ${unmapped.join(', ')}`);
+    if (unresolved.length) L.push(`    - **Review before using:** ${unresolved.join('; ')}`);
+    const badge = check?.items?.badge?.value?.badge || items.badge?.detected?.badge || null;
+    const d = discountInfo(m, badge);
+    if (items.sale || items.regular || items.badge) {
+      L.push(d.percent !== null
+        ? `    - Discount: ${d.percent}% off, from approved regular ${money(d.regularCents)} and sale ${money(d.saleCents)}${(m.overrides && (m.overrides.regularCents != null || m.overrides.promoCents != null)) ? ' (includes this page’s price override)' : ''}${d.discrepancy ? `. **Mismatch:** ${d.discrepancy}` : badge && !badge.placeholder ? '. The page badge agrees' : ''}`
+        : `    - Discount: not calculated (${d.why})${d.badgeNote ? `; ${d.badgeNote}` : ''}`);
+    }
+    return L;
+  }
+
   // The report lines for a saved mapping, from the snapshot only (the report is built synchronously and nothing is
   // re-read from the library or the store). Every line is a bullet; nothing is added that the snapshot doesn't hold, and
   // nothing that doesn't help a developer implement the card (no disclaimers about how the values were gathered).
-  function mappingReportLines(m, { check = null } = {}) {
+  function mappingReportLines(m, { check = null, fieldCheck = null } = {}) {
     if (!isMapping(m)) return [];
     const code = (s) => '`' + String(s).replace(/`/g, "'") + '`';
     const a = m.approved || {};
@@ -1181,6 +1290,7 @@
     const both = Number.isInteger(ev.promoCents) && Number.isInteger(ev.regularCents);
     const what = ['title', ev.image ? 'image' : '', both ? 'prices' : Number.isInteger(ev.promoCents) || Number.isInteger(ev.regularCents) ? 'price' : '', ev.url ? 'link' : ''].filter(Boolean);
     const list2 = what.length < 2 ? what.join('') : `${what.slice(0, -1).join(', ')} and ${what[what.length - 1]}`;
+    L.push(...fieldReportLines(m, { check: fieldCheck }));
     L.push(`  - Replace this card’s ${list2} with the values above, keeping its markup and styling.${both ? ' Where it shows two prices, the sale price is the current one and the regular price is the struck-through one.' : ''}${v ? ' Use the variant id only on a cart control the card already has; don’t add cart or checkout wiring where it has none.' : ''}`);
     return L;
   }
@@ -1373,6 +1483,126 @@
     return { lib: { ...lib, smp: { ...lib.smp, imports: [...lib.smp.imports, imp] } }, duplicate: false };
   }
 
+  // ---------------------------------------------------------------- page workspace: card records, Start Fresh, recovery copy
+  // Pure data rules (no storage, no DOM). A saved item is one of: a NOTE (what the person wrote and changed), or a CARD RECORD
+  // (`cardRecord: true`): a product card Blueline was asked to remember, with or without a product assigned. A note may still
+  // carry a card / mapping (`productCard`, `productMapping`, how older versions saved them). Deleting or clearing a note never
+  // takes its card or assignment with it: the note's card data moves into a card record (same id, so nothing is re-linked).
+  const wsClone = (x) => JSON.parse(JSON.stringify(x));
+  const isCardRecord = (it) => !!(it && it.cardRecord === true);
+  const cardOfItem = (it) => (it && it.productMapping && it.productMapping.card && it.productMapping.card.v ? it.productMapping.card : it && it.productCard && it.productCard.v ? it.productCard : null);
+  const hasCardData = (it) => !!cardOfItem(it);
+  const hasAssignment = (it) => !!(it && it.productMapping && isMapping(it.productMapping));
+  const RECORD_KEEP = ['id', 'createdAt', 'type', 'url', 'path', 'viewport', 'page', 'mode', 'el', 'styling'];
+  // The card record for an item that carries card data, or null. Only the card and its assignment are kept.
+  function toCardRecord(it) {
+    if (!hasCardData(it)) return null;
+    const rec = { cardRecord: true, note: '', updatedAt: it.updatedAt || it.createdAt || 0 };
+    for (const k of RECORD_KEEP) if (it[k] !== undefined) rec[k] = wsClone(it[k]);
+    if (it.productMapping) rec.productMapping = wsClone(it.productMapping);
+    else rec.productCard = wsClone(it.productCard);
+    return rec;
+  }
+  // A "Not a card" exclusion: a card record that holds no card of its own, only the fingerprint of a detected candidate the person
+  // ruled out (`exclusion.card`), so discovery stops proposing it until it is restored. `why` is 'not-a-card' or 'boundary'.
+  const isExclusion = (it) => !!(it && it.cardRecord === true && it.exclusion && it.exclusion.card && it.exclusion.card.v);
+  function newExclusionRecord(info, card, id, now, why) {
+    const rec = newCardRecord(info, card, id, now);
+    delete rec.productCard;
+    rec.exclusion = { v: 1, card: wsClone(card), why: why || 'not-a-card', at: now };
+    return rec;
+  }
+  // A new, empty card definition record (no note, no product).
+  function newCardRecord(info, card, id, now) {
+    const rec = { cardRecord: true, note: '', id, createdAt: now, updatedAt: now };
+    for (const k of RECORD_KEEP) if (info && info[k] !== undefined && k !== 'id' && k !== 'createdAt') rec[k] = wsClone(info[k]);
+    rec.type = 'change';
+    rec.productCard = wsClone(card);
+    return rec;
+  }
+  // The note with its assignment removed (its card stays as the note's own card).
+  function withoutAssignment(it) {
+    const n = wsClone(it);
+    if (!n.productMapping) return n;
+    const card = cardOfItem(n);
+    delete n.productMapping;
+    if (card) n.productCard = card; else delete n.productCard;
+    return n;
+  }
+  const withoutCard = (it) => { const n = wsClone(it); delete n.productMapping; delete n.productCard; return n; };
+  // What a page holds, in the three units Start Fresh clears.
+  function pageCounts(items) {
+    const c = { notes: 0, cards: 0, assignments: 0 };
+    for (const it of items || []) {
+      if (!isCardRecord(it)) c.notes++;
+      if (hasCardData(it)) c.cards++;
+      if (hasAssignment(it)) c.assignments++;
+    }
+    return c;
+  }
+  // What clearing would leave. `scope` = { notes, cards, assignments }; clearing cards always clears their assignments.
+  // Returns the page's items afterwards (same order), the ids of notes that are gone, and what was cleared.
+  function planReset(items, scope) {
+    const sc = { notes: !!scope?.notes, cards: !!scope?.cards, assignments: !!(scope?.assignments || scope?.cards) };
+    const out = [];
+    const notesGone = [];
+    const cleared = { notes: 0, cards: 0, assignments: 0 };
+    for (const it of items || []) {
+      const rec = isCardRecord(it);
+      let cur = it;
+      if (isExclusion(it)) { if (!sc.cards) out.push(it); continue; } // exclusions are card management: they go with the cards
+      if (hasCardData(cur)) {
+        if (sc.cards) { cleared.cards++; if (hasAssignment(cur)) cleared.assignments++; cur = withoutCard(cur); }
+        else if (sc.assignments && hasAssignment(cur)) { cleared.assignments++; cur = withoutAssignment(cur); }
+      }
+      if (rec) { if (hasCardData(cur)) out.push(cur === it ? it : cur); continue; }
+      if (sc.notes) {
+        cleared.notes++;
+        notesGone.push(it.id);
+        const keep = toCardRecord(cur);
+        if (keep) out.push(keep);
+        continue;
+      }
+      out.push(cur);
+    }
+    return { items: out, notesGone, cleared, scope: sc };
+  }
+  // A short stable fingerprint of an item (to notice later changes without storing a second copy).
+  function hashJson(x) {
+    const s = JSON.stringify(x);
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    return `${s.length}:${h.toString(36)}`;
+  }
+  // The recovery copy taken just before clearing: the page's items exactly as they were, plus a fingerprint of each item as
+  // it is AFTER clearing (so restoring can tell whether anything changed since). One per page; JSON keeps variant ids as strings.
+  function makeSnapshot({ pageKey, page, before, after, scope, cleared, shots, now }) {
+    const afterSig = {};
+    for (const it of after || []) afterSig[it.id] = hashJson(it);
+    return { v: 1, at: now, pageKey, page: wsClone(page || {}), scope: wsClone(scope), cleared: wsClone(cleared || {}), before: wsClone(before || []), afterSig, shots: shots ? wsClone(shots) : {} };
+  }
+  // Restoring the recovery copy onto the page's current items. Nothing is changed here; the caller decides.
+  //   conflict: what changed since the reset ({ changed, added, removed } ids). If any, the person must confirm.
+  //   items: the page's items after restoring: every saved item back exactly as it was; notes made since stay;
+  //          cards and assignments made since the reset are replaced (the confirmation says so).
+  function restorePlan(snapshot, current) {
+    const sig = snapshot.afterSig || {};
+    const cur = new Map((current || []).map((it) => [it.id, it]));
+    const changed = [];
+    const added = [];
+    const removed = [];
+    for (const [id, h] of Object.entries(sig)) { const c = cur.get(id); if (!c) removed.push(id); else if (hashJson(c) !== h) changed.push(id); }
+    for (const it of current || []) if (!(it.id in sig)) added.push(it.id);
+    const beforeIds = new Set((snapshot.before || []).map((it) => it.id));
+    const items = (snapshot.before || []).map(wsClone);
+    const dropped = { cards: 0, assignments: 0 };
+    for (const it of current || []) {
+      if (beforeIds.has(it.id)) continue;
+      if (hasCardData(it)) { dropped.cards++; if (hasAssignment(it)) dropped.assignments++; if (isCardRecord(it)) continue; items.push(withoutCard(it)); } else items.push(it);
+    }
+    return { conflict: changed.length || added.length || removed.length ? { changed, added, removed } : null, items, dropped };
+  }
+
   return {
     toCents, fmt, reconcile, slug, productKey, skuEq, normalizeStore, parseCSV,
     importCsv, importJson, importDocx, importFile, parseSmpText, docxXmlToText, unzipEntry,
@@ -1380,9 +1610,10 @@
     listSummaries, optionalStore, moveLibrary, replaceImports, exportList, EXPORT_SCHEMA, approveSubstitution, revokeSubstitution, setEdit, resetEdit, setLocalSku, addLocalProduct,
     newListId, defaultListName, listName, newLibrary, isPristine, renameLibrary, listsForStore, summarize,
     emptyWork, buildRows, STATUS_LABEL, decide, clearDecision, setLookup, chooseVariant, addManualProduct, removeManualProduct, exportApproved,
-    MAPPING_SCHEMA, isMapping, productMappingSnapshot, mappingReportLines, OVERRIDE_FIELDS, effectiveValues, setMappingOverride, changeMappingVariant, mappingCheck, searchRows,
+    MAPPING_SCHEMA, FIELD_KEYS, FIELD_LABELS, fieldItems, setFieldAssignment, discountPercent, discountInfo, fieldReportLines, isMapping, productMappingSnapshot, mappingReportLines, OVERRIDE_FIELDS, effectiveValues, setMappingOverride, changeMappingVariant, mappingCheck, searchRows,
     approveMappingReplacement, buildSelectionMapping, adoptListValues, mappingStatus, shopifyCheck, replacementPending, overrideConflicts,
     uniqueListName, reconcileNames, reconcileListNames, listLabel,
     K_INDEX, kSmp, kWork, campaignId, loadIndex, loadLibrary, saveLibrary, setActive, getActive, deleteLibrary, addImport,
+    isCardRecord, isExclusion, newExclusionRecord, cardOfItem, hasCardData, hasAssignment, toCardRecord, newCardRecord, withoutAssignment, withoutCard, pageCounts, planReset, hashJson, makeSnapshot, restorePlan,
   };
 });

@@ -563,5 +563,293 @@ await test('Existing duplicate names are reconciled once, oldest keeps its name,
   assert.equal((await L.loadLibrary(st, '', 'l-mid')).campaign, 'l-mid');
 });
 
+// ------------------------------------------------------------------ M4: page elements (fields), discount, reading prices and badges
+
+const C = createRequire(import.meta.url)(join(here, '..', 'cards.js'));
+const mappingFor = (key = 'sku:ACM-100') => {
+  let lib = baseLib();
+  lib = L.chooseVariant(lib, key, variantOf(prodJson(BIG_ID, 'alpha', 'Acme Alpha Powder', [vJson(BIG_ID, 'ACM-100', '20.00', 'Vanilla')])));
+  lib = L.decide(lib, key, 'smp');
+  return L.productMappingSnapshot(lib, key, { now: NOW });
+};
+const REF = (path = 'h3:nth-child(1)', tag = 'h3') => ({ v: 1, path, tag, classes: [], fp: 'abc', sel: null, text: 'x' });
+
+await test('M4 discount: whole-number percent from integer cents, half rounds up', () => {
+  assert.equal(L.discountPercent(3999, 2799), 30); // $39.99 → $27.99
+  assert.equal(L.discountPercent(5991, 3999), 33); // $59.91 → $39.99
+  assert.equal(L.discountPercent(2000, 1000), 50);
+  assert.equal(L.discountPercent(1000, 1000), 0);
+  assert.equal(L.discountPercent(1000, 0), 100);
+  assert.equal(L.discountPercent(10, 9), 10);
+  assert.equal(L.discountPercent(1999, 1599), 20); // 20.01% (no float drift)
+  assert.equal(L.discountPercent(3, 2), 33);
+  assert.equal(L.discountPercent(200, 99), 51); // 50.5 rounds up
+});
+await test('M4 discount: nothing is calculated from missing, invalid or inverted prices (and never inferred from a badge)', () => {
+  for (const [r, s] of [[null, 100], [100, null], [undefined, undefined], [0, 0], [-5, 3], [1000, -1], [1000, 1001], [10.5, 5], ['1000', '500'], [NaN, 5]]) assert.equal(L.discountPercent(r, s), null, `${r}/${s}`);
+  const m = mappingFor();
+  const di = L.discountInfo({ ...m, approved: { ...m.approved, regularCents: null, promoCents: null } }, { kind: 'percent', percent: 30 });
+  assert.equal(di.percent, null);
+  assert.match(di.why, /no approved regular price/);
+  assert.equal(di.regularCents, null); // the badge's 30% did not become a regular price
+});
+await test('M4 discount: uses the approved prices and a page-specific override, and flags a badge that disagrees', () => {
+  const m = mappingFor(); // $20.00 regular, $12.00 sale
+  assert.equal(m.approved.regularCents, 2000);
+  assert.equal(m.approved.promoCents, 1200);
+  let di = L.discountInfo(m, { kind: 'percent', percent: 40 });
+  assert.equal(di.percent, 40);
+  assert.equal(di.discrepancy, null);
+  di = L.discountInfo(m, { kind: 'percent', percent: 25 });
+  assert.match(di.discrepancy, /badge says 25% off but the approved prices give 40%/);
+  const ov = L.setMappingOverride(L.setMappingOverride(m, 'regularCents', '39.99'), 'promoCents', '27.99');
+  assert.equal(L.discountInfo(ov).percent, 30); // the override drives the calculation
+  assert.equal(L.discountInfo(ov, { kind: 'percent', percent: 30 }).discrepancy, null);
+  assert.equal(L.discountInfo(m).percent, 40); // ...without having changed the original mapping
+  assert.equal(m.approved.regularCents, 2000);
+  assert.equal(L.discountInfo(m, { kind: 'percent', percent: null, placeholder: true }).discrepancy, null);
+  assert.match(L.discountInfo(m, { kind: 'percent', percent: null, placeholder: true }).badgeNote, /placeholder/);
+  assert.match(L.discountInfo(m, { kind: 'amount', cents: 500 }).discrepancy, /\$5\.00 off but the approved prices differ by \$8\.00/);
+  assert.equal(L.discountInfo(m, { kind: 'amount', cents: 800 }).discrepancy, null);
+});
+await test('M4 reading text: prices in integer cents, placeholders and discount badges', () => {
+  assert.deepEqual(C.pricesIn('Now $27.99').map((p) => p.cents), [2799]);
+  assert.deepEqual(C.pricesIn('$1,299.5 and $12').map((p) => p.cents), [129950, 1200]);
+  assert.deepEqual(C.pricesIn('19.97 USD').map((p) => p.cents), [1997]);
+  assert.equal(C.pricesIn('[$Sale]')[0].placeholder, true);
+  assert.equal(C.pricesIn('[$Sale]')[0].cents, null);
+  assert.equal(C.pricesIn('Free shipping').length, 0);
+  assert.equal(C.parseBadge('30% OFF').percent, 30);
+  assert.equal(C.parseBadge('-30%').percent, 30);
+  assert.equal(C.parseBadge('Save 30%').percent, 30);
+  assert.equal(C.parseBadge('[XX% OFF]').placeholder, true);
+  assert.equal(C.parseBadge('Save $12').cents, 1200);
+  assert.equal(C.parseBadge('$12 off').kind, 'amount');
+  for (const t of ['Sale', 'New', 'Free shipping', 'Best seller', '$27.99', '']) assert.equal(C.parseBadge(t), null, t);
+});
+await test('M4 fields: assigning an element changes no value, no variant and no list data', () => {
+  const m = mappingFor();
+  const before = JSON.stringify(m);
+  const n = L.setFieldAssignment(m, 'title', { state: 'confirmed', source: 'suggested', how: 'semantic', ref: REF(), detected: { text: 'Acme' } }, { now: NOW });
+  assert.equal(JSON.stringify(m), before); // pure: the input is untouched
+  const strip = (x) => { const c = JSON.parse(JSON.stringify(x)); delete c.fields; return c; };
+  assert.deepEqual(strip(n), strip(m)); // everything except `fields` is identical
+  assert.equal(n.variant.variantId, BIG_ID);
+  assert.equal(typeof n.variant.variantId, 'string');
+  assert.equal(n.fields.v, 1);
+  assert.equal(n.fields.items.title.state, 'confirmed');
+  assert.equal(n.fields.items.title.ref.tag, 'h3');
+  assert.equal(L.effectiveValues(n).title, L.effectiveValues(m).title); // the title VALUE is still the approved one
+});
+await test('M4 fields: unmapped, replace, forget, order, and bad input', () => {
+  const m = mappingFor();
+  let n = L.setFieldAssignment(m, 'link', { state: 'unmapped' }, { now: NOW });
+  n = L.setFieldAssignment(n, 'title', { state: 'confirmed', ref: REF() }, { now: NOW });
+  n = L.setFieldAssignment(n, 'cta', { state: 'confirmed', ref: REF('button:nth-child(2)', 'button') }, { now: NOW });
+  assert.deepEqual(Object.keys(n.fields.items), ['title', 'cta', 'link']); // fixed order, whatever the insertion order
+  assert.equal(n.fields.items.link.state, 'unmapped');
+  const same = L.setFieldAssignment(n, 'title', { state: 'confirmed', ref: REF() }, { now: NOW + 5000 });
+  assert.deepEqual(same, n); // the same element again changes nothing (so "Save" doesn't light up)
+  const other = L.setFieldAssignment(n, 'title', { state: 'confirmed', ref: REF('h2:nth-child(1)', 'h2') }, { now: NOW + 5000 });
+  assert.equal(other.fields.items.title.ref.tag, 'h2');
+  const gone = L.setFieldAssignment(L.setFieldAssignment(L.setFieldAssignment(n, 'title', null), 'cta', null), 'link', null);
+  assert.equal('fields' in gone, false); // forgetting the last one leaves the mapping exactly as before
+  assert.deepEqual(gone, m);
+  assert.throws(() => L.setFieldAssignment(m, 'price', { state: 'unmapped' }), /can’t be mapped/);
+  assert.throws(() => L.setFieldAssignment(m, 'title', { state: 'confirmed' }), /needs the element/);
+  assert.throws(() => L.setFieldAssignment(m, 'title', { state: 'maybe', ref: REF() }), /Unknown field state/);
+  assert.throws(() => L.setFieldAssignment(null, 'title', null), /no mapping/);
+});
+await test('M4 fields: mappings saved before M4 (and damaged ones) still work', () => {
+  const m = mappingFor();
+  assert.equal('fields' in m, false);
+  assert.deepEqual(L.fieldItems(m), {});
+  assert.deepEqual(L.fieldItems({ ...m, fields: 'junk' }), {});
+  assert.deepEqual(L.fieldItems({ ...m, fields: { v: 1, items: { title: 7, cta: { state: 'wat' }, link: { state: 'unmapped' }, bogus: { state: 'confirmed' } } } }), { link: { state: 'unmapped' } });
+  assert.deepEqual(L.mappingReportLines(m), L.mappingReportLines({ ...m, fields: { v: 1, items: {} } })); // the report is unchanged
+  assert.equal(L.mappingReportLines(m).some((l) => /Page elements/.test(l)), false);
+  assert.equal(L.mappingStatus(m).approval.label, L.mappingStatus({ ...m, fields: { v: 1, items: { link: { state: 'unmapped' } } } }).approval.label); // status doesn't depend on fields
+});
+await test('M4 fields: they follow the card through a product change and an adopt, never the product', () => {
+  const lib = baseLib();
+  let n = L.setFieldAssignment(mappingFor(), 'title', { state: 'confirmed', ref: REF() }, { now: NOW });
+  let l2 = L.chooseVariant(lib, 'sku:ACM-200', variantOf(prodJson('222', 'beta', 'Acme Beta Capsules', [vJson('222', 'ACM-200', '30.00', 'Plain')])));
+  l2 = L.decide(l2, 'sku:ACM-200', 'smp');
+  const next = L.buildSelectionMapping(l2, 'sku:ACM-200', { current: n, now: NOW });
+  assert.equal(next.product.key, 'sku:ACM-200');
+  assert.deepEqual(next.fields, n.fields);
+  assert.equal(next.variant.variantId, '222');
+  const adopted = L.adoptListValues(L.decide(L.chooseVariant(baseLib(), 'sku:ACM-100', variantOf(prodJson(BIG_ID, 'alpha', 'Acme Alpha Powder', [vJson(BIG_ID, 'ACM-100', '20.00', 'Vanilla')]))), 'sku:ACM-100', 'smp'), n);
+  assert.deepEqual(adopted.fields, n.fields);
+});
+await test('M4 report: mapped elements, selectors, discount and mismatch; never claims the cart is wired', () => {
+  let m = mappingFor();
+  for (const [k, tag, path] of [['title', 'h3', 'h3:nth-child(2)'], ['sale', 'ins', 'ins:nth-child(1)'], ['regular', 'del', 'del:nth-child(1)'], ['badge', 'span', 'span:nth-child(3)'], ['cta', 'button', 'button:nth-child(5)']]) {
+    m = L.setFieldAssignment(m, k, { state: 'confirmed', ref: { ...REF(path, tag), sel: k === 'cta' ? 'button.add' : null }, detected: { text: k === 'badge' ? '25% OFF' : 'seen', badge: k === 'badge' ? { kind: 'percent', percent: 25 } : undefined } }, { now: NOW });
+  }
+  m = L.setFieldAssignment(m, 'link', { state: 'unmapped' });
+  const lines = L.mappingReportLines(m);
+  const text = lines.join('\n');
+  assert.match(text, /Page elements in this card/);
+  assert.match(text, /Nothing is wired to the cart or checkout yet/);
+  assert.match(text, /Add to Cart button: `button\.add` within the card/);
+  assert.match(text, /Title: `h3:nth-child\(2\)` within the card/);
+  assert.match(text, /Not on this card: Product link/);
+  assert.match(text, /Discount: 40% off, from approved regular \$20\.00 and sale \$12\.00\. \*\*Mismatch:\*\* the badge says 25% off but the approved prices give 40%/);
+  assert.match(text, new RegExp(`variant id \`${BIG_ID}\``)); // the exact variant id is still reported as a string
+  assert.equal(/wired|add to cart/i.test(text.replace(/Nothing is wired to the cart or checkout yet|Add to Cart button/g, '')), false, 'no cart claims beyond the disclaimer');
+  const stale = L.fieldReportLines(m, { check: { items: { title: { state: 'moved', reasons: ['the element is no longer where it was'], value: null }, cta: { state: 'ok', reasons: [], value: { text: 'Add to cart' } } } } }).join('\n');
+  assert.match(stale, /Title: .* \(needs review: it moved\)/);
+  assert.match(stale, /\*\*Review before using:\*\* Title \(the element is no longer where it was\)/);
+  assert.match(stale, /Add to Cart button: .* \(confirmed\); page shows “Add to cart”/);
+  const noPrices = L.fieldReportLines({ ...m, approved: { ...m.approved, promoCents: null } }).join('\n');
+  assert.match(noPrices, /Discount: not calculated \(no approved sale price\)/);
+});
+await test('M4 persistence: the whole mapping with fields survives JSON storage and still checks equal', () => {
+  const m = L.setFieldAssignment(mappingFor(), 'title', { state: 'confirmed', source: 'chosen', how: 'content', ref: REF(), detected: { text: 'Name' } }, { now: NOW });
+  const back = JSON.parse(JSON.stringify(m));
+  assert.deepEqual(back, m);
+  assert.equal(back.variant.variantId, BIG_ID);
+  assert.equal(back.fields.items.title.source, 'chosen');
+  assert.equal(L.isMapping(back), true);
+});
+
+// ------------------------------------------------------------------ page workspace: card records, Start Fresh, recovery copy
+const CARD = (n) => ({ v: 1, selector: `#row > article:nth-child(${n})`, tag: 'article', section: { heading: 'Featured Deals' }, index: n, count: 3, text: `Card ${n}` });
+const mappedMemo = new Map(); // one fixed mapping per card (mappingFor stamps times, so build each once)
+const mappedWith = (n) => { if (!mappedMemo.has(n)) mappedMemo.set(n, { ...mappingFor(), card: CARD(n) }); return JSON.parse(JSON.stringify(mappedMemo.get(n))); };
+const wsNote = (id, extra = {}) => ({ id, note: `note ${id}`, type: 'polish', createdAt: NOW, url: `${ORIGIN}/p`, path: '/p', el: { label: 'h1', selector: 'h1' }, elementEdits: [{ tweaks: [{ prop: 'color', to: 'red' }] }], hasShot: true, ...extra });
+const wsRec = (id, n, withMapping) => ({ id, cardRecord: true, note: '', type: 'change', createdAt: NOW, url: `${ORIGIN}/p`, path: '/p', el: { label: 'article', selector: 'article' }, ...(withMapping ? { productMapping: mappedWith(n) } : { productCard: CARD(n) }) });
+const pageItems = () => [
+  wsNote('n-plain'),
+  wsNote('n-card', { productCard: CARD(1) }),
+  wsNote('n-mapped', { productMapping: mappedWith(2) }),
+  wsRec('r-empty', 3, false),
+  wsRec('r-assigned', 4, true),
+];
+
+await test('Workspace: a note that carries a card or assignment hands it to a card record; a plain note leaves nothing', () => {
+  assert.equal(L.toCardRecord(wsNote('n-plain')), null);
+  const r = L.toCardRecord(wsNote('n-mapped', { productMapping: mappedWith(2) }));
+  assert.equal(r.cardRecord, true);
+  assert.equal(r.id, 'n-mapped'); // same id: nothing is re-linked
+  assert.equal(r.note, '');
+  assert.equal(r.elementEdits, undefined);
+  assert.equal(r.hasShot, undefined);
+  assert.deepEqual(r.productMapping, mappedWith(2));
+  assert.equal(r.productMapping.variant.variantId, BIG_ID);
+  const c = L.toCardRecord(wsNote('n-card', { productCard: CARD(1) }));
+  assert.deepEqual(c.productCard, CARD(1));
+  assert.equal(c.productMapping, undefined);
+});
+await test('Workspace: a new card definition is its own item (no note, no product, no description)', () => {
+  const r = L.newCardRecord({ url: `${ORIGIN}/p`, path: '/p', el: { label: 'article', selector: 'article' }, note: 'ignored', id: 'x', productMapping: { bad: 1 } }, CARD(5), 'card-1', NOW);
+  assert.equal(r.cardRecord, true);
+  assert.equal(r.id, 'card-1');
+  assert.equal(r.note, '');
+  assert.deepEqual(r.productCard, CARD(5));
+  assert.equal(r.productMapping, undefined);
+  assert.equal(L.hasCardData(r), true);
+  assert.equal(L.hasAssignment(r), false);
+  assert.deepEqual(L.pageCounts([r]), { notes: 0, cards: 1, assignments: 0 });
+});
+await test('Workspace: counts separate notes, defined cards and assignments', () => {
+  assert.deepEqual(L.pageCounts(pageItems()), { notes: 3, cards: 4, assignments: 2 });
+});
+await test('Workspace: clearing notes only keeps every card and assignment (a note holding one becomes a card record)', () => {
+  const items = deepFreeze(JSON.parse(JSON.stringify(pageItems())));
+  const p = L.planReset(items, { notes: true });
+  assert.deepEqual(p.cleared, { notes: 3, cards: 0, assignments: 0 });
+  assert.deepEqual(p.notesGone, ['n-plain', 'n-card', 'n-mapped']);
+  assert.deepEqual(p.items.map((i) => i.id), ['n-card', 'n-mapped', 'r-empty', 'r-assigned']);
+  assert.equal(p.items.every((i) => i.cardRecord === true), true);
+  assert.deepEqual(L.pageCounts(p.items), { notes: 0, cards: 4, assignments: 2 });
+  assert.deepEqual(p.items.find((i) => i.id === 'n-mapped').productMapping, mappedWith(2));
+  assert.equal(p.items.find((i) => i.id === 'n-mapped').productMapping.variant.variantId, BIG_ID);
+});
+await test('Workspace: clearing assignments only keeps notes and the defined cards', () => {
+  const items = deepFreeze(JSON.parse(JSON.stringify(pageItems())));
+  const p = L.planReset(items, { assignments: true });
+  assert.deepEqual(p.cleared, { notes: 0, cards: 0, assignments: 2 });
+  assert.deepEqual(p.items.map((i) => i.id), ['n-plain', 'n-card', 'n-mapped', 'r-empty', 'r-assigned']);
+  assert.deepEqual(L.pageCounts(p.items), { notes: 3, cards: 4, assignments: 0 });
+  const nm = p.items.find((i) => i.id === 'n-mapped');
+  assert.equal(nm.productMapping, undefined);
+  assert.deepEqual(nm.productCard, CARD(2)); // the card definition survives on the note
+  assert.equal(nm.note, 'note n-mapped'); // the note itself is untouched
+  assert.deepEqual(p.items.find((i) => i.id === 'r-assigned').productCard, CARD(4));
+});
+await test('Workspace: clearing defined cards also clears their assignments, and keeps the notes', () => {
+  const items = deepFreeze(JSON.parse(JSON.stringify(pageItems())));
+  const p = L.planReset(items, { cards: true });
+  assert.deepEqual(p.cleared, { notes: 0, cards: 4, assignments: 2 });
+  assert.deepEqual(p.scope, { notes: false, cards: true, assignments: true });
+  assert.deepEqual(p.items.map((i) => i.id), ['n-plain', 'n-card', 'n-mapped']); // records are gone, notes stay
+  assert.deepEqual(L.pageCounts(p.items), { notes: 3, cards: 0, assignments: 0 });
+  assert.equal(p.items.find((i) => i.id === 'n-mapped').note, 'note n-mapped');
+});
+await test('Workspace: clearing everything leaves nothing; clearing nothing changes nothing', () => {
+  const all = L.planReset(pageItems(), { notes: true, cards: true });
+  assert.deepEqual(all.items, []);
+  assert.deepEqual(all.cleared, { notes: 3, cards: 4, assignments: 2 });
+  const none = L.planReset(pageItems(), {});
+  assert.deepEqual(none.cleared, { notes: 0, cards: 0, assignments: 0 });
+  assert.deepEqual(none.items, pageItems());
+});
+await test('Workspace: planning a reset never changes the Product Library or the items it was given', () => {
+  const lib = deepFreeze(baseLib());
+  const before = JSON.stringify(lib);
+  const items = deepFreeze(JSON.parse(JSON.stringify(pageItems())));
+  L.planReset(items, { notes: true, cards: true, assignments: true });
+  L.makeSnapshot({ pageKey: `${ORIGIN}/p`, page: {}, before: items, after: [], scope: {}, now: NOW });
+  assert.equal(JSON.stringify(lib), before);
+  assert.deepEqual(items, JSON.parse(JSON.stringify(pageItems())));
+});
+await test('Workspace: the recovery copy holds the page exactly as it was (variant ids stay strings) and survives JSON storage', () => {
+  const items = pageItems();
+  const p = L.planReset(items, { notes: true });
+  const snap = L.makeSnapshot({ pageKey: `${ORIGIN}/p`, page: { origin: ORIGIN, path: '/p' }, before: items, after: p.items, scope: p.scope, cleared: p.cleared, shots: { 'blueline:shot:n-plain': 'data:image/png;base64,AAA' }, now: NOW });
+  const back = JSON.parse(JSON.stringify(snap));
+  assert.deepEqual(back.before, items);
+  assert.equal(back.before[2].productMapping.variant.variantId, BIG_ID);
+  assert.equal(typeof back.before[2].productMapping.variant.variantId, 'string');
+  assert.equal(back.pageKey, `${ORIGIN}/p`);
+  assert.deepEqual(Object.keys(back.afterSig).sort(), p.items.map((i) => i.id).sort());
+  assert.equal(back.shots['blueline:shot:n-plain'], 'data:image/png;base64,AAA');
+});
+await test('Workspace: restoring with nothing changed since puts back exactly what was saved, with no confirmation needed', () => {
+  const items = pageItems();
+  const p = L.planReset(items, { notes: true, cards: true });
+  const snap = JSON.parse(JSON.stringify(L.makeSnapshot({ pageKey: 'k', page: {}, before: items, after: p.items, scope: p.scope, cleared: p.cleared, now: NOW })));
+  const r = L.restorePlan(snap, p.items);
+  assert.equal(r.conflict, null);
+  assert.deepEqual(r.items, items);
+});
+await test('Workspace: restoring asks first when anything changed since the reset, and keeps notes made since', () => {
+  const items = pageItems();
+  const p = L.planReset(items, { cards: true });
+  const snap = JSON.parse(JSON.stringify(L.makeSnapshot({ pageKey: 'k', page: {}, before: items, after: p.items, scope: p.scope, cleared: p.cleared, now: NOW })));
+  // since the reset: a new note, a new card record, and an edited old note
+  const now = [...p.items.map((i) => (i.id === 'n-plain' ? { ...i, note: 'edited after reset' } : i)), wsNote('n-new'), wsRec('r-new', 9, true)];
+  const r = L.restorePlan(snap, now);
+  assert.deepEqual(r.conflict.changed, ['n-plain']);
+  assert.deepEqual(r.conflict.added.sort(), ['n-new', 'r-new']);
+  assert.deepEqual(r.conflict.removed, []);
+  const ids = r.items.map((i) => i.id);
+  assert.equal(ids.includes('n-new'), true, 'a note made since the reset is kept');
+  assert.equal(ids.includes('r-new'), false, 'a card made since the reset is replaced');
+  assert.deepEqual(r.dropped, { cards: 1, assignments: 1 });
+  assert.equal(r.items.find((i) => i.id === 'n-plain').note, 'note n-plain', 'the saved version comes back');
+  assert.equal(r.items.find((i) => i.id === 'r-assigned').productMapping.variant.variantId, BIG_ID);
+});
+await test('Workspace: an item removed since the reset also counts as a change', () => {
+  const items = pageItems();
+  const p = L.planReset(items, { assignments: true });
+  const snap = JSON.parse(JSON.stringify(L.makeSnapshot({ pageKey: 'k', page: {}, before: items, after: p.items, scope: p.scope, cleared: p.cleared, now: NOW })));
+  const r = L.restorePlan(snap, p.items.filter((i) => i.id !== 'n-plain'));
+  assert.deepEqual(r.conflict.removed, ['n-plain']);
+  assert.equal(r.items.some((i) => i.id === 'n-plain'), true);
+});
+
 console.log(`\n${pass}/${pass + fail} mapping tests passed`);
 process.exit(fail ? 1 : 0);

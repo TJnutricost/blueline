@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Product field recognition fixture (structure only, synthetic)</title>
+<style>
+  body { margin: 0; font: 14px/1.4 sans-serif; padding-bottom: 900px; }
+  section { padding: 12px 16px; max-width: 760px; }
+  .banner { background: #fee; padding: 6px 16px; }
+  .grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .p { border: 1px solid #ccc; padding: 6px; }
+  .p img { width: 120px; height: 80px; display: block; background: #ddd; }
+  .p h3 { margin: 4px 0; font-size: 17px; }
+  .was { color: #888; } .now { text-decoration: none; font-weight: 700; }
+  .badge { background: #e22; color: #fff; padding: 1px 6px; font-size: 12px; }
+  .add { padding: 4px 10px; }
+  .hcard { display: flex; gap: 10px; border: 1px solid #ccc; padding: 6px; color: inherit; text-decoration: none; margin-bottom: 8px; }
+  .thumb { width: 90px; height: 70px; background-color: #ccd; background-image: url("data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"); background-size: cover; }
+  .stack { position: relative; width: 120px; height: 80px; }
+  .stack img { position: absolute; top: 0; left: 0; }
+  .d-only { display: block; } .m-only { display: none; }
+  .gen { border: 1px solid #ccc; padding: 6px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<div class="banner">Free shipping over $50 · <a href="/sale">Shop all sale</a></div>
+
+<!-- 1. Conventional semantic cards: picture, heading link, del/ins, badge, add-to-cart form -->
+<section aria-labelledby="h-sem" id="sem">
+  <h2 id="h-sem">Semantic grid</h2>
+  <ul class="grid" id="grid-sem">
+    <li class="p" itemscope itemtype="https://schema.org/Product">
+      <a href="/products/zma"><picture><source srcset="/img/zma-400.webp 400w" type="image/webp"><img src="/img/zma.jpg" data-src="/img/zma-lazy.jpg" alt="ZMA" loading="lazy" itemprop="image"></picture></a>
+      <span class="badge">30% OFF</span>
+      <h3><a href="/products/zma" itemprop="name">ZMA Night Formula</a></h3>
+      <div class="price"><del class="was">$39.99</del> <ins class="now">$27.99</ins></div>
+      <form action="/cart/add" method="post"><button type="submit" name="add" class="add">Add to cart</button></form>
+    </li>
+    <li class="p" itemscope itemtype="https://schema.org/Product">
+      <a href="/products/fish-oil"><picture><img src="/img/fish.jpg" alt="Fish oil" itemprop="image"></picture></a>
+      <span class="badge">25% OFF</span>
+      <h3><a href="/products/fish-oil" itemprop="name">Fish Oil Softgels</a></h3>
+      <div class="price"><del class="was">$30.97</del> <ins class="now">$22.99</ins></div>
+      <form action="/cart/add" method="post"><button type="submit" name="add" class="add">Add to cart</button></form>
+    </li>
+    <li class="p" itemscope itemtype="https://schema.org/Product">
+      <a href="/products/charcoal"><picture><img src="/img/charcoal.jpg" alt="Charcoal" itemprop="image"></picture></a>
+      <h3><a href="/products/charcoal" itemprop="name">Activated Charcoal</a></h3>
+      <div class="price"><span class="now">$15.99</span></div>
+      <form action="/cart/add" method="post"><button type="submit" name="add" class="add">Add to cart</button></form>
+    </li>
+  </ul>
+</section>
+
+<!-- 2. Arbitrary designer markup, no classes, placeholder text (the shape of a real campaign draft) -->
+<section aria-labelledby="h-des" id="des">
+  <h2 id="h-des">Designer placeholders</h2>
+  <div id="rail-des" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+    <article style="border:1px solid #ccc"><div style="position:relative;height:90px;background:#eee">[Product shot 1]<div style="position:absolute;top:4px;left:4px;font-weight:700">[XX% OFF]</div></div><div style="padding:8px"><div style="font-weight:600;font-size:20px">[Product Name]</div><div style="display:flex;gap:10px"><span style="font-size:18px;font-weight:600">[$Sale]</span><span style="text-decoration:line-through">[$Reg]</span></div><a href="#" style="display:inline-block;padding:4px 8px;background:#06c;color:#fff">Shop Deal</a></div></article>
+    <article style="border:1px solid #ccc"><div style="position:relative;height:90px;background:#eee">[Product shot 2]<div style="position:absolute;top:4px;left:4px;font-weight:700">[XX% OFF]</div></div><div style="padding:8px"><div style="font-weight:600;font-size:20px">[Product Name]</div><div style="display:flex;gap:10px"><span style="font-size:18px;font-weight:600">[$Sale]</span><span style="text-decoration:line-through">[$Reg]</span></div><a href="#" style="display:inline-block;padding:4px 8px;background:#06c;color:#fff">Shop Deal</a></div></article>
+    <article style="border:1px solid #ccc"><div style="position:relative;height:90px;background:#eee">[Product shot 3]<div style="position:absolute;top:4px;left:4px;font-weight:700">[XX% OFF]</div></div><div style="padding:8px"><div style="font-weight:600;font-size:20px">[Product Name]</div><div style="display:flex;gap:10px"><span style="font-size:18px;font-weight:600">[$Sale]</span><span style="text-decoration:line-through">[$Reg]</span></div><a href="#" style="display:inline-block;padding:4px 8px;background:#06c;color:#fff">Shop Deal</a></div></article>
+  </div>
+</section>
+
+<!-- 3. Horizontal cards, each wholly wrapped in an anchor; the image is a CSS background; one unmarked price -->
+<section aria-labelledby="h-hor" id="hor">
+  <h2 id="h-hor">Horizontal</h2>
+  <div id="rows-hor">
+    <a class="hcard" href="/products/zma"><div class="thumb"></div><div class="meta"><div style="font-weight:700;font-size:16px">ZMA Night Formula</div><div>$19.99</div><span style="font-size:12px">Save $5</span></div></a>
+    <a class="hcard" href="/products/fish-oil"><div class="thumb"></div><div class="meta"><div style="font-weight:700;font-size:16px">Fish Oil Softgels</div><div>$22.99</div><span style="font-size:12px">Save $8</span></div></a>
+    <a class="hcard" href="/products/charcoal"><div class="thumb"></div><div class="meta"><div style="font-weight:700;font-size:16px">Activated Charcoal</div><div>$15.99</div><span style="font-size:12px">Save $2</span></div></a>
+  </div>
+</section>
+
+<!-- 4. Ambiguous: two unmarked prices, two equal images stacked, two different links, no CTA wording -->
+<section aria-labelledby="h-amb" id="amb">
+  <h2 id="h-amb">Ambiguous</h2>
+  <div id="rows-amb">
+    <div class="gen"><div class="stack"><img src="/img/a1.jpg" alt=""><img src="/img/a2.jpg" alt=""></div><div style="font-weight:700;font-size:16px">Gamma Product</div><div>$39.99</div><div>$27.99</div><a href="/products/gamma/reviews">Reviews</a> <a href="/products/gamma/compare">Compare</a></div>
+    <div class="gen"><div class="stack"><img src="/img/b1.jpg" alt=""><img src="/img/b2.jpg" alt=""></div><div style="font-weight:700;font-size:16px">Delta Product</div><div>$39.99</div><div>$27.99</div><a href="/products/delta/reviews">Reviews</a> <a href="/products/delta/compare">Compare</a></div>
+  </div>
+</section>
+
+<!-- 5. Responsive duplicates: the mobile copies are hidden; an explicit mark on one card -->
+<section aria-labelledby="h-res" id="res">
+  <h2 id="h-res">Responsive</h2>
+  <div id="rows-res">
+    <div class="gen" data-card="r1"><img src="/img/r1.jpg" alt="R1" style="display:block;width:100px;height:60px"><h3 class="d-only">Responsive One</h3><h3 class="m-only">Responsive One</h3><span>$12.00</span> <s>$16.00</s><button>Add to cart</button></div>
+    <div class="gen" data-card="r2"><img src="/img/r2.jpg" alt="R2" style="display:block;width:100px;height:60px"><h3 class="d-only">Responsive Two</h3><h3 class="m-only">Responsive Two</h3><span>$12.00</span> <s>$16.00</s><button>Add to cart</button></div>
+  </div>
+</section>
+
+<!-- 6. A card with an explicit data-blueline-product-field mark, and a global promo inside the same section -->
+<section aria-labelledby="h-exp" id="exp">
+  <h2 id="h-exp">Explicit</h2>
+  <div id="rows-exp">
+    <div class="gen" data-ex="1"><img src="/img/e1.jpg" alt="" style="display:block;width:100px;height:60px"><div data-blueline-product-field="title" style="font-size:12px">Explicit Name</div><div style="font-size:22px;font-weight:700">Decoy Big Text</div><span data-blueline-product-field="sale-price">$9.99</span> <span data-blueline-product-field="regular-price">$14.99</span><button data-blueline-product-field="add-to-cart">Go</button></div>
+    <div class="gen" data-ex="2"><img src="/img/e2.jpg" alt="" style="display:block;width:100px;height:60px"><div data-blueline-product-field="title" style="font-size:12px">Explicit Name Two</div><span data-blueline-product-field="sale-price">$9.99</span> <span data-blueline-product-field="regular-price">$14.99</span><button data-blueline-product-field="add-to-cart">Go</button></div>
+  </div>
+</section>
+
+<!-- 7. Identical placeholder cards (nothing but position tells them apart): edits inside one never change which card it is -->
+<section aria-labelledby="h-pos" id="pos">
+  <h2 id="h-pos">Identical placeholders</h2>
+  <div id="rail-pos" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+    <article style="border:1px solid #ccc"><div style="position:relative;height:90px;background:#eee">[Product shot]<div style="position:absolute;top:4px;left:4px;font-weight:700">[XX% OFF]</div></div><div style="padding:8px"><div style="font-weight:600;font-size:20px">[Product Name]</div><div style="display:flex;gap:10px"><span style="font-size:18px;font-weight:600">[$Sale]</span><span style="text-decoration:line-through">[$Reg]</span></div><a href="#" style="display:inline-block;padding:4px 8px;background:#06c;color:#fff">Shop Deal</a></div></article>
+    <article style="border:1px solid #ccc"><div style="position:relative;height:90px;background:#eee">[Product shot]<div style="position:absolute;top:4px;left:4px;font-weight:700">[XX% OFF]</div></div><div style="padding:8px"><div style="font-weight:600;font-size:20px">[Product Name]</div><div style="display:flex;gap:10px"><span style="font-size:18px;font-weight:600">[$Sale]</span><span style="text-decoration:line-through">[$Reg]</span></div><a href="#" style="display:inline-block;padding:4px 8px;background:#06c;color:#fff">Shop Deal</a></div></article>
+    <article style="border:1px solid #ccc"><div style="position:relative;height:90px;background:#eee">[Product shot]<div style="position:absolute;top:4px;left:4px;font-weight:700">[XX% OFF]</div></div><div style="padding:8px"><div style="font-weight:600;font-size:20px">[Product Name]</div><div style="display:flex;gap:10px"><span style="font-size:18px;font-weight:600">[$Sale]</span><span style="text-decoration:line-through">[$Reg]</span></div><a href="#" style="display:inline-block;padding:4px 8px;background:#06c;color:#fff">Shop Deal</a></div></article>
+  </div>
+</section>
+
+</body>
+</html>
