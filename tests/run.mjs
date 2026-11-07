@@ -740,6 +740,8 @@ console.log('\n# Toolbox, per-instance CSS changes, corrections and export (fixt
     check('Export: instance 2 lists its own CSS change and its "everywhere" scope for the class', b2.includes('CSS rule `.card-title` in inline <style> 1:') && b2.includes('font-size: 18px → 28px') && b2.includes('color: added → #005EB8') && b2.includes('Scope: **everywhere**: change rule `.card-title`'), b2);
     check('Export: instance 1 keeps "this one only" and none of instance 2’s values', b1.includes('padding: added → 4px') && b1.includes('this one only') && b1.includes('they must stay unchanged') && !b1.includes('font-size'), b1);
     check('Export: item heading is "Change", nothing about priority', /\n## 1\. Change: /.test(text) && !/nice to have/i.test(text) && !/must-fix/i.test(text), text.split('\n').find((l) => l.startsWith('## 1.')));
+    const urlNow = await page.evaluate(() => location.href);
+    check('Export: a local file is named once, in "Source page and implementation target", as reference only; headings and the page line carry just the file name', !/^file:/.test(urlNow) || (text.split('Inspected source page (reference only)').length === 2 && !/^## 1\. .*\/Users\//m.test(text) && /\/[^`\n]+\.html` \(a local file opened in Chrome\)/.test(text) && /\n## 1\. Change: [^/\n]+\.html /.test(text) && /Implementation target:\*\* the matching HTML/.test(text) && /Never edit the inspected file/.test(text)), text.slice(0, 900));
   }
 
   // Reopen: each instance gets its own edits back.
@@ -4870,7 +4872,7 @@ console.log('\n# Product Mapping M3: product picker, variants, page-specific val
   let exp = await t.prompt();
   let sec = t.section(exp, 2);
   check('Report: card and section, product, exact variant id and SKU, page-specific prices, URL, image', sec.includes('**Product mapping**') && /in section “Featured”, card 2 of 3/.test(sec) && sec.includes('ZMA Night Formula') && sec.includes('variant id `4444444444`') && sec.includes('SKU `ACM400101`') && /regular \$29\.99 \(page-specific override; approved \$27\.97\)/.test(sec) && /sale \$17\.50 \(page-specific override; list \$19\.99\)/.test(sec) && sec.includes('https://shop.example.com/products/zma-night') && sec.includes('zma-night.jpg') && /don’t change what Shopify charges at checkout/.test(sec), sec.slice(0, 1200));
-  check('Report: concise: no live-verification claim, no empty Inspection heading, no invented cart wiring, one card check, no "Also selected" echo, no stylesheet warning', !/live-verified/.test(sec) && !/\*\*Inspection\*\*/.test(sec) && /don’t add cart or checkout wiring/.test(sec) && (sec.match(/Card check:/g) || []).length === 1 && !/Also selected/.test(sec) && !/cross-origin stylesheet/.test(sec), sec.slice(0, 900));
+  check('Report: concise: no live-verification claim, no empty Inspection heading, no cart text inside a card block, one card check, no "Also selected" echo, no stylesheet warning', !/live-verified/.test(sec) && !/\*\*Inspection\*\*/.test(sec) && !/cart or checkout wiring|Ajax/.test(sec) && (sec.match(/Card check:/g) || []).length === 1 && !/Also selected/.test(sec) && !/cross-origin stylesheet/.test(sec), sec.slice(0, 900));
 
   // ---- 4. Reopen, Toolbox state, change product / variant in the window
   await A.evaluate(() => BluelineLibrary.setActive(chrome.storage.local, location.origin, '', 'l-m3-b'));
@@ -5750,7 +5752,13 @@ console.log('\n# Product Mapping M4: field recognition, suggestions, manual corr
   const saved2 = await itemMap(0);
   check('Saved: the override is on the mapping only. The approved prices, the variant id, the assignments and the whole Product Library are unchanged', saved2.overrides.regularCents === 3999 && saved2.overrides.promoCents === 2799 && saved2.approved.regularCents === 2797 && saved2.approved.promoCents === 1999 && saved2.variant.variantId === '4444444444' && JSON.stringify(saved2.fields) === JSON.stringify(saved1.fields) && (await libRaw5()) === libBefore5);
   const rep2 = await t.prompt();
-  check('The report states the discount from the effective prices ($39.99 / $27.99 = 30%) and notes the page-specific override; the page’s badge agrees so no mismatch is raised', /Discount: 30% off, from approved regular \$39\.99 and sale \$27\.99 \(includes this page’s price override\)\. The page badge agrees/.test(rep2) && !/Mismatch/.test(rep2), rep2.slice(rep2.indexOf('Discount') - 50, rep2.indexOf('Discount') + 300));
+  check('The report states the badge percent from the effective prices ($39.99 / $27.99 = 30%), calculated, with no mismatch raised', /Discount badge \[[^\]]+\][^\n]*set to `30% OFF`, calculated from regular \$39\.99 and sale \$27\.99/.test(rep2) && !/mismatch/i.test(rep2), rep2.slice(rep2.indexOf('Discount') - 50, rep2.indexOf('Discount') + 300));
+  // Change Report: the same card exported live names source vs target, the displayed price and, only when asked, Add to Cart.
+  check('Change Report: source page and implementation target are separate, the fixture URL is the reference, and the cart option is off', /## Source page and implementation target/.test(rep2) && /Inspected source page \(reference only\)/.test(rep2) && /Implementation target:\*\* the matching HTML/.test(rep2) && /## Add to Cart\n- Not requested/.test(rep2) && !/Add to Cart implementation \(requested\)/.test(rep2) && /Displayed price: current price \*\*\$27\.99\*\* \(sale\), struck-through regular price \*\*\$39\.99\*\*/.test(rep2), rep2.slice(0, 1500));
+  await A.evaluate(() => { __BL.S.exportCart = true; });
+  const repCart = await t.prompt();
+  await A.evaluate(() => { __BL.S.exportCart = false; });
+  check('Change Report: ticking Include Add to Cart implementation adds the platform-aware instructions and the card’s exact variant id; unticking removes them', /## Add to Cart implementation \(requested\)/.test(repCart) && /Ajax Cart API/.test(repCart) && /Add to Cart: implement it for this card with variant id `4444444444`/.test(repCart) && !/Add to Cart implementation \(requested\)/.test(await t.prompt()), repCart.slice(repCart.indexOf('## Add to Cart'), repCart.indexOf('## Add to Cart') + 400));
   await A.evaluate(() => { __BL.S.ui.root.querySelector('.x-pmbox .pmb').click(); }); await sleep(600);
   await A.evaluate(() => { __BL.S.ui.root.querySelector('[data-x="lib-map-reset-all"]').click(); }); await sleep(250);
   w = await win();
@@ -5813,7 +5821,7 @@ console.log('\n# Product Mapping M4: field recognition, suggestions, manual corr
   check('The reason says what happened, and nothing was re-assigned: the draft equals what was saved and Save stays off', /no longer where it was/.test(w.rows.sale.sub) && /no longer where it was/.test(w.rows.regular.sub) && w.ctaOff === true && JSON.stringify(w.fields) === JSON.stringify(posSaved.fields), JSON.stringify([w.rows.sale.sub, w.rows.regular.sub]));
   check('A moved element offers its one look-alike ("Use this one") rather than taking it, and "Check again" is offered', w.rows.sale.btns.includes('Use this one') && w.rows.regular.btns.includes('Use this one') && await A.evaluate(() => !!__BL.S.ui.root.querySelector('[data-x="lib-el-rescan"]')));
   const rep = await t.prompt();
-  check('The report lists the needs-review elements with the reason and the selectors, shows what was saved, and does not claim Add to Cart is wired', /Page elements in this card/.test(rep) && /\*\*Review before using:\*\*/.test(rep) && /Sale price \(the element is no longer where it was/.test(rep) && /Regular price \(the element is no longer where it was/.test(rep) && /Add to Cart button: .* \(confirmed\)/.test(rep) && /Nothing is wired to the cart or checkout yet/.test(rep) && new RegExp(`variant id \`${vOf5('black-seed-oil').variantId}\``).test(rep), rep.slice(rep.indexOf('Page elements') - 100, rep.indexOf('Page elements') + 1400));
+  check('The report lists the needs-review elements with the reason, shows the confirmed ones as confirmed, and leaves the cart alone', /Fields in this card/.test(rep) && /\*\*Review before editing:\*\*/.test(rep) && /Sale price \[confirmed earlier, \*\*needs review\*\*\]: the element is no longer where it was/.test(rep) && /Regular price \[confirmed earlier, \*\*needs review\*\*\]: the element is no longer where it was/.test(rep) && /Add to Cart button \[confirmed by you\]: .* → leave its existing behavior unchanged/.test(rep) && !/Nothing is wired/.test(rep) && new RegExp(`variant id \`${vOf5('black-seed-oil').variantId}\``).test(rep), rep.slice(rep.indexOf('Fields in this card') - 100, rep.indexOf('Fields in this card') + 1600));
   await rowBtn('sale', 'lib-el-use');
   w = await win();
   check('Accepting the look-alike re-links that field (a draft change to be saved) and updates its state at once', w.rows.sale.badge === 'Confirmed' && w.ctaOff === false);
@@ -5828,6 +5836,52 @@ console.log('\n# Product Mapping M4: field recognition, suggestions, manual corr
   await B5.close();
   check('The Product Library is still byte-identical after all of this', (await libRaw5()) === libBefore5);
   check('No page errors (product-fields.html)', A.errors.length === 0, A.errors.join(' | '));
+  await A.close();
+}
+
+// ------------------------------------------------------------------ Change Report: live field targets (read-only)
+console.log('\n# Change Report export: field-level targets read from the page (fixtures/product-fields.html)');
+{
+  const A = await open('product-fields.html', { http: true, realStorage: true });
+  const ex = (sel, saved = null, promo = true, inject = null) => A.evaluate((sel, saved, promo, inject) => {
+    const C = BluelineCards; const el = document.querySelector(sel);
+    if (inject) { const s = document.createElement('span'); s.textContent = inject; el.appendChild(s); }
+    const before = document.documentElement.outerHTML;
+    const savedItems = {};
+    for (const [k, v] of Object.entries(saved || {})) savedItems[k] = v === 'unmapped' ? { state: 'unmapped' } : { state: 'confirmed', ref: C.fieldRef(el, el.querySelector(v), k) };
+    const r = C.exportFields(el, savedItems, { promo });
+    const inside = (loc) => { if (!loc || loc.wrapper || loc.self) return true; try { const n = loc.sel ? el.querySelectorAll(loc.sel) : el.querySelectorAll(`:scope > ${loc.path}`); return n.length === 1; } catch { return false; } };
+    return { f: r.fields, labels: r.labels, untouched: document.documentElement.outerHTML === before || !!inject, scoped: Object.values(r.fields).every((x) => !x.loc || inside(x.loc)) };
+  }, sel, saved, promo, inject);
+  const D1 = '#rail-des > article:nth-child(1)';
+  const d = await ex(D1);
+  check('Field targets: with nothing confirmed, every found field is "detected" (never "confirmed"), each with a locator and markup snippet', Object.values(d.f).filter((x) => x.loc).length >= 5 && Object.values(d.f).every((x) => x.basis !== 'confirmed') && Object.values(d.f).filter((x) => x.loc).every((x) => x.basis === 'detected' && x.loc.snippet.startsWith('<') && typeof x.loc.parent === 'string'), JSON.stringify(Object.fromEntries(Object.entries(d.f).map(([k, v]) => [k, v.basis]))));
+  check('Field targets: every selector or path is scoped to the card (it matches exactly one element inside it)', d.scoped === true);
+  check('Field targets: unclassed designer markup is flagged fragile with the reason and the markup to look for', Object.values(d.f).some((x) => x.loc && x.loc.fragile && x.loc.fragileWhy && x.loc.snippet), JSON.stringify(Object.values(d.f).map((x) => x.loc && [x.loc.sel, x.loc.path, x.loc.fragile])));
+  check('Field targets: reading the card does not change the page', d.untouched === true);
+  const c = await ex('#grid-sem > li:nth-child(1)', { title: 'h3', sale: 'ins' }, true);
+  check('Field targets: only what a person assigned is "confirmed"; the rest stay "detected"', c.f.title.basis === 'confirmed' && c.f.sale.basis === 'confirmed' && c.f.regular.basis === 'detected' && c.f.image.basis === 'detected' && c.f.title.loc.tag === 'h3' && c.f.sale.loc.tag === 'ins', JSON.stringify(Object.fromEntries(Object.entries(c.f).map(([k, v]) => [k, v.basis]))));
+  check('Field targets: a conventional card gives a real class-based selector (not fragile) for its confirmed title', typeof c.f.title.loc.sel === 'string' || c.f.title.loc.path, JSON.stringify(c.f.title.loc));
+  const u = await ex('#grid-sem > li:nth-child(1)', { link: 'unmapped' });
+  check('Field targets: a field the person marked "not on this card" stays unmapped, with no element', u.f.link.basis === 'unmapped' && !u.f.link.loc);
+  const m = await ex('#grid-sem > li:nth-child(3)');
+  check('Field targets: a field the card does not have is "missing", with no selector invented', m.f.regular.basis === 'missing' && !m.f.regular.loc && m.f.badge.basis === 'missing' && !m.f.badge.loc);
+  const a = await ex('#rows-amb > div:nth-child(1)');
+  check('Field targets: look-alike elements are "ambiguous" with the candidates listed and none chosen', ['image', 'sale', 'regular', 'link'].every((k) => a.f[k].basis === 'ambiguous' && !a.f[k].loc && a.f[k].candidates.length >= 2 && a.f[k].candidates.every((x) => x.loc.snippet)) && a.f.title.basis === 'detected', JSON.stringify(Object.fromEntries(Object.entries(a.f).map(([k, v]) => [k, v.basis]))));
+  const lb = await ex(D1, null, true, 'PROTEIN');
+  check('Field targets: a leftover category label in the card is reported as a label, separate from the fields', lb.labels.some((x) => x.text === 'PROTEIN') && Object.values(lb.f).every((x) => !x.loc || x.loc.snippet.indexOf('PROTEIN') === -1), JSON.stringify(lb.labels.map((x) => x.text)));
+  // SHOP DEAL: a plain <a class="btn"> that is the card's Add to Cart control. It is the cta, never also the product link.
+  await A.evaluate(() => {
+    const host = document.createElement('div'); host.id = 'cr-host';
+    host.innerHTML = '<article id="cr-a" style="border:1px solid #ccc"><div style="height:60px;background:#eee">[Product shot]</div><h3>[Product Name]</h3><span class="price">[$Price]</span><a class="btn" href="#">SHOP DEAL</a></article>'
+      + '<article id="cr-b" style="border:1px solid #ccc"><div style="height:60px;background:#eee">[Product shot]</div><h3>[Product Name]</h3><span class="price">[$Price]</span></article>';
+    document.body.appendChild(host);
+  });
+  const sd = await ex('#cr-a');
+  check('SHOP DEAL (<a class="btn">) is detected as the Add to Cart control and is not offered as the product link', sd.f.cta.basis === 'detected' && sd.f.cta.loc.tag === 'a' && /SHOP DEAL/.test(sd.f.cta.loc.snippet) && !(sd.f.link.loc && sd.f.link.loc.tag === 'a' && /SHOP DEAL/.test(sd.f.link.loc.snippet)) && !(sd.f.link.candidates || []).some((c) => /SHOP DEAL/.test(c.loc.snippet)), JSON.stringify([sd.f.cta.basis, sd.f.link]));
+  const nb = await ex('#cr-b');
+  check('A card with no button reports its Add to Cart control as missing (nothing invented) while its other fields are still found', nb.f.cta.basis === 'missing' && !nb.f.cta.loc && nb.f.title.basis === 'detected', JSON.stringify(Object.fromEntries(Object.entries(nb.f).map(([k, v]) => [k, v.basis]))));
+  check('No page errors (change report export)', A.errors.length === 0, A.errors.join(' | '));
   await A.close();
 }
 

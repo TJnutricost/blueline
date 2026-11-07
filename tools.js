@@ -2618,6 +2618,16 @@
     }
     return { items: out };
   }
+  // The card's fields for the Change Report, read from the page as it is now: confirmed ones are re-resolved, the rest
+  // are detected (and reported as detected, never as confirmed). null when the card can't be checked right now.
+  function fieldTargetsFor(m) {
+    const C = cardsApi();
+    const Lb = libApi();
+    if (!C || !Lb || !C.exportFields || !Lb.isMapping(m)) return null;
+    const el = cardElFor(m.card);
+    if (!el) return null;
+    try { return C.exportFields(el, Lb.fieldItems(m), { promo: Number.isInteger(Lb.effectiveValues(m).promoCents) }); } catch { return null; }
+  }
   let fieldFlashT = 0;
   function fieldFlash(el) {
     if (!el || !el.isConnected) return;
@@ -6643,7 +6653,7 @@
   }
 
   hooks.promptRegion = (it) => {
-    if (it.kind === 'page') return ['', '**Where**', `- A general note about the whole page ${code(it.path)}, not one specific element.`, ...whereLines(it)];
+    if (it.kind === 'page') return ['', '**Where**', `- A general note about the whole page ${code(globalThis.BluelineLibrary?.pageLabel ? globalThis.BluelineLibrary.pageLabel(it.url, it.path) : it.path)}, not one specific element.`, ...whereLines(it)];
     const rg = it.region;
     const c = rg.ctx;
     const L = ['', '**Where** (new, nothing exists here yet)'];
@@ -6840,7 +6850,7 @@
     }
     // Product Mapping: written from the saved snapshot only, so the (synchronous) report never waits on the library.
     if (it.productMapping) {
-      const lines = globalThis.BluelineLibrary?.mappingReportLines?.(it.productMapping, { check: mapChecks.get(it.id) || null, fieldCheck: it.path === here() ? fieldCheckFor(it.productMapping) : null });
+      const lines = globalThis.BluelineLibrary?.mappingReportLines?.(it.productMapping, { check: mapChecks.get(it.id) || null, fieldCheck: it.path === here() ? fieldCheckFor(it.productMapping) : null, fieldTargets: it.path === here() ? fieldTargetsFor(it.productMapping) : null, cart: !!BL.exportOpts?.cart });
       if (lines) L.push(...lines);
       else L.push('- A Product Mapping is saved with this note, but the Product Library module did not load. Reload the page and export again.');
     }

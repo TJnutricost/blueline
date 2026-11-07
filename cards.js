@@ -845,6 +845,90 @@
     return res;
   }
 
+  // ---- Change Report: where each field is, for a developer (read-only; nothing is stored or changed)
+  //
+  // fieldLocator describes ONE element so a developer can find it without Blueline: a selector scoped to the card when it
+  // is unique there, otherwise a structural path (marked fragile), plus a short markup snippet and its parent.
+  const attrSnippet = (el) => {
+    const keep = ['id', 'class', 'itemprop', 'data-blueline-product-field', 'role', 'aria-label', 'href', 'src', 'alt'];
+    const parts = [];
+    for (const n of keep) { const v = el.getAttribute && el.getAttribute(n); if (v) parts.push(`${n}="${clip(v, n === 'class' || n === 'href' || n === 'src' ? 60 : 40).replace(/"/g, "'")}"`); }
+    return parts.length ? ' ' + parts.join(' ') : '';
+  };
+  const snippetOf = (el) => `<${tagOf(el)}${attrSnippet(el)}>${clip(el.children.length ? textOf(el) : (el.textContent || '').trim(), 40).replace(/\s+/g, ' ')}</${tagOf(el)}>`;
+  const parentTag = (cardEl, el) => { const p = el.parentElement; if (!p || p === cardEl) return 'the card itself'; return tagOf(p) + classesOf(p).slice(0, 3).map((c) => `.${c}`).join(''); };
+  function fieldLocator(cardEl, el, key) {
+    if (!cardEl || !el) return null;
+    const wrapper = el !== cardEl && !cardEl.contains(el);
+    const ref = fieldRef(cardEl, el, key);
+    const sel = wrapper || el === cardEl ? null : ref.sel;
+    const path = wrapper ? null : el === cardEl ? null : ref.path;
+    const generic = !!sel && /^[a-z][a-z0-9]*(?: > [a-z][a-z0-9]*)?$/i.test(sel);
+    let why = null;
+    if (wrapper) why = 'the link wraps the card from outside';
+    else if (el === cardEl) why = 'the card element itself';
+    else if (!sel) why = 'no short unique selector: the structural path depends on the card’s exact markup order';
+    else if (generic) why = 'the selector is only tag names, so it is generic';
+    return {
+      sel: sel || null, path: path || null, tag: tagOf(el), classes: classesOf(el).slice(0, 4), snippet: snippetOf(el), parent: wrapper ? 'outside the card' : parentTag(cardEl, el),
+      wrapper, self: el === cardEl, fragile: !!why, fragileWhy: why,
+    };
+  }
+  // The card's fields as a developer needs them. `saved` = the mapping's confirmed/unmapped items ({ key: { state, ref } }).
+  // Every field gets a basis: confirmed (a person assigned it, and it resolves now), review (confirmed once, but the page no
+  // longer matches), detected (found by Blueline, never confirmed), ambiguous (several equal candidates), missing, or
+  // unmapped (a person said the card has none). Nothing is invented: a field with no element has no selector.
+  function exportFields(cardEl, saved = {}, ctx = {}) {
+    const det = detectFields(cardEl, { promo: !!ctx.promo });
+    const out = {};
+    const used = new Set();
+    const els = {};
+    for (const key of FIELD_KEYS) {
+      const s = saved[key];
+      const d = det.fields[key];
+      if (s && s.state === 'unmapped') { out[key] = { basis: 'unmapped' }; continue; }
+      if (s && s.state === 'confirmed') {
+        const x = resolveFieldRef(cardEl, key, s.ref);
+        if (x.state === 'ok') { out[key] = { basis: 'confirmed', loc: fieldLocator(cardEl, x.el, key), value: fieldValue(x.el, key) }; used.add(x.el); els[key] = x.el; continue; }
+        out[key] = { basis: 'review', state: x.state, reasons: x.reasons, candidates: x.candidates.slice(0, 3).map((e) => ({ loc: fieldLocator(cardEl, e, key), value: fieldValue(e, key) })) };
+        continue;
+      }
+      if (d.status === 'suggested' && d.best) { out[key] = { basis: 'detected', confidence: d.confidence, how: d.best.how, loc: fieldLocator(cardEl, d.best.el, key), value: fieldValue(d.best.el, key) }; used.add(d.best.el); els[key] = d.best.el; }
+      else if (d.status === 'ambiguous') out[key] = { basis: 'ambiguous', candidates: (d.near || d.candidates).slice(0, 3).map((c) => ({ loc: fieldLocator(cardEl, c.el, key), value: fieldValue(c.el, key) })) };
+      else out[key] = { basis: 'missing' };
+    }
+    // The call-to-action (e.g. SHOP DEAL) is the card's cart control, not a product link: it is never offered as the link, so
+    // the product address stays separate mapping data. A card whose only link IS the control simply has no separate link.
+    const ctaEl = els.cta || null;
+    if (ctaEl && !(saved.link && (saved.link.state === 'confirmed' || saved.link.state === 'unmapped'))) {
+      const rest = (det.fields.link.candidates || []).filter((c) => c.el !== ctaEl && !ctaEl.contains(c.el) && !c.el.contains(ctaEl));
+      const hrefs = new Set(rest.map((c) => (c.value && c.value.href) || c.el));
+      if (out.link.basis === 'detected' && out.link.loc && els.link === ctaEl) {
+        if (!rest.length) out.link = { basis: 'missing', sharedWithCta: true };
+        else if (hrefs.size === 1) out.link = { basis: 'detected', confidence: 'medium', how: rest[0].how, loc: fieldLocator(cardEl, rest[0].el, 'link'), value: fieldValue(rest[0].el, 'link') };
+        else out.link = { basis: 'ambiguous', candidates: rest.slice(0, 3).map((c) => ({ loc: fieldLocator(cardEl, c.el, 'link'), value: fieldValue(c.el, 'link') })) };
+      } else if (out.link.basis === 'ambiguous') {
+        const keep = (out.link.candidates || []).filter((c) => c.loc && !(c.loc.sel === (out.cta.loc && out.cta.loc.sel) && c.loc.path === (out.cta.loc && out.cta.loc.path) && c.loc.tag === (out.cta.loc && out.cta.loc.tag)));
+        if (keep.length === 1) out.link = { basis: 'detected', confidence: 'low', loc: keep[0].loc, value: keep[0].value };
+        else if (!keep.length) out.link = { basis: 'missing', sharedWithCta: true };
+        else out.link = { ...out.link, candidates: keep };
+      }
+    }
+    if (out.link && out.link.loc && ctaEl && els.link === ctaEl) out.link.sharesCta = true;
+    // Other short text in the card (a category or label written for the previous product), never one of the fields above.
+    const nodes = qsa('*', cardEl).slice(0, 450).filter((n) => !SKIP_TAG.test(n.tagName));
+    const labels = [];
+    for (const b of textBlocks(cardEl, nodes)) {
+      if ([...used].some((u) => u === b.el || u.contains(b.el) || b.el.contains(u)) || b.text.length < 2 || b.text.length > 28) continue;
+      if (pricesIn(b.text).length || parseBadge(b.text) || isCtaEl(b.el) || b.el.closest('a,button')) continue;
+      const loud = /^[A-Z0-9][A-Z0-9 &\-/+'’]{1,26}$/.test(b.text) && /[A-Z]{2}/.test(b.text);
+      const named = /(?:^|[^a-z])(cat|category|eyebrow|kicker|label|tag|type|collection|goal|pill|chip)(?:[^a-z]|$)/.test(sigOf(b.el));
+      if (loud || named) labels.push({ text: b.text, loc: fieldLocator(cardEl, b.el, 'label') });
+      if (labels.length >= 3) break;
+    }
+    return { fields: out, labels };
+  }
+
   // What a click on the page means for a field: the nearest element at or above the click that can hold that field (a
   // click on a price's currency symbol means the price). null when nothing there could be it. Used by the picker, which
   // is limited to the card.
@@ -976,6 +1060,6 @@
 
   return {
     SCHEMA, hash, propose, describe, evaluate, measure, discoverSlots, slotElement, reportLines, isBroad, cardLike, group, sectionOf, signals,
-    discoverCards, cardBrief, isHidden, FIELD_KEYS, FIELD_LABELS, pricesIn, parseBadge, detectFields, snapPick, fieldRef, fieldValue, resolveFieldRef, roleOk,
+    discoverCards, cardBrief, isHidden, FIELD_KEYS, FIELD_LABELS, pricesIn, parseBadge, detectFields, exportFields, fieldLocator, snapPick, fieldRef, fieldValue, resolveFieldRef, roleOk,
   };
 });

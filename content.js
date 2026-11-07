@@ -29,6 +29,7 @@
 
   const S = {
     active: false,
+    exportCart: false, // 'Include Add to Cart implementation' in the export window; off until ticked, never saved
     picking: false,
     page: {},
     batch: null,
@@ -893,8 +894,11 @@
     return `Section: ${w}. Static section, likely \`sections/${sec.key}.liquid\`.`;
   }
 
-  function buildPrompt(batch) {
+  function buildPrompt(batch, opts = {}) {
     const items = batch?.items || [];
+    BL.exportOpts = { cart: opts.cart !== undefined ? !!opts.cart : !!S.exportCart };
+    const Lb = lib();
+    const label = (it) => (Lb?.pageLabel ? Lb.pageLabel(it.url, it.path) : it.path);
     const pages = new Set(items.map((i) => i.path));
     const modes = [...new Set(items.map((i) => i.mode || 'shopify'))];
     const lead = items[0] || {};
@@ -905,8 +909,8 @@
     L.push('# Webpage Change Request');
     L.push(`${plural(items.length, 'item')} on ${plural(pages.size, 'page')}.`);
     L.push('', '## Page');
-    try { L.push(`- Site: ${new URL(lead.url).origin}`); } catch { /* ignore */ }
-    L.push(`- ${pages.size === 1 ? 'Page' : 'Pages'}: ${[...pages].map((x) => code(x)).join(', ')}`);
+    if (!items.some((i) => /^file:/i.test(i.url || ''))) { try { L.push(`- Site: ${new URL(lead.url).origin}`); } catch { /* ignore */ } }
+    L.push(`- ${pages.size === 1 ? 'Page' : 'Pages'}: ${[...new Set(items.map((i) => label(i)))].map((x) => code(x)).join(', ')}`);
     if (lead.title) L.push(`- Title: ${lead.title}`);
     const stack = [];
     if (modes.includes('shopify')) stack.push(`Shopify theme${p.theme ? ` "${p.theme.name}" (${p.theme.role}, id ${p.theme.id})` : ''}${p.shop ? ` on ${p.shop}` : ''}`);
@@ -924,6 +928,15 @@
     const vps = new Set(items.map((i) => (i.viewport ? `${i.viewport.w}×${i.viewport.h}` : '')).filter(Boolean));
     if (vps.size === 1) L.push(`- Viewport: ${[...vps][0]}`);
 
+    // Where the changes go: the inspected page is only a reference; the target is the reader's own project.
+    if (Lb?.sourceTargetLines) {
+      const seenSrc = new Set();
+      const sources = items.filter((i) => { const k = i.url || i.path; if (seenSrc.has(k)) return false; seenSrc.add(k); return true; }).map((i) => ({ url: i.url, path: i.path }));
+      L.push(...Lb.sourceTargetLines(sources));
+    }
+    const mapped = items.filter((i) => i.productMapping);
+    if (mapped.length && Lb?.cartLines) L.push(...Lb.cartLines({ on: BL.exportOpts.cart, hasVariants: mapped.some((i) => i.productMapping.variant) }));
+
     if (BL.hooks.promptHeader) L.push(...BL.hooks.promptHeader(items, batch));
 
     // ---- items
@@ -933,7 +946,7 @@
       const rx = e.react;
       L.push('', '---', '');
       const sizes = it.bps && it.bps.length ? (it.bps.length === 3 ? 'all breakpoints' : it.bps.join(' + ')) : bp(v.w);
-      L.push(`## ${i + 1}. ${typeLabel(it.type || 'polish')}${it.kind && it.kind !== 'element' ? ' · ' + it.kind : ''}${BL.hooks.isReference?.(it) ? ' (reference only)' : ''}: ${it.path}  (${sizes}${vps.size > 1 && v.w ? `, ${v.w}×${v.h}` : ''})`);
+      L.push(`## ${i + 1}. ${typeLabel(it.type || 'polish')}${it.kind && it.kind !== 'element' ? ' · ' + it.kind : ''}${BL.hooks.isReference?.(it) ? ' (reference only)' : ''}: ${label(it)}  (${sizes}${vps.size > 1 && v.w ? `, ${v.w}×${v.h}` : ''})`);
       L.push(it.note ? `**Note:** ${it.note}` : BL.hooks.noteFallback ? BL.hooks.noteFallback(it) : '**Note:** none written. See the annotations below.');
       if ((it.kind === 'region' || it.kind === 'page') && BL.hooks.promptRegion) {
         L.push(...BL.hooks.promptRegion(it));
@@ -992,7 +1005,7 @@
 
       if (it.steps?.length) {
         L.push('', '**Steps before the note** (oldest first)');
-        it.steps.forEach((s, k) => L.push(`${k + 1}. ${s.kind} ${s.what}${s.path && s.path !== it.path ? ` on ${s.path}` : ''}`));
+        it.steps.forEach((s, k) => L.push(`${k + 1}. ${s.kind} ${s.what}${s.path && s.path !== it.path ? ` on ${Lb?.pageLabel ? Lb.pageLabel(it.url, s.path) : s.path}` : ''}`));
       }
       if (it.console?.length) {
         L.push('', '**Console** (last 3 min)');
@@ -1362,6 +1375,7 @@
       <div class="sheet" role="dialog" aria-label="Export Change Report">
         <header class="sheet-head"><h2>Webpage change request</h2><button class="icon" data-act="modal-close" aria-label="Close">✕</button></header>
         <div class="opt"><button class="primary" data-act="export-shots">Export Screenshots</button><span class="shots-note"></span></div>
+        <label class="opt cart-opt" title="Off by default. When on, the report asks the coding AI to implement working Add to Cart for the mapped products."><input type="checkbox" class="opt-cart"> Include Add to Cart implementation</label>
         <textarea class="out" readonly spellcheck="false"></textarea>
         <footer class="sheet-foot">
           <span class="status"></span>
@@ -1434,6 +1448,7 @@
     });
 
     root.addEventListener('change', (e) => {
+      if (e.target.classList.contains('opt-cart')) { S.exportCart = e.target.checked; S.ui.$('.out').value = buildPrompt(S.batch); return; }
       if (e.target.classList.contains('pop-broken')) {
         setPopType(e.target.checked ? 'bug' : S.popBase);
       }
@@ -1948,6 +1963,8 @@
       : saved.length === jobs.length ? `Screenshots saved in ${folder}`
         : saved.length ? `${saved.length} of ${jobs.length} screenshots saved. Press Export Screenshots for the rest.`
           : `${plural(jobs.length, 'screenshot')} not exported. The report doesn’t list them until you press Export Screenshots.`;
+    const cartBox = $('.opt-cart');
+    if (cartBox) cartBox.checked = !!S.exportCart;
     $('.out').value = buildPrompt(S.batch);
   }
 
