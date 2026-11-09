@@ -1189,17 +1189,124 @@
     return { regularCents: Number.isInteger(regularCents) ? regularCents : null, saleCents: Number.isInteger(saleCents) ? saleCents : null, percent, why, discrepancy, badgeNote };
   }
 
+  // What the card should display, from the effective (approved + page-specific) values. `single`: the card shows one price
+  // element. A promotional price is the displayed price where there is one; the regular price only when there is no sale.
+  // These are display values from the list: they never say what a checkout charges.
+  function displayPrice(m, { single = null } = {}) {
+    const ev = effectiveValues(m);
+    const cur = m?.approved?.currency || undefined;
+    const money = (c) => (Number.isInteger(c) ? fmt(c, cur) : null);
+    const sale = Number.isInteger(ev.promoCents) && (!Number.isInteger(ev.regularCents) || ev.promoCents < ev.regularCents) ? ev.promoCents : null;
+    const reg = Number.isInteger(ev.regularCents) ? ev.regularCents : null;
+    if (sale !== null) {
+      if (single === true) return { mode: 'single-sale', current: money(sale), regular: money(reg), text: `show **${money(sale)}** (the sale price) as the only price. The regular price ${reg !== null ? money(reg) : '(not approved)'} is not shown on this card` };
+      if (single === false && reg !== null) return { mode: 'dual', current: money(sale), regular: money(reg), text: `current price **${money(sale)}** (sale), struck-through regular price **${money(reg)}**` };
+      return { mode: 'sale', current: money(sale), regular: money(reg), text: `the sale price **${money(sale)}** is the displayed (current) price${reg !== null ? `; where the card also has a struck-through price it is the regular ${money(reg)}` : ''}. A card with one price shows the sale price, not the regular price` };
+    }
+    if (reg !== null) return { mode: 'regular', current: money(reg), regular: money(reg), text: `show **${money(reg)}** (approved regular price; there is no sale price)` };
+    return { mode: 'none', current: null, regular: null, text: 'no approved price: leave the price as it is and flag it for review' };
+  }
+  // Does the market-facing category/label text still fit the assigned product? Only a hint: a word of the label has to
+  // appear in the product's name, variant or handle to count as consistent.
+  function labelFits(label, m) {
+    const hay = [m?.product?.name, m?.approved?.title, m?.variant?.title, m?.variant?.variantTitle, m?.variant?.handle, ...(m?.variant?.options || []).map((o) => o.value)].join(' ').toLowerCase();
+    const words = String(label).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+    return words.some((w) => hay.includes(w));
+  }
+
+  // Report lines from LIVE targets (cards.js exportFields): one line per field with where it is, how sure Blueline is,
+  // and the value that goes there. Missing or ambiguous fields are named for review; no selector is ever invented.
+  function targetReportLines(m, targets, { cart = false } = {}) {
+    const code = (s) => '`' + String(s).replace(/`/g, "'") + '`';
+    const ev = effectiveValues(m);
+    const cur = m.approved?.currency || undefined;
+    const money = (c) => (Number.isInteger(c) ? fmt(c, cur) : null);
+    const F = targets.fields || {};
+    const priceBasis = (k) => F[k] && (F[k].basis === 'confirmed' || F[k].basis === 'detected');
+    const single = priceBasis('sale') !== priceBasis('regular') ? true : priceBasis('sale') && priceBasis('regular') ? false : null;
+    const dp = displayPrice(m, { single });
+    const baseLabel = { confirmed: 'confirmed by you', detected: 'detected by Blueline, not confirmed' };
+    const where = (loc) => {
+      if (!loc) return '';
+      if (loc.self) return 'the card element itself';
+      if (loc.wrapper) return 'the link around the card';
+      return (loc.sel ? `${code(loc.sel)} within the card` : `${code(':scope > ' + loc.path)} within the card`);
+    };
+    const ctx = (loc) => (loc && loc.fragile ? ` **Fragile** (${loc.fragileWhy}). Find it by its markup ${code(loc.snippet)} inside ${loc.parent === 'outside the card' ? 'the wrapping element' : code(loc.parent)}.` : '');
+    const L = ['  - Fields in this card (where each value goes). **confirmed** = you assigned it in Product Mapping; **detected** = found by Blueline, never confirmed, so verify it; selectors are relative to the card:'];
+    const review = [];
+    const val = (k, x) => {
+      if (k === 'title') return ev.title ? `set to “${ev.title}”` : null;
+      if (k === 'image') return ev.image ? (x && x.loc && x.loc.tag === 'img' ? `set src to ${code(ev.image)} (alt: the product title)` : `put the product image ${code(ev.image)} in it; it is a placeholder or container (<${x && x.loc ? x.loc.tag : 'element'}>), not an <img>, so keep its size and styling`) : null;
+      if (k === 'link') return ev.url ? `set the address to ${code(ev.url)}${x && x.loc && x.loc.sharesCta ? '; **this is also the Add to Cart control: don’t turn the cart control into a product link**' : ''}` : null;
+      if (k === 'sale') return dp.mode === 'regular' && single !== false ? `show ${dp.current}` : dp.current ? (single === false ? `show ${dp.current} (current price)` : `show ${dp.current}${single === true ? ' (the only price on this card)' : ''}`) : null;
+      if (k === 'regular') return dp.regular ? (dp.mode === 'regular' ? `show ${dp.regular}` : `show ${dp.regular} (struck-through regular price)`) : null;
+      if (k === 'badge') {
+        const d = discountInfo(m, x?.value?.badge || null);
+        if (d.percent === null) return null;
+        const hasOff = /off/i.test(x?.value?.text || '');
+        return `set to ${code(d.percent + '%' + (hasOff ? ' OFF' : ''))}, calculated from regular ${money(d.regularCents)} and sale ${money(d.saleCents)}${d.discrepancy ? `; **mismatch:** ${d.discrepancy}` : ''}`;
+      }
+      if (k === 'cta') return cart ? (m.variant ? `this is the card’s intended Add to Cart control: wire it to variant id ${code(m.variant.variantId)} (see Add to Cart instructions), keep its label and styling, and don’t also make it a product-page link` : 'intended Add to Cart control, but no variant is recorded: do not invent an id') : 'leave its existing behavior unchanged';
+      return null;
+    };
+    for (const k of FIELD_KEYS) {
+      const x = F[k];
+      if (!x) continue;
+      const label = FIELD_LABELS[k];
+      if (x.basis === 'unmapped') { L.push(`    - ${label}: not on this card (you marked it so)`); continue; }
+      if (x.basis === 'confirmed' || x.basis === 'detected') {
+        const v = val(k, x);
+        const seen = x.value && (x.value.href || x.value.src || x.value.text);
+        const conf = x.basis === 'detected' ? `${baseLabel.detected}${x.confidence ? `, ${x.confidence} confidence` : ''}` : baseLabel.confirmed;
+        let line = `    - ${label} [${conf}]: ${where(x.loc)}`;
+        if (seen) line += `; shows “${String(seen).slice(0, 60)}”`;
+        line += v ? ` → ${v}` : k === 'badge' ? ` → **review:** the discount can’t be calculated reliably (${discountInfo(m).why}); don’t invent a percentage` : '';
+        line += '.' + ctx(x.loc);
+        L.push(line);
+        continue;
+      }
+      if (x.basis === 'review') {
+        const cand = (x.candidates || [])[0];
+        L.push(`    - ${label} [confirmed earlier, **needs review**]: ${(x.reasons || [])[0] || x.state}${cand ? `; closest match ${where(cand.loc)} ${code(cand.loc.snippet)}` : ''}. Don’t edit until identified.`);
+        review.push(label);
+        continue;
+      }
+      if (x.basis === 'ambiguous') {
+        L.push(`    - ${label} [**ambiguous**]: ${(x.candidates || []).map((c) => `${where(c.loc)} ${code(c.loc.snippet)}`).join(' or ')}. Blueline could not tell which is right; ask or compare with the screenshot before editing.`);
+        review.push(label);
+        continue;
+      }
+      if (k === 'cta') {
+        L.push(cart
+          ? `    - Add to Cart button: none found on this card. Add to Cart was requested, so this product still needs a cart control${m.variant ? ` using variant id ${code(m.variant.variantId)}` : ''}; where it goes and how it looks is for the developer and designer to decide. Don’t invent one here.`
+          : '    - Add to Cart button: none on this card (normal for some designs). Nothing to change.');
+        continue;
+      }
+      if (k === 'link' && x.sharedWithCta) { L.push('    - Product link: no separate link element; the only link is the call-to-action, which is not changed here. The product URL stays as mapping data above.'); continue; }
+      if (!(k === 'regular' && dp.mode === 'single-sale') && !(k === 'regular' && dp.mode === 'regular')) { L.push(`    - ${label} [**not identified**]: no element found. No selector is given; check the card by hand.`); review.push(label); }
+    }
+    for (const lb of targets.labels || []) {
+      const fits = labelFits(lb.text, m);
+      L.push(`    - Existing label “${lb.text}” (${lb.loc.sel ? code(lb.loc.sel) + ' within the card' : code(':scope > ' + lb.loc.path)}): ${fits ? 'appears to fit the assigned product' : `**review:** it may belong to the previous product and not fit “${ev.title || m.product.name}”. Change it only if the correct category is known; don’t invent one`}.${ctx(lb.loc)}`);
+      if (!fits) review.push(`label “${lb.text}”`);
+    }
+    if (review.length) L.push(`    - **Review before editing:** ${review.join('; ')}`);
+    return L;
+  }
+
   const FIELD_STATE_TEXT = { ok: 'confirmed', moved: 'needs review: it moved', ambiguous: 'needs review: several look-alikes', changed: 'needs review: something else is there now', invalid: 'needs review: it no longer holds this value', missing: 'needs review: not found on the page' };
   // Report lines for the card's mapped page elements. `check` = { items: { key: { state, reasons, value } } } from the page,
   // when it was checked this session; without it the lines say only what was saved. Never claims Add to Cart is wired.
-  function fieldReportLines(m, { check = null } = {}) {
+  function fieldReportLines(m, { check = null, targets = null, cart = false } = {}) {
+    if (targets) return targetReportLines(m, targets, { cart });
     const items = fieldItems(m);
     if (!Object.keys(items).length) return [];
     const code = (s) => '`' + String(s).replace(/`/g, "'") + '`';
     const ev = effectiveValues(m);
     const cur = m.approved?.currency || undefined;
     const money = (c) => (Number.isInteger(c) ? fmt(c, cur) : null);
-    const L = ['  - Page elements in this card (mapped by the person; where each value goes. Nothing is wired to the cart or checkout yet):'];
+    const L = ['  - Page elements in this card (assigned by you in Product Mapping; where each value goes; this page was not re-read, so detected-only fields are not listed):'];
     const approvedOf = { title: ev.title, sale: money(ev.promoCents), regular: money(ev.regularCents), link: ev.url, image: ev.image };
     const unresolved = [];
     const unmapped = [];
@@ -1233,7 +1340,7 @@
   // The report lines for a saved mapping, from the snapshot only (the report is built synchronously and nothing is
   // re-read from the library or the store). Every line is a bullet; nothing is added that the snapshot doesn't hold, and
   // nothing that doesn't help a developer implement the card (no disclaimers about how the values were gathered).
-  function mappingReportLines(m, { check = null, fieldCheck = null } = {}) {
+  function mappingReportLines(m, { check = null, fieldCheck = null, fieldTargets = null, cart = false } = {}) {
     if (!isMapping(m)) return [];
     const code = (s) => '`' + String(s).replace(/`/g, "'") + '`';
     const a = m.approved || {};
@@ -1290,9 +1397,57 @@
     const both = Number.isInteger(ev.promoCents) && Number.isInteger(ev.regularCents);
     const what = ['title', ev.image ? 'image' : '', both ? 'prices' : Number.isInteger(ev.promoCents) || Number.isInteger(ev.regularCents) ? 'price' : '', ev.url ? 'link' : ''].filter(Boolean);
     const list2 = what.length < 2 ? what.join('') : `${what.slice(0, -1).join(', ')} and ${what[what.length - 1]}`;
-    L.push(...fieldReportLines(m, { check: fieldCheck }));
-    L.push(`  - Replace this card’s ${list2} with the values above, keeping its markup and styling.${both ? ' Where it shows two prices, the sale price is the current one and the regular price is the struck-through one.' : ''}${v ? ' Use the variant id only on a cart control the card already has; don’t add cart or checkout wiring where it has none.' : ''}`);
+    {
+      const t = fieldTargets && fieldTargets.fields;
+      const pb = (k) => t && t[k] && (t[k].basis === 'confirmed' || t[k].basis === 'detected');
+      const dp = displayPrice(m, { single: t ? (pb('sale') !== pb('regular') ? true : pb('sale') && pb('regular') ? false : null) : null });
+      L.push(`  - Displayed price: ${dp.text}.`);
+    }
+    L.push(...fieldReportLines(m, { check: fieldCheck, targets: fieldTargets, cart }));
+    L.push(`  - Replace this card’s ${list2} with the values above, keeping its markup and styling.`);
+    if (cart) L.push(v ? `  - Add to Cart: implement it for this card with variant id ${code(v.variantId)}${v.productId ? ` (product id ${code(v.productId)}${v.handle ? `, handle ${code(v.handle)}` : ''})` : ''}, following the Add to Cart instructions at the top. Use no other id.` : '  - Add to Cart: no variant is recorded for this card. Don’t invent an id; report it as a blocker.');
     return L;
+  }
+
+  // ---- Change Report: page-level guidance (source vs implementation target, Add to Cart)
+  // `sources`: [{ url, path }] the pages Blueline inspected. Pure text; nothing here reads the page.
+  const isFileUrl = (u) => /^file:/i.test(String(u || ''));
+  const filePathOf = (u) => { try { return decodeURIComponent(new URL(u).pathname).replace(/^\/([A-Za-z]:)/, '$1'); } catch { return String(u || ''); } };
+  const baseName = (p) => String(p || '').split(/[\\/]/).filter(Boolean).pop() || String(p || '');
+  // A short label for a page: a local file shows only its file name (the full path is given once, in the source section).
+  const pageLabel = (url, path) => (isFileUrl(url) ? baseName(filePathOf(url) || path) : path || url || '');
+  function sourceTargetLines(sources = []) {
+    const code = (s) => '`' + String(s).replace(/`/g, "'") + '`';
+    const seen = new Set();
+    const L = ['', '## Source page and implementation target'];
+    for (const s of sources) {
+      const ref = isFileUrl(s.url) ? `${code(filePathOf(s.url))} (a local file opened in Chrome)` : code(s.url || s.path);
+      if (seen.has(ref)) continue;
+      seen.add(ref);
+      L.push(`- **Inspected source page (reference only):** ${ref}. This is what Blueline analyzed in Chrome; the selectors, DOM context and screenshots below describe it.`);
+    }
+    L.push('- **Implementation target:** the matching HTML, templates or components in the project you have open. It is not necessarily the inspected page, and the path or URL above may not exist on your machine.');
+    L.push('- Inspect the current workspace, find the files that render this page, and match the inspected structure (section headings, card markup, classes, text) to them; class names and order may differ from the selectors here. Apply the changes there.');
+    L.push('- If more than one file could be the target and you can’t tell which, ask before editing. Never edit the inspected file or URL itself, QA fixtures, or original source documents.');
+    return L;
+  }
+  // Always present when the report holds product mappings. Off by default.
+  function cartLines({ on = false, hasVariants = true } = {}) {
+    if (!on) return ['', '## Add to Cart', '- Not requested. Don’t add or change cart, checkout or purchase behavior. Variant ids are reference data, or for a cart control a card already has. Prices shown on cards are display values and don’t change what checkout charges.'];
+    return [
+      '', '## Add to Cart implementation (requested)',
+      '- Implement working Add to Cart for the mapped products below that have an exact variant id. Blueline doesn’t assume a platform; the target project decides how.',
+      '- A card’s call-to-action that Blueline lists as its Add to Cart control (for example a “SHOP DEAL” button) is the control to wire, even if it is currently a plain link; don’t also turn it into a product-page link. Product URLs are separate mapping data. Cards with no such control are normal: say so, and if one needs a control leave its placement and design to the developer and designer.',
+      '  1. Inspect the target project, identify its ecommerce platform and existing cart architecture (cart form, drawer, counter, API calls). Don’t assume Shopify.',
+      '  2. Implement behavior compatible with it and preserve existing cart drawers, counters and interactions.',
+      '  3. Handle loading, error and unavailable or sold-out variant states.',
+      '  4. Use only the exact product and variant ids in each mapping (variant ids are strings; keep them exact). Never invent or guess a missing id.',
+      '  5. Never silently change checkout or product prices. The sale prices here are display values from the list; they don’t establish what Shopify or any checkout charges. If the live price differs, report it instead of overriding it.',
+      '  6. If the target can’t support working cart operations without more integration (a standalone HTML page, an unknown platform, no backend), don’t fake it: implement what is possible and report the blockers.',
+      '- **Shopify theme targets:** use the theme’s own cart mechanism, such as the Ajax Cart API (`POST /cart/add.js` with `{ id: <variant id>, quantity: 1 }`) or the theme’s cart component and section refresh, with the exact variant id from the mapping. A standalone or third-party page can’t call a store’s same-origin Ajax Cart API, and a Shopify product source doesn’t mean the destination uses Shopify checkout.',
+      '- **Other targets:** inspect their actual cart implementation; don’t fabricate a generic cart API.',
+      ...(hasVariants ? [] : ['- No mapped product in this report has a recorded variant id, so there is nothing to wire; report that as a blocker.']),
+    ];
   }
 
   // ------------------------------------------------------------------ list names (unique, case-insensitive)
@@ -1610,7 +1765,7 @@
     listSummaries, optionalStore, moveLibrary, replaceImports, exportList, EXPORT_SCHEMA, approveSubstitution, revokeSubstitution, setEdit, resetEdit, setLocalSku, addLocalProduct,
     newListId, defaultListName, listName, newLibrary, isPristine, renameLibrary, listsForStore, summarize,
     emptyWork, buildRows, STATUS_LABEL, decide, clearDecision, setLookup, chooseVariant, addManualProduct, removeManualProduct, exportApproved,
-    MAPPING_SCHEMA, FIELD_KEYS, FIELD_LABELS, fieldItems, setFieldAssignment, discountPercent, discountInfo, fieldReportLines, isMapping, productMappingSnapshot, mappingReportLines, OVERRIDE_FIELDS, effectiveValues, setMappingOverride, changeMappingVariant, mappingCheck, searchRows,
+    MAPPING_SCHEMA, FIELD_KEYS, FIELD_LABELS, fieldItems, setFieldAssignment, discountPercent, discountInfo, displayPrice, labelFits, sourceTargetLines, cartLines, pageLabel, targetReportLines, fieldReportLines, isMapping, productMappingSnapshot, mappingReportLines, OVERRIDE_FIELDS, effectiveValues, setMappingOverride, changeMappingVariant, mappingCheck, searchRows,
     approveMappingReplacement, buildSelectionMapping, adoptListValues, mappingStatus, shopifyCheck, replacementPending, overrideConflicts,
     uniqueListName, reconcileNames, reconcileListNames, listLabel,
     K_INDEX, kSmp, kWork, campaignId, loadIndex, loadLibrary, saveLibrary, setActive, getActive, deleteLibrary, addImport,

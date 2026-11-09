@@ -224,7 +224,7 @@ await test('Report: one concise block with the values, the replace instruction a
   const lines = L.mappingReportLines(L.productMappingSnapshot(lib, 'sku:ACM-100', { now: NOW, card }));
   console.log('      ' + lines.join('\n      '));
   assert.ok(lines.every((l) => l.startsWith('- ') || l.startsWith('  - ')));
-  assert.ok(lines.length <= 9);
+  assert.ok(lines.length <= 10);
   assert.equal(lines[0], '- **Product mapping** from list “Acme test list” (https://shop.example.com)');
   assert.equal(lines[1], '  - Card: `[data-card="2"]`, in section “Featured Deals”, card 2 of 3, currently “[Product Name]”');
   assert.equal(lines[2], '  - Product: Acme Alpha Powder · list SKU `ACM-100`');
@@ -232,7 +232,9 @@ await test('Report: one concise block with the values, the replace instruction a
   assert.equal(lines[4], '  - Prices: regular $20.00 (approved, SMP price), sale $12.00 (SMP promotional price)');
   assert.equal(lines[5], '  - Image: `https://cdn.example.com/alpha-powder.jpg`');
   assert.equal(lines[6], `  - Link: \`${ORIGIN}/products/alpha-powder?variant=${BIG_ID}\``);
-  assert.equal(lines[7], '  - Replace this card’s title, image, prices and link with the values above, keeping its markup and styling. Where it shows two prices, the sale price is the current one and the regular price is the struck-through one. Use the variant id only on a cart control the card already has; don’t add cart or checkout wiring where it has none.');
+  assert.match(lines[7], /^  - Displayed price: the sale price \*\*\$12\.00\*\* is the displayed \(current\) price; where the card also has a struck-through price it is the regular \$20\.00\. A card with one price shows the sale price, not the regular price\.$/);
+  assert.equal(lines[8], '  - Replace this card’s title, image, prices and link with the values above, keeping its markup and styling.');
+  assert.ok(!lines.some((l) => /cart|checkout/i.test(l))); // no cart wiring text per card while the option is off
   assert.ok(!lines.some((l) => /live-verified|Status:/.test(l))); // no disclaimers, no positive status line
 });
 
@@ -337,7 +339,7 @@ await test('M3 report: overrides and the stale warning are shown, nothing else i
   assert.match(t, /Product: Alpha Night .*page-specific title; the list calls it “Acme Alpha Powder”/);
   assert.match(t, /Image: `https:\/\/cdn\.example\.com\/night\.jpg` \(page-specific override\)/);
   assert.match(t, /\*\*Warning, the saved list record changed:\*\* Approved regular price changed/);
-  assert.match(t, /don’t add cart or checkout wiring/);
+  assert.doesNotMatch(t, /cart or checkout wiring/); // cart text lives in the page-level section now
   assert.doesNotMatch(text(L.mappingReportLines(m, { check: { state: 'current', notes: [] } })), /stale/);
   const rich = richLib();
   const manual = text(L.mappingReportLines(L.productMappingSnapshot(rich.lib, rich.handKey, { now: NOW })));
@@ -690,14 +692,13 @@ await test('M4 report: mapped elements, selectors, discount and mismatch; never 
   m = L.setFieldAssignment(m, 'link', { state: 'unmapped' });
   const lines = L.mappingReportLines(m);
   const text = lines.join('\n');
-  assert.match(text, /Page elements in this card/);
-  assert.match(text, /Nothing is wired to the cart or checkout yet/);
+  assert.match(text, /Page elements in this card \(assigned by you in Product Mapping/);
   assert.match(text, /Add to Cart button: `button\.add` within the card/);
   assert.match(text, /Title: `h3:nth-child\(2\)` within the card/);
   assert.match(text, /Not on this card: Product link/);
   assert.match(text, /Discount: 40% off, from approved regular \$20\.00 and sale \$12\.00\. \*\*Mismatch:\*\* the badge says 25% off but the approved prices give 40%/);
   assert.match(text, new RegExp(`variant id \`${BIG_ID}\``)); // the exact variant id is still reported as a string
-  assert.equal(/wired|add to cart/i.test(text.replace(/Nothing is wired to the cart or checkout yet|Add to Cart button/g, '')), false, 'no cart claims beyond the disclaimer');
+  assert.equal(/wired|add to cart/i.test(text.replace(/Add to Cart button/g, '')), false, 'no cart claims while the option is off');
   const stale = L.fieldReportLines(m, { check: { items: { title: { state: 'moved', reasons: ['the element is no longer where it was'], value: null }, cta: { state: 'ok', reasons: [], value: { text: 'Add to cart' } } } } }).join('\n');
   assert.match(stale, /Title: .* \(needs review: it moved\)/);
   assert.match(stale, /\*\*Review before using:\*\* Title \(the element is no longer where it was\)/);
@@ -849,6 +850,182 @@ await test('Workspace: an item removed since the reset also counts as a change',
   const r = L.restorePlan(snap, p.items.filter((i) => i.id !== 'n-plain'));
   assert.deepEqual(r.conflict.removed, ['n-plain']);
   assert.equal(r.items.some((i) => i.id === 'n-plain'), true);
+});
+
+// ------------------------------------------------------------------ Change Report: field targets, source vs target, cart option
+const LOC = (o = {}) => ({ sel: null, path: null, tag: 'span', classes: [], snippet: '<span class="x">[$Price]</span>', parent: 'div.row', wrapper: false, self: false, fragile: false, fragileWhy: null, ...o });
+const TARGETS = (over = {}) => ({
+  fields: {
+    title: { basis: 'confirmed', loc: LOC({ sel: 'h3.name' }), value: { text: '[Product Name]' } },
+    image: { basis: 'detected', confidence: 'high', loc: LOC({ sel: 'img.photo' }), value: { src: 'https://old.example/x.jpg' } },
+    sale: { basis: 'detected', confidence: 'medium', loc: LOC({ sel: 'span.price' }), value: { text: '[$Price]' } },
+    regular: { basis: 'missing' },
+    badge: { basis: 'detected', confidence: 'high', loc: LOC({ sel: 'span.badge' }), value: { text: '[XX% OFF]', badge: { placeholder: true } } },
+    cta: { basis: 'detected', confidence: 'high', loc: LOC({ sel: 'a.btn' }), value: { text: 'Shop now' } },
+    link: { basis: 'unmapped' },
+  },
+  labels: [],
+  ...over,
+});
+const rep = (m, o = {}) => text(L.mappingReportLines(m, o));
+
+await test('Change Report fields: confirmed vs detected are labelled, a detected field is never called confirmed', () => {
+  const t = rep(mappingFor(), { fieldTargets: TARGETS() });
+  assert.match(t, /Title \[confirmed by you\]: `h3\.name` within the card; shows “\[Product Name\]” → set to “Acme Alpha Powder”/);
+  assert.match(t, /Image \[detected by Blueline, not confirmed, high confidence\]: `img\.photo` within the card/);
+  assert.match(t, /Sale price \[detected by Blueline, not confirmed, medium confidence\]/);
+  assert.doesNotMatch(t, /Image \[confirmed/);
+  assert.doesNotMatch(t, /Sale price \[confirmed/);
+  assert.match(t, /Product link: not on this card \(you marked it so\)/);
+  assert.match(t, /Fields in this card \(where each value goes\)\. \*\*confirmed\*\* = you assigned it in Product Mapping; \*\*detected\*\* = found by Blueline, never confirmed/);
+});
+
+await test('Change Report fields: single price card shows the sale price; the regular price is flagged absent, not invented', () => {
+  const t = rep(mappingFor(), { fieldTargets: TARGETS() });
+  assert.match(t, /Displayed price: show \*\*\$12\.00\*\* \(the sale price\) as the only price\. The regular price \$20\.00 is not shown on this card/);
+  assert.match(t, /Sale price \[detected[^\]]*\]: `span\.price` within the card; shows “\[\$Price\]” → show \$12\.00 \(the only price on this card\)/);
+  assert.doesNotMatch(t, /Regular price \[\*\*not identified/); // expected to be absent on a single-price card
+});
+
+await test('Change Report fields: dual-price card names the current and the struck-through price', () => {
+  const tg = TARGETS(); tg.fields.regular = { basis: 'confirmed', loc: LOC({ sel: 'del.was' }), value: { text: '$99' } };
+  const t = rep(mappingFor(), { fieldTargets: tg });
+  assert.match(t, /Displayed price: current price \*\*\$12\.00\*\* \(sale\), struck-through regular price \*\*\$20\.00\*\*/);
+  assert.match(t, /Regular price \[confirmed by you\]: `del\.was` within the card; shows “\$99” → show \$20\.00 \(struck-through regular price\)/);
+});
+
+await test('Change Report fields: no sale price shows the approved regular price; overrides are respected; nothing changes the product price', () => {
+  let m = mappingFor();
+  m = { ...m, approved: { ...m.approved, promoCents: null } };
+  assert.match(rep(m, { fieldTargets: TARGETS() }), /Displayed price: show \*\*\$20\.00\*\* \(approved regular price; there is no sale price\)/);
+  const o = L.setMappingOverride(mappingFor(), 'promoCents', 999, { now: NOW });
+  const t = rep(o, { fieldTargets: TARGETS() });
+  assert.match(t, /show \*\*\$9\.99\*\*/);
+  assert.match(t, /Page-specific prices are display values; they don’t change what Shopify charges at checkout/);
+});
+
+await test('Change Report fields: missing and ambiguous fields are named for review with no invented selector', () => {
+  const tg = TARGETS();
+  tg.fields.cta = { basis: 'missing' };
+  tg.fields.image = { basis: 'ambiguous', candidates: [{ loc: LOC({ sel: 'img.a', snippet: '<img class="a">' }), value: {} }, { loc: LOC({ sel: 'img.b', snippet: '<img class="b">' }), value: {} }] };
+  tg.fields.title = { basis: 'review', state: 'moved', reasons: ['the element is no longer where it was'], candidates: [{ loc: LOC({ sel: 'h4.t', snippet: '<h4 class="t">x</h4>' }), value: {} }] };
+  const t = rep(mappingFor(), { fieldTargets: tg });
+  assert.match(t, /Add to Cart button: none on this card \(normal for some designs\)\. Nothing to change\./);
+  assert.doesNotMatch(t, /\*\*Review before editing:\*\*[^\n]*Add to Cart/); // a missing control is not an error
+  assert.match(t, /Image \[\*\*ambiguous\*\*\]: `img\.a` within the card .* or `img\.b` within the card/);
+  assert.match(t, /Title \[confirmed earlier, \*\*needs review\*\*\]: the element is no longer where it was; closest match `h4\.t`/);
+  assert.match(t, /\*\*Review before editing:\*\* Title; Image/);
+});
+
+await test('Change Report fields: fragile or generic selectors carry DOM context', () => {
+  const tg = TARGETS();
+  tg.fields.sale = { basis: 'detected', confidence: 'high', loc: LOC({ sel: null, path: 'div:nth-child(2) > span:nth-child(1)', fragile: true, fragileWhy: 'no short unique selector: the structural path depends on the card’s exact markup order', snippet: '<span>[$Price]</span>', parent: 'div.row' }), value: { text: '[$Price]' } };
+  const t = rep(mappingFor(), { fieldTargets: tg });
+  assert.match(t, /Sale price \[detected[^\]]*\]: `:scope > div:nth-child\(2\) > span:nth-child\(1\)` within the card/);
+  assert.match(t, /\*\*Fragile\*\* \(no short unique selector.*Find it by its markup `<span>\[\$Price\]<\/span>` inside `div\.row`/);
+  const generic = TARGETS(); generic.fields.cta = { basis: 'detected', confidence: 'high', loc: LOC({ sel: 'a', fragile: true, fragileWhy: 'the selector is only tag names, so it is generic', snippet: '<a href="#">Shop</a>' }), value: {} };
+  assert.match(rep(mappingFor(), { fieldTargets: generic }), /\*\*Fragile\*\* \(the selector is only tag names/);
+});
+
+await test('Change Report fields: badge is calculated only when reliable; otherwise review', () => {
+  assert.match(rep(mappingFor(), { fieldTargets: TARGETS() }), /Discount badge \[detected[^\]]*\]: `span\.badge` within the card; shows “\[XX% OFF\]” → set to `40% OFF`, calculated from regular \$20\.00 and sale \$12\.00/);
+  const m = mappingFor();
+  const none = rep({ ...m, approved: { ...m.approved, promoCents: null } }, { fieldTargets: TARGETS() });
+  assert.match(none, /Discount badge[^\n]*→ \*\*review:\*\* the discount can’t be calculated reliably \(no approved sale price\); don’t invent a percentage/);
+});
+
+await test('Change Report fields: category labels are flagged when they do not fit the assigned product', () => {
+  const tg = TARGETS({ labels: [{ text: 'PROTEIN', loc: LOC({ sel: 'span.cat', snippet: '<span class="cat">PROTEIN</span>' }) }, { text: 'POWDER', loc: LOC({ sel: 'span.kind', snippet: '<span class="kind">POWDER</span>' }) }] });
+  const t = rep(mappingFor(), { fieldTargets: tg });
+  assert.match(t, /Existing label “PROTEIN” \(`span\.cat` within the card\): \*\*review:\*\* it may belong to the previous product and not fit “Acme Alpha Powder”\. Change it only if the correct category is known; don’t invent one/);
+  assert.match(t, /Existing label “POWDER” .*appears to fit the assigned product/);
+  assert.match(t, /\*\*Review before editing:\*\* label “PROTEIN”/);
+  assert.equal(L.labelFits('PRE-WORKOUT', mappingFor()), false);
+});
+
+await test('Change Report: previously saved mappings (no live targets) keep the saved-only field lines and still export', () => {
+  let m = L.setFieldAssignment(mappingFor(), 'title', { state: 'confirmed', ref: REF('h3:nth-child(1)', 'h3') }, { now: NOW });
+  const t = rep(m);
+  assert.match(t, /Title: `h3:nth-child\(1\)` within the card \(as saved; not re-checked on the page yet\)/);
+  assert.match(t, /detected-only fields are not listed/);
+  assert.match(t, /Displayed price: /);
+  const old = JSON.parse(JSON.stringify(mappingFor())); delete old.fields;
+  assert.equal(L.isMapping(old), true);
+  assert.ok(rep(old).includes('Product: Acme Alpha Powder'));
+});
+
+await test('Change Report: source page vs implementation target; the inspected file path is never the edit target', () => {
+  const file = 'file:///Users/dev/blueline/qa/black-friday-2026/cyber-monday-draft.html';
+  const t = text(L.sourceTargetLines([{ url: file, path: '/Users/dev/blueline/qa/black-friday-2026/cyber-monday-draft.html' }, { url: file, path: '/Users/dev/blueline/qa/black-friday-2026/cyber-monday-draft.html' }]));
+  assert.match(t, /## Source page and implementation target/);
+  assert.equal((t.match(/Inspected source page/g) || []).length, 1);
+  assert.match(t, /Inspected source page \(reference only\):\*\* `\/Users\/dev\/blueline\/qa\/black-friday-2026\/cyber-monday-draft\.html` \(a local file opened in Chrome\)/);
+  assert.match(t, /Implementation target:\*\* the matching HTML, templates or components in the project you have open\. It is not necessarily the inspected page/);
+  assert.match(t, /Inspect the current workspace, find the files that render this page, and match the inspected structure/);
+  assert.match(t, /If more than one file could be the target and you can’t tell which, ask before editing\. Never edit the inspected file or URL itself, QA fixtures, or original source documents/);
+  assert.equal(L.pageLabel(file, '/Users/dev/x/cyber-monday-draft.html'), 'cyber-monday-draft.html'); // headings never repeat the full path
+  assert.equal(L.pageLabel('https://shop.example.com/pages/sale', '/pages/sale'), '/pages/sale');
+  assert.match(text(L.sourceTargetLines([{ url: 'https://shop.example.com/pages/sale', path: '/pages/sale' }])), /`https:\/\/shop\.example\.com\/pages\/sale`/);
+});
+
+await test('Change Report: Add to Cart OFF forbids unsolicited cart work; ON asks for platform-aware implementation', () => {
+  const off = text(L.cartLines({ on: false }));
+  assert.match(off, /## Add to Cart\n- Not requested\. Don’t add or change cart, checkout or purchase behavior/);
+  assert.doesNotMatch(off, /Ajax|implement working/i);
+  const on = text(L.cartLines({ on: true, hasVariants: true }));
+  assert.match(on, /## Add to Cart implementation \(requested\)/);
+  for (const re of [/Inspect the target project, identify its ecommerce platform and existing cart architecture/, /Don’t assume Shopify/, /preserve existing cart drawers, counters and interactions/, /loading, error and unavailable or sold-out/, /variant ids are strings; keep them exact\)\. Never invent or guess a missing id/, /Never silently change checkout or product prices/, /display values from the list; they don’t establish what Shopify or any checkout charges/, /report the blockers/, /Ajax Cart API \(`POST \/cart\/add\.js`/, /standalone or third-party page can’t call a store’s same-origin Ajax Cart API/, /doesn’t mean the destination uses Shopify checkout/, /Other targets:\*\* inspect their actual cart implementation; don’t fabricate a generic cart API/]) assert.match(on, re);
+  assert.match(text(L.cartLines({ on: true, hasVariants: false })), /No mapped product in this report has a recorded variant id/);
+});
+
+await test('Change Report: Add to Cart ON adds a per-card instruction with the exact variant id string; OFF adds none', () => {
+  const m = mappingFor();
+  const on = rep(m, { fieldTargets: TARGETS(), cart: true });
+  assert.match(on, new RegExp(`Add to Cart button \\[detected[^\\]]*\\]: \`a\\.btn\` within the card; shows “Shop now” → this is the card’s intended Add to Cart control: wire it to variant id \`${BIG_ID}\``));
+  assert.match(on, new RegExp(`Add to Cart: implement it for this card with variant id \`${BIG_ID}\``));
+  const off = rep(m, { fieldTargets: TARGETS(), cart: false });
+  assert.match(off, /Add to Cart button \[detected[^\]]*\]: `a\.btn` within the card; shows “Shop now” → leave its existing behavior unchanged/);
+  assert.doesNotMatch(off, /Add to Cart: implement/);
+  const rich = richLib();
+  const noVariant = L.productMappingSnapshot(rich.lib, rich.handKey, { now: NOW });
+  assert.match(rep(noVariant, { cart: true }), /Add to Cart: no variant is recorded for this card\. Don’t invent an id; report it as a blocker/);
+});
+
+await test('Change Report: SHOP DEAL is the intended Add to Cart control; the product URL is separate and the control is never turned into a link', () => {
+  const tg = TARGETS(); tg.fields.cta = { basis: 'detected', confidence: 'high', loc: LOC({ sel: 'a.btn', snippet: '<a class="btn" href="#">SHOP DEAL</a>' }), value: { text: 'SHOP DEAL', href: '' } };
+  tg.fields.link = { basis: 'missing', sharedWithCta: true };
+  const on = rep(mappingFor(), { fieldTargets: tg, cart: true });
+  assert.match(on, /Add to Cart button \[detected[^\]]*\]: `a\.btn` within the card; shows “SHOP DEAL” → this is the card’s intended Add to Cart control: wire it to variant id/);
+  assert.match(on, /Product link: no separate link element; the only link is the call-to-action, which is not changed here\. The product URL stays as mapping data/);
+  assert.doesNotMatch(on, /Product link[^\n]*set the address to/);
+  assert.doesNotMatch(on, /Review before editing:[^\n]*Product link/);
+  const off = rep(mappingFor(), { fieldTargets: tg, cart: false });
+  assert.match(off, /SHOP DEAL” → leave its existing behavior unchanged/);
+  assert.doesNotMatch(off, /Add to Cart: implement|wire it to/);
+  const shared = TARGETS(); shared.fields.cta = tg.fields.cta; shared.fields.link = { basis: 'confirmed', loc: LOC({ sel: 'a.btn', sharesCta: true, snippet: '<a class="btn">SHOP DEAL</a>' }), value: { href: 'https://x/y' } };
+  assert.match(rep(mappingFor(), { fieldTargets: shared, cart: true }), /this is also the Add to Cart control: don’t turn the cart control into a product link/);
+  assert.match(text(L.cartLines({ on: true })), /“SHOP DEAL” button\) is the control to wire, even if it is currently a plain link; don’t also turn it into a product-page link/);
+});
+
+await test('Change Report: a card with no Add to Cart control is reported accurately, not as an error, and no button is invented', () => {
+  const tg = TARGETS(); tg.fields.cta = { basis: 'missing' };
+  const off = rep(mappingFor(), { fieldTargets: tg });
+  assert.match(off, /Add to Cart button: none on this card \(normal for some designs\)\. Nothing to change\./);
+  assert.doesNotMatch(off, /Review before editing:[^\n]*Add to Cart/);
+  const on = rep(mappingFor(), { fieldTargets: tg, cart: true });
+  assert.match(on, new RegExp(`Add to Cart button: none found on this card\\. Add to Cart was requested, so this product still needs a cart control using variant id \`${BIG_ID}\`; where it goes and how it looks is for the developer and designer to decide\\. Don’t invent one here`));
+  assert.doesNotMatch(on, /Review before editing:[^\n]*Add to Cart/);
+});
+
+await test('Change Report: an image placeholder that is not an <img> is described safely; a real <img> gets src', () => {
+  assert.match(rep(mappingFor(), { fieldTargets: TARGETS() }), /Image \[detected[^\]]*\]: `img\.photo`[^\n]*→ put the product image `[^`]+` in it; it is a placeholder or container \(<span>\), not an <img>/);
+  const tg = TARGETS(); tg.fields.image.loc = LOC({ sel: 'img.photo', tag: 'img' });
+  assert.match(rep(mappingFor(), { fieldTargets: tg }), /→ set src to `https:\/\/cdn\.example\.com\/alpha\.jpg` \(alt: the product title\)/);
+});
+
+await test('Change Report: source and target are never mixed into per-card headings (no absolute path in the card block)', () => {
+  const t = rep(mappingFor(), { fieldTargets: TARGETS(), cart: true });
+  assert.doesNotMatch(t, /file:\/\/|\/Users\//);
 });
 
 console.log(`\n${pass}/${pass + fail} mapping tests passed`);
