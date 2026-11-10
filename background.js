@@ -64,7 +64,9 @@ async function downloadAll(folder, files = []) {
   const paths = [];
   for (const f of files) {
     try {
-      const id = await chrome.downloads.download({ url: f.dataUrl, filename: `${folder}/${f.name}`, saveAs: false, conflictAction: 'uniquify' });
+      // No folder: a standalone file goes where the browser normally puts downloads (or its own Save As prompt).
+      const opts = folder ? { url: f.dataUrl, filename: `${folder}/${f.name}`, saveAs: false, conflictAction: 'uniquify' } : { url: f.dataUrl, filename: f.name, conflictAction: 'uniquify' };
+      const id = await chrome.downloads.download(opts);
       const item = await waitForDownload(id);
       paths.push({ id: f.id, path: item && item.state === 'complete' ? item.filename : null });
     } catch (err) {
