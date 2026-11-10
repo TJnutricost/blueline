@@ -33,6 +33,10 @@
     // Additional instructions typed in the export window, appended to the report on copy/save. Memory only: never
     // written to storage and never read back into notes, assignments or mappings.
     extra: '',
+    // C1 Implementation target (platform/theme/page-builder/cart-integration choices for the destination). Memory only and
+    // page-scoped (see target()): never written to S.page, notes, mappings or storage.
+    target: null,
+    targetKey: null,
     picking: false,
     page: {},
     batch: null,
@@ -897,13 +901,91 @@
     return `Section: ${w}. Static section, likely \`sections/${sec.key}.liquid\`.`;
   }
 
+  // ---------------------------------------------------------------- C1: implementation target (memory only, page-scoped)
+
+  const freshTarget = () => ({ platform: 'auto', theme: '', builder: 'auto', builderName: '', cart: 'auto', cartName: '', cartNotes: '' });
+  // The selections belong to the page they were made on: another origin/path starts from Auto again.
+  function target() {
+    const k = `${originNow()}${currentPath()}`;
+    if (!S.target || S.targetKey !== k) { S.target = freshTarget(); S.targetKey = k; }
+    return S.target;
+  }
+  const resetTarget = () => { S.target = null; S.targetKey = null; };
+
+  // Passive, read-only facts about the inspected page (a few querySelector calls; nothing is injected or requested).
+  // Theme metadata, Shogun evidence and cart evidence are kept apart, and an integration is named only for a known marker.
+  const CART_APPS = [
+    { name: 'UpCart', sel: '[id^="upcart"], [class*="upcart-"], script[src*="upcart"]' },
+    { name: 'Rebuy', sel: '[id^="rebuy"], [class*="rebuy-"], script[src*="rebuy"]' },
+  ];
+  // A saved note's own mode; an older note without one is judged from the page data it saved, never assumed to be Shopify.
+  const modeFor = (i) => i.mode || (i.page && Object.keys(i.page).length ? modeOf(i.page) : null);
+  function observedFacts(items, p) {
+    const q = (sel) => { try { return !!document.querySelector(sel); } catch { return false; } };
+    const local = items.some((i) => /^file:/i.test(i.url || '')) || location.protocol === 'file:';
+    const modes = [...new Set(items.map(modeFor).filter(Boolean))];
+    const tech = modes.filter((m) => m !== 'html').map((m) => MODE_LABEL[m] || m);
+    const source = local ? 'Local HTML file' : !modes.length ? 'Live page (platform unknown)' : (modes.length === 1 && modes[0] === 'html') ? 'Live page (plain HTML)' : `Live page (${tech.join(' + ') || 'plain HTML'})`;
+    const theme = p?.theme ? `"${p.theme.name}" (${p.theme.role}, id ${p.theme.id})${p.shop ? ` on ${p.shop}` : ''}` : p?.shop ? `not exposed (store ${p.shop})` : 'not detected';
+    const shogun = [];
+    if (q('.shogun-root, [class^="shg-"], [class*=" shg-"]')) shogun.push('Shogun page markup (`.shogun-root` or `shg-` classes)');
+    if (q('script[src*="shogun"], link[href*="shogun"]')) shogun.push('a Shogun script or stylesheet');
+    if (items.some((i) => i.el?.flags?.includes('shogun')) && !shogun.length) shogun.push('a selected element inside Shogun markup');
+    const cart = [];
+    if (q('form[action*="/cart/add"]')) cart.push('a product form posting to `/cart/add`');
+    if (q('cart-drawer, cart-notification, #CartDrawer, [data-cart-drawer]')) cart.push('a theme cart drawer element');
+    const apps = CART_APPS.filter((a) => q(a.sel)).map((a) => a.name);
+    // What Auto resolves to. Platform: only a live page that exposes Shopify's globals (never a local file).
+    const shopify = !local && !!(p?.shop || p?.theme);
+    const platform = shopify ? 'Shopify' : null;
+    return { local, source, theme, themeName: p?.theme?.name || '', pageType: p?.pageType || null, shogun, cart, apps, shopify, platform, builder: shopify && shogun.length ? 'Shogun' : '', builderSeen: shogun.length ? 'Shogun' : '', cartApp: apps[0] || '' };
+  }
+  const pageOf = (items) => (items.find((i) => i.page?.theme || i.page?.shop || i.page?.next) || items[0] || {}).page || {};
+
+  function targetLines(items, p) {
+    const f = observedFacts(items, p);
+    const t = target();
+    const L = [];
+    L.push(`- **Observed on the inspected page (read-only facts):** ${f.source}.`);
+    L.push(`  - Theme metadata: ${f.theme}${f.pageType ? `; page type ${f.pageType}` : ''}.`);
+    L.push(`  - Shogun evidence: ${f.shogun.length ? f.shogun.join('; ') : 'none found'}.`);
+    L.push(`  - Cart evidence: ${f.cart.length ? f.cart.join('; ') : 'none found'}. Cart integration: ${f.apps.length ? f.apps.join(', ') + ' (marker found)' : 'Unknown'}.`);
+    const clean = (x) => String(x || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    const auto = t.platform === 'auto';
+    if (t.platform === 'shopify' || (auto && f.shopify)) {
+      const themeOv = clean(t.theme);
+      const theme = themeOv || f.themeName;
+      const builderOv = t.builder === 'shogun' ? 'Shogun' : t.builder === 'other' ? clean(t.builderName) : '';
+      const bname = builderOv || f.builder;
+      if (auto) L.push(`- **Intended destination:** Auto, which resolves to Shopify from the inspected page (source-derived; verify it matches the destination project before relying on it).`);
+      else L.push(`- **Intended destination (selected in Blueline):** Shopify. This is where the changes go; it does not change what was observed above.`);
+      if (theme) L.push(`- Theme: \`${theme.replace(/`/g, "'")}\`${themeOv ? ' (selected in Blueline)' : ' (source-derived from the inspected page; the destination theme may differ, so verify it)'}.`);
+      if (bname) L.push(`- Page builder: ${bname}${builderOv ? ' (selected in Blueline)' : ' (source-derived: markers were found on the inspected page; verify the destination page is built with it)'}.`);
+      if (f.local) L.push('- The inspected page is a local HTML file used only as a reference. Port its structure and styles into the destination’s Shopify theme or page-builder content; don’t treat the local file as the target.');
+      if (builderOv === 'Shogun') L.push('- Shogun: content built in Shogun is edited in Shogun (its page editor and custom HTML/CSS), not in theme files. Edit theme files only for parts the theme itself renders, and if the project has no Shogun source, give the exact edits to apply in Shogun instead of guessing at theme files.');
+      else if (builderOv) L.push(`- ${builderOv}: make changes where that builder stores the content, not in theme files, unless the theme renders them.`);
+      else if (bname) L.push('- Shogun (unconfirmed): if the destination page is a Shogun page, edit it in Shogun rather than in theme files; if it is a normal theme template, edit the theme. Check the project before choosing.');
+    } else if (t.platform === 'other') {
+      L.push('- **Intended destination (selected in Blueline):** other or unknown platform. Don’t assume Shopify, Liquid, Shogun or Shopify cart routes; inspect the project to find its framework and files.');
+    } else {
+      L.push(`- **Intended destination:** Auto (nothing detected or selected${f.builderSeen ? '; Shogun markers were seen but no Shopify store was detected' : ''}). Infer it from the project you have open.`);
+    }
+    return L;
+  }
+
+  // The short read-only summary shown above the selectors in the report window.
+  function observedSummary(items) {
+    const f = observedFacts(items, pageOf(items));
+    return `${f.source} · Theme: ${f.theme} · Shogun: ${f.shogun.length ? 'evidence found' : 'none found'} · Cart: ${f.apps.length ? f.apps.join(', ') : f.cart.length ? 'evidence found, integration Unknown' : 'none found, integration Unknown'}`;
+  }
+
   function buildPrompt(batch, opts = {}) {
     const items = batch?.items || [];
     BL.exportOpts = { cart: opts.cart !== undefined ? !!opts.cart : !!S.exportCart };
     const Lb = lib();
     const label = (it) => (Lb?.pageLabel ? Lb.pageLabel(it.url, it.path) : it.path);
     const pages = new Set(items.map((i) => i.path));
-    const modes = [...new Set(items.map((i) => i.mode || 'shopify'))];
+    const modes = [...new Set(items.map(modeFor).filter(Boolean))];
     const lead = items[0] || {};
     const p = (items.find((i) => i.page?.theme || i.page?.shop || i.page?.next) || lead).page || {};
     const styling = [...new Set(items.flatMap((i) => i.styling || []))];
@@ -924,6 +1006,7 @@
     if (modes.includes('react')) stack.push('React app');
     if (modes.includes('html')) stack.push('static HTML/CSS/JS');
     if (styling.length) stack.push(`styling looks like ${styling.join(' + ')}`);
+    if (!stack.length) stack.push('unknown (this note saved no platform data)');
     L.push(`- Detected technology (from the live page, may be incomplete): ${stack.join('; ')}`);
     if (items.some((i) => i.el?.react?.minified)) L.push('- Component names look minified (captured from a production build), so component sources may be inexact.');
 
@@ -936,9 +1019,13 @@
       const seenSrc = new Set();
       const sources = items.filter((i) => { const k = i.url || i.path; if (seenSrc.has(k)) return false; seenSrc.add(k); return true; }).map((i) => ({ url: i.url, path: i.path }));
       L.push(...Lb.sourceTargetLines(sources));
+      L.push(...targetLines(items, p));
     }
     const mapped = items.filter((i) => i.productMapping);
-    if (mapped.length && Lb?.cartLines) L.push(...Lb.cartLines({ on: BL.exportOpts.cart, hasVariants: mapped.some((i) => i.productMapping.variant) }));
+    if (mapped.length && Lb?.cartLines) {
+      const t = target();
+      L.push(...Lb.cartLines({ on: BL.exportOpts.cart, hasVariants: mapped.some((i) => i.productMapping.variant), mode: t.cart, name: t.cartName, notes: t.cartNotes, dest: t.platform === 'shopify' ? 'shopify' : t.platform === 'other' ? 'other' : t.platform === 'auto' && observedFacts(items, p).shopify ? 'detected' : 'unknown', detected: observedFacts(items, p).cartApp }));
+    }
 
     if (BL.hooks.promptHeader) L.push(...BL.hooks.promptHeader(items, batch));
 
@@ -1151,8 +1238,10 @@
   function pageChanged() {
     if (BL.hooks.beforeRescope) BL.hooks.beforeRescope();
     S.lastRenderPath = currentPath();
+    target(); // selections made on the previous page are dropped here
     rescope();
     render();
+    if (S.ui && !S.ui.$('.modal').hidden) { syncTargetUI(); syncReport(); }
   }
 
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -1316,13 +1405,22 @@
     .modal { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(30,34,48,.4);
       display: flex; align-items: center; justify-content: center; padding: 24px; pointer-events: auto; }
     .sheet { width: min(800px, 100%); max-height: 100%; display: flex; flex-direction: column; background: #fff;
-      border-radius: 12px; box-shadow: 0 24px 60px rgba(30,34,48,.3); overflow: hidden; }
+      border-radius: 12px; box-shadow: 0 24px 60px rgba(30,34,48,.3); overflow: auto; }
     .sheet-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 12px 8px 16px; }
     .sheet-head h2 { font-size: 15px; font-weight: 650; }
     .opt { display: flex; gap: 10px; align-items: center; padding: 0 16px 10px; color: #4A5063; font-size: 12.5px; }
     .out { flex: 1; min-height: 360px; margin: 0 16px; border: 1px solid #D9DCE4; border-radius: 8px; padding: 10px;
       font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #1E2230; background: #FAFBFC; resize: none; }
     .sheet-foot { display: flex; align-items: center; gap: 8px; padding: 12px 16px; }
+    .cart-opts, .tgt-body { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 0 16px 8px 42px; color: #4A5063; font-size: 12px; }
+    .tgt { padding: 0 16px 8px; color: #4A5063; font-size: 12.5px; }
+    .tgt summary { cursor: pointer; font-weight: 600; }
+    .tgt-body { padding: 6px 0 0 14px; }
+    .tgt-obs { flex-basis: 100%; color: #6B7183; font-size: 11.5px; }
+    .tgt-shop { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; flex-basis: 100%; }
+    .cart-opts[hidden], .tgt-shop[hidden], .cart-opts input[hidden], .tgt-shop input[hidden] { display: none; }
+    .cart-opts select, .tgt select, .cart-opts input, .tgt input { font: inherit; color: #1E2230; border: 1px solid #D9DCE4; border-radius: 6px; padding: 3px 6px; background: #fff; }
+    .cart-opts input, .tgt-shop input { min-width: 180px; flex: 1; }
     .extra-wrap { display: block; margin: 8px 16px 0; font-size: 12px; color: #4A5063; }
     .extra-wrap b { font-weight: 600; }
     .extra { display: block; width: 100%; box-sizing: border-box; margin-top: 3px; height: 54px; min-height: 40px; border: 1px solid #D9DCE4; border-radius: 8px; padding: 6px 10px;
@@ -1383,6 +1481,23 @@
         <header class="sheet-head"><h2>Webpage change request</h2><button class="icon" data-act="modal-close" aria-label="Close">✕</button></header>
         <div class="opt"><button class="primary" data-act="export-shots">Export Screenshots</button><span class="shots-note"></span></div>
         <label class="opt cart-opt" title="Off by default. When on, the report asks the coding AI to implement working Add to Cart for the mapped products."><input type="checkbox" class="opt-cart"> Include Add to Cart implementation</label>
+        <div class="cart-opts" hidden>
+          <label>Cart integration <select class="tgt-cart"><option value="auto">Auto (inspect the project)</option><option value="theme">Existing theme cart</option><option value="custom">App or custom integration</option></select></label>
+          <input class="tgt-cart-name" type="text" placeholder="Integration name (optional)" aria-label="Cart integration name" hidden>
+          <input class="tgt-cart-notes" type="text" placeholder="Cart instructions (optional)" aria-label="Cart instructions" hidden>
+        </div>
+        <details class="tgt">
+          <summary>Implementation target</summary>
+          <div class="tgt-body">
+            <div class="tgt-obs" title="Read-only: what Blueline observed on the inspected page"></div>
+            <label>Platform <select class="tgt-platform"><option value="auto">Auto</option><option value="shopify">Shopify</option><option value="other">Other or unknown</option></select></label>
+            <div class="tgt-shop" hidden>
+              <input class="tgt-theme" type="text" placeholder="Theme name (optional)" aria-label="Theme name">
+              <label>Page builder <select class="tgt-builder"><option value="auto">Not specified</option><option value="shogun">Shogun</option><option value="other">Other</option></select></label>
+              <input class="tgt-builder-name" type="text" placeholder="Page builder name" aria-label="Page builder name" hidden>
+            </div>
+          </div>
+        </details>
         <textarea class="out" readonly spellcheck="false" aria-label="Change report"></textarea>
         <label class="extra-wrap"><b>Additional instructions</b> (added to the end of the report when you copy or save)
           <textarea class="extra" spellcheck="true" placeholder="Anything else the coding AI should do, e.g. “Keep the existing mobile layout” or “Don’t touch checkout.”"></textarea></label>
@@ -1457,7 +1572,8 @@
     });
 
     root.addEventListener('change', (e) => {
-      if (e.target.classList.contains('opt-cart')) { S.exportCart = e.target.checked; syncReport(); return; }
+      if (e.target.classList.contains('opt-cart')) { S.exportCart = e.target.checked; syncTargetUI(); syncReport(); return; }
+      if (onTargetField(e.target, 'change')) return;
       if (e.target.classList.contains('pop-broken')) {
         setPopType(e.target.checked ? 'bug' : S.popBase);
       }
@@ -1465,6 +1581,7 @@
 
     root.addEventListener('input', (e) => {
       if (e.target.classList?.contains('extra')) S.extra = e.target.value;
+      else onTargetField(e.target, 'input');
     });
 
     root.addEventListener('keydown', (e) => {
@@ -1927,7 +2044,8 @@
     if (keys.length) chrome.storage.local.remove(keys);
     if (BL.hooks.onClear) BL.hooks.onClear();
     S.extra = '';
-    if (S.ui) syncExtra();
+    resetTarget();
+    if (S.ui) { syncExtra(); syncTargetUI(); }
     // Notes go; product cards and assignments stay (as card records).
     const kept = (S.batch?.items || []).map((it) => (isNote(it) ? lib()?.toCardRecord?.(it) : it)).filter(Boolean);
     if (kept.length && S.batch) S.batch = { ...S.batch, items: kept, guides: [], priceReport: undefined }; else S.batch = null;
@@ -1982,6 +2100,7 @@
           : `${plural(jobs.length, 'screenshot')} not exported. The report doesn’t list them until you press Export Screenshots.`;
     const cartBox = $('.opt-cart');
     if (cartBox) cartBox.checked = !!S.exportCart;
+    syncTargetUI();
     syncReport();
     syncExtra();
   }
@@ -1995,6 +2114,57 @@
     const body = S.ui.$('.out').value;
     const extra = (S.extra || '').trim();
     return extra ? `${body.replace(/\s+$/, '')}\n\n## Additional instructions\n\n${extra}\n` : body;
+  }
+
+  // Implementation target fields. Auto clears the selections it covers; nothing here touches S.page or storage.
+  function onTargetField(el, kind) {
+    const c = el.classList;
+    if (!c || ![...c].some((x) => x.startsWith('tgt-'))) return false;
+    const t = target();
+    const v = el.value;
+    if (kind === 'change') {
+      if (c.contains('tgt-platform')) {
+        t.platform = v;
+        if (v !== 'shopify') { t.theme = ''; t.builder = 'auto'; t.builderName = ''; }
+      } else if (c.contains('tgt-builder')) { t.builder = v; if (v !== 'other') t.builderName = ''; }
+      else if (c.contains('tgt-cart')) { t.cart = v; if (v === 'auto') { t.cartName = ''; t.cartNotes = ''; } else if (v === 'theme') t.cartName = ''; }
+      else return true;
+      syncTargetUI();
+    } else {
+      if (c.contains('tgt-theme')) t.theme = v;
+      else if (c.contains('tgt-builder-name')) t.builderName = v;
+      else if (c.contains('tgt-cart-name')) t.cartName = v;
+      else if (c.contains('tgt-cart-notes')) t.cartNotes = v;
+      else return true;
+    }
+    syncReport();
+    return true;
+  }
+
+  function syncTargetUI() {
+    if (!S.ui) return;
+    const $ = S.ui.$;
+    const t = target();
+    const set = (sel, v) => { const e = $(sel); if (e && e.value !== v) e.value = v; };
+    set('.tgt-platform', t.platform); set('.tgt-theme', t.theme); set('.tgt-builder', t.builder); set('.tgt-builder-name', t.builderName);
+    set('.tgt-cart', t.cart); set('.tgt-cart-name', t.cartName); set('.tgt-cart-notes', t.cartNotes);
+    const items = S.batch?.items || [];
+    const f = observedFacts(items, pageOf(items));
+    // Auto shows what it will use; the override controls sit beside the detected values.
+    const eff = t.platform === 'shopify' || (t.platform === 'auto' && f.shopify);
+    const optText = (sel, val, txt) => { const o = $(`${sel} option[value="${val}"]`); if (o && o.textContent !== txt) o.textContent = txt; };
+    optText('.tgt-platform', 'auto', f.platform ? `Auto (detected: ${f.platform})` : 'Auto (nothing detected)');
+    optText('.tgt-builder', 'auto', f.builder ? `Auto (detected: ${f.builder})` : 'Auto (none detected)');
+    optText('.tgt-cart', 'auto', f.cartApp ? `Auto (detected: ${f.cartApp})` : 'Auto (none detected; inspect the project)');
+    const th = $('.tgt-theme'); const ph = f.themeName ? `Detected: ${f.themeName} (override optional)` : 'Theme name (optional)';
+    if (th && th.placeholder !== ph) th.placeholder = ph;
+    const shop = eff;
+    $('.tgt-shop').hidden = !shop;
+    $('.tgt-builder-name').hidden = !(shop && t.builder === 'other');
+    $('.cart-opts').hidden = !S.exportCart;
+    $('.tgt-cart-name').hidden = t.cart !== 'custom';
+    $('.tgt-cart-notes').hidden = t.cart === 'auto';
+    $('.tgt-obs').textContent = `Observed (read-only): ${observedSummary(S.batch?.items || [])}`;
   }
 
   function syncExtra() { const ex = S.ui.$('.extra'); if (ex && ex.value !== S.extra) ex.value = S.extra; }
