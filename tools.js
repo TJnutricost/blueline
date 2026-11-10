@@ -939,6 +939,8 @@
     .xb-file { cursor: pointer; display: inline-block; }
     .xd { border-top: 1px solid #F0F1F5; padding-top: 6px; }
     .xd > summary { cursor: pointer; font-size: 12px; font-weight: 600; color: #4A5063; list-style: none; padding: 2px 0; }
+    .prod-sec > summary { font-size: 13.5px; font-weight: 700; padding: 7px 0; }
+    .prod-sec > summary .sub { font-size: 11px; font-weight: 400; }
     .xd > summary::-webkit-details-marker { display: none; }
     .xd > summary::before { content: "▸ "; } .xd[open] > summary::before { content: "▾ "; }
     .sub { font-size: 11.5px; color: #6B7183; font-weight: 400; }
@@ -1199,17 +1201,21 @@
     .cardb.slot .hl-tag { background: ${INK}; }
     .startrow { display: flex; flex-direction: column; gap: 5px; }
     .sbtns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-    .sbtn { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 8px 10px; border: 1px solid #D9DCE4; border-radius: 8px; text-align: left; background: #fff; }
+    .sbtn { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 8px 10px; border: 1px solid #82BDEA; border-radius: 8px; text-align: left; background: #D8EEFF; color: #175A91; cursor: pointer; transition: background .12s, border-color .12s; }
     .sbtn b { font-size: 12.5px; }
-    .sbtn span { font-size: 11px; color: #6B7183; font-weight: 400; }
-    .sbtn:hover { background: #F5F7FF; border-color: ${INK}; }
+    .sbtn span { font-size: 11px; color: #2B6296; font-weight: 400; }
+    .sbtn:hover { background: #C2E2FA; border-color: #4F9FD8; }
+    .sbtn:active { background: #AED5F3; border-color: #3B8DC8; transform: translateY(1px); }
+    .sbtn:focus-visible { outline: 2px solid #175A91; outline-offset: 2px; }
     .sbtn.on { background: ${INK}; border-color: ${INK}; color: #fff; }
     .sbtn.on span { color: rgba(255,255,255,.85); }
     .acts { display: flex; flex-direction: column; gap: 5px; margin-top: 5px; }
-    .act { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; text-align: left; padding: 7px 9px; border: 1px solid #E2E5EC; border-radius: 7px; background: #fff; }
+    .act { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; text-align: left; padding: 7px 9px; border: 1px solid #82BDEA; border-radius: 7px; background: #D8EEFF; color: #175A91; cursor: pointer; transition: background .12s, border-color .12s; }
     .act b { font-size: 12px; font-weight: 650; }
-    .act span { font-size: 11px; color: #6B7183; font-weight: 400; }
-    .act:hover { background: #F5F7FF; }
+    .act span { font-size: 11px; color: #2B6296; font-weight: 400; }
+    .act:hover { background: #C2E2FA; border-color: #4F9FD8; }
+    .act:active { background: #AED5F3; border-color: #3B8DC8; transform: translateY(1px); }
+    .act:focus-visible { outline: 2px solid #175A91; outline-offset: 2px; }
     .act.on { border-color: ${INK}; background: #EEF1FF; }
     .toast { bottom: 64px; }
     .empty b { color: #1E2230; }
@@ -1507,6 +1513,7 @@
     // Opening "Product card" starts the proposal at once; closing hides its highlight.
     root.addEventListener('toggle', (e) => {
       const d = e.target;
+      if (d && d.matches && d.matches('[data-d="products"]')) { if (!!S.prefs.productsOpen !== d.open) { S.prefs.productsOpen = d.open; BL.savePrefs(); } return; } // remembered for next time
       if (!S.pop || !d || !d.matches || !d.matches('[data-d="card"]')) return;
       if (d.open && !P.card && !P.cardUi && P.el) cardStart(); else { renderCard(); renderMarks(); }
     }, true);
@@ -1517,15 +1524,18 @@
       <button class="sbtn" data-x="start-select" title="Click an element on the page to attach a note to it (Alt+P)"><b>Select element</b><span>Click it on the page</span></button>
       <button class="sbtn" data-x="start-area" title="Drag a rectangle over an element, several elements, or an empty spot. Blueline finds the elements inside it"><b>Select area</b><span>Drag a rectangle</span></button></div>
       <div class="sub">Tip: Shift+click to select an element. Shift+drag to select an area.</div></div>`);
-    const libBtn = mk('<button class="xb plib" data-x="lib-home" hidden title="Open your Product Library">Product Library</button>');
-    const asgBtn = mk('<button class="xb plib" data-x="assign-home" hidden title="Give Product Library products to the product cards on this page">Assign Products</button>');
+    // One quiet, expandable section instead of three green buttons. Both actions stay available with no product list saved:
+    // Assign Products shows its own Import Product List empty state.
+    const prodSec = mk(`<details class="xd prod-sec" data-d="products"><summary>Products <span class="sub">library, assign to cards</span></summary>
+      <div class="acts">
+        <button class="act" data-x="lib-home" title="Open your Product Library: import, review and manage product lists"><b>Product Library</b><span>Import, review and manage product lists</span></button>
+        <button class="act" data-x="assign-home" title="Give Product Library products to the product cards on this page"><b>Assign Products</b><span>Define product cards and give them products</span></button>
+      </div></details>`);
+    prodSec.open = !!S.prefs.productsOpen;
     const wsRow = mk(`<div class="wsrow" role="group" aria-label="Workspace"><span class="cap">Workspace</span><button class="xb danger" data-x="start-fresh" title="Clear saved notes, product cards or assignments for this page only">Start Fresh…</button><button class="xb" data-x="restore-session" hidden title="Restore what Start Fresh cleared on this page">Restore</button></div>`);
     body.insertBefore(add, body.firstChild);
-    add.after(libBtn);
-    const defBtn = mk('<button class="xb plib pdef" data-x="define-home" title="Click a product card on the page and save it, with no note or product needed">Define Product Card</button>');
-    libBtn.after(asgBtn);
-    asgBtn.after(defBtn);
-    defBtn.after(startRow);
+    add.after(prodSec);
+    prodSec.after(startRow);
     syncLibBtn();
     body.appendChild(root.querySelector('.x-tools'));
     body.appendChild(wsRow);
@@ -3468,7 +3478,7 @@
           if (opts.embedded) BL.libraryUi?.refreshWorkspace?.();
           toast(mode === 'all' ? `Reset all Blueline work${r.library ? ', including the Product Library' : ''}${r.settings ? ' and settings' : ''}.` : `Cleared ${clearedText(r.cleared)}. Restore brings it back.`);
           syncWorkspace();
-          usableSig = ''; syncLibBtn();
+          syncLibBtn();
         } else { show('choose'); sync(); $('.sf-sum').textContent = r.error || 'Nothing was cleared.'; }
       }
     });
@@ -3507,9 +3517,6 @@
     if (r.ok) { toast(`Restored ${clearedText(r.restored)}.`); syncWorkspace(); } else toast(r.error || 'Nothing was restored.');
   }
 
-  // Home > Define Product Card: the same note-independent definition flow as inside Assign Products (bulkApi.define), available
-  // with or without a Product Library list. When a card was saved the discovered cards are shown in Assign Products.
-  let defining = false;
   // After "Reset all Blueline work": the design overlay and price sheet held in memory go too, and a pending write of either is cancelled.
   hooks.onFullReset = () => {
     clearTimeout(ovSaveT);
@@ -3520,44 +3527,9 @@
     bulkClear();
     BL.libraryUi?.afterReset?.();
   };
-  async function defineFromHome() {
-    if (defining || S.pop || T.pick || bulk.open) { if (S.pop) toast('Save or cancel the note you\u2019re editing first.'); return; }
-    defining = true;
-    let r = null;
-    try { r = await bulkApi.define(); } catch { r = null; }
-    defining = false;
-    if (!r) return;
-    if (!r.ok) { if (!r.cancelled) toast(r.msg || 'That card could not be defined.'); return; }
-    toast(r.already ? 'That card is already defined.' : 'Card saved. Looking for similar cards…');
-    if (BL.libraryUi?.assignStart) BL.libraryUi.assignStart();
-  }
-
-  // The "Product Library" button under + Add note: only when at least one saved list exists.
-  let libCount = 0;
-  async function syncLibBtn() {
-    const b = q('[data-x="lib-home"]');
-    const Lb = libApi();
-    if (!b || !Lb) return;
-    let n = 0;
-    let usable = false;
-    try {
-      const idx = await Lb.loadIndex(chrome.storage.local);
-      n = idx.libs.length;
-      // "Assign Products" needs a list that has products; looked up again only when the saved lists change.
-      const sig = JSON.stringify(idx.libs.map((l) => [l.store, l.campaign, l.updatedAt]));
-      if (sig !== usableSig) { usableSig = sig; usableList = n ? (await Lb.listSummaries(chrome.storage.local)).some((l) => l.products > 0) : false; }
-      usable = usableList;
-    } catch { n = 0; }
-    libCount = n;
-    const el = q('[data-x="lib-home"]');
-    if (el) el.hidden = n < 1;
-    const ag = q('[data-x="assign-home"]');
-    if (ag) ag.hidden = !usable;
-    syncWorkspaceSoon();
-  }
-  let usableSig = '';
-  let usableList = false;
-  hooks.onLibraryLists = (n) => { libCount = n; usableSig = ''; syncLibBtn(); };
+  // The Products section is always shown. Saved lists changing only means the workspace row may need to refresh.
+  const syncLibBtn = () => syncWorkspaceSoon();
+  hooks.onLibraryLists = () => syncLibBtn();
 
   function detectIssuesSafe(el) { try { return BL.detectIssues(el); } catch { return []; } }
 
@@ -5797,7 +5769,6 @@
       case 'map-start': mapOpen(); break;
       case 'bk-mark': bulk.onMark?.(b.dataset.key); break;
       case 'lib-home': if (BL.libraryUi?.open) BL.libraryUi.open({ existing: true }); break;
-      case 'define-home': defineFromHome(); break;
       case 'assign-home': if (BL.libraryUi?.assignStart) BL.libraryUi.assignStart(); break;
       case 'start-fresh': startFresh(); break;
       case 'restore-session': restoreSession(); break;

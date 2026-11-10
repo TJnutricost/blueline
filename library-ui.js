@@ -1,4 +1,4 @@
-/* Blueline Product Lists — UI. Mounts a compact modal into Blueline's panel (More tools → Import Product List).
+/* Blueline Product Lists — UI. Mounts a compact modal into Blueline's panel (Home → Products → Product Library).
  * All logic lives in library.js; this file only draws it, wires the buttons and saves through chrome.storage.
  * A product list never needs Shopify: a store is optional and only used to verify products afterwards.
  * Read-only toward Shopify: the only network use is GETs of public storefront JSON.
@@ -232,6 +232,17 @@
     .lib-sel-ctl label { display: flex; flex-direction: column; gap: 2px; font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #6B7183; flex: 1 1 200px; min-width: 0; }
     .lib-sel-ctl select, .lib-sel-ctl input { font: 12.5px inherit; padding: 6px 8px; border: 1px solid #D9DCE4; border-radius: 6px; min-width: 0; box-sizing: border-box; text-transform: none; letter-spacing: 0; font-weight: 400; color: #1E2230; }
     .lib-sel-results { display: flex; flex-direction: column; gap: 6px; }
+    .lib-vv-notice.ok { border-color: #8CCB9E; background: #EDF8F0; color: #155B2D; }
+    .lib-sel-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 14px 4px; }
+    .lib-sel-empty b { font-size: 14px; }
+    .lib-sel-imp { margin-top: 4px; }
+    .lib-imp-warn { display: flex; flex-direction: column; gap: 2px; }
+    .lib-imp-warn .lib-imp-act { margin-top: 6px; }
+    .lib-sel-rv { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+    .lib-sel-rv .sub { flex: 1 1 140px; min-width: 0; }
+    .lib-rv-bar { display: none; }
+    .lib-sheet.lib-review .lib-rv-bar { display: flex; align-items: center; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid #E2E5EC; }
+    .lib-sheet.lib-review .lib-as { display: none !important; }
     .lib-sel-row { all: unset; box-sizing: border-box; cursor: pointer; display: flex; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid #E2E5EC; border-radius: 8px; background: #fff; width: 100%; }
     .lib-sel-row:hover { background: #F7F9FF; border-color: #7C93FF; } .lib-sel-row:focus-visible { outline: 2px solid #1E1E1E; outline-offset: -2px; }
     .lib-sel-row[data-cur="1"] { background: #F1F5FF; border-color: #7C93FF; }
@@ -487,6 +498,7 @@
         <div class="lib-sel-body lib-map-body"></div>
         <div class="lib-sel-foot lib-map-foot"></div>
       </div>
+      <div class="lib-rv-bar"><button class="xb lib-primary" data-x="lib-rv-back">← Back to Assign Products</button><span class="sub">Your staged assignments are kept.</span></div>
       <div class="lib-as">
         <div class="lib-as-bar"><span class="lib-as-sum sub" role="status"></span>
           <span class="lib-as-docks" role="group" aria-label="Workspace position"><span class="sub">Dock:</span>${DOCK_SHOW.map((m) => `<button class="xb" data-x="lib-as-dock" data-mode="${m}" aria-pressed="false">${DOCK_LABEL[m]}</button>`).join('')}</span>
@@ -716,10 +728,17 @@
 
   // ---------------------------------------------------------------- importing: pick or drop a file, then (for a list that already has content) choose how
 
+  // The one file check, shared by the Product Library window and the Assign Products workspace.
+  function importProblem(file) {
+    if (!ACCEPT.test(file.name || '')) return `${file.name || 'That file'} can’t be imported. Use a CSV, JSON or DOCX file.`;
+    if (file.size === 0) return `${file.name} is empty.`;
+    return '';
+  }
+
   async function handleFile(file) {
     if (!file) return;
-    if (!ACCEPT.test(file.name || '')) { say(`${file.name || 'That file'} can’t be imported. Use a CSV, JSON or DOCX file.`, 'bad'); return; }
-    if (file.size === 0) { say(`${file.name} is empty.`, 'bad'); return; }
+    const bad = importProblem(file);
+    if (bad) { say(bad, 'bad'); return; }
     L.reading = true; say(`Reading ${file.name}…`); render();
     let imp;
     try { imp = await Lib.importFile(file); } catch (e) { L.reading = false; say(`${file.name}: ${e.message}`, 'bad'); render(); return; }
@@ -767,6 +786,40 @@
     await commitImport(p.imp, p.name, mode);
   }
 
+  // Importing from inside the Assign Products workspace. It uses the same reader and validation as the Product Library
+  // (Lib.importFile) and always makes a NEW list, so no existing list, mapping or staged assignment can be overwritten.
+  // The workspace's list menu is refreshed in place; the chosen list only changes when there was none to keep.
+  async function selImportFile(s, file) {
+    if (!file || s.importing) return;
+    const note = (text, kind = '') => { s.imp = text ? { text, kind } : null; if (L.sel === s) selRender(); };
+    const bad = importProblem(file);
+    if (bad) { note(bad, 'bad'); return; }
+    s.importing = true; note(`Reading ${file.name}…`);
+    try {
+      const imp = await Lib.importFile(file);
+      const fresh = Lib.newLibrary(BL.modeOf?.(S.page) === 'shopify' ? pageOrigin() : '', Lib.defaultListName(file.name));
+      const lib = { ...fresh, smp: Lib.addImport(fresh, imp).lib.smp };
+      const saved = await Lib.saveLibrary(storage(), lib, { smpChanged: true, name: lib.name || undefined });
+      await refreshLists(); // tells Home, which shows Assign Products once a list has products
+      const idx = await Lib.loadIndex(storage());
+      const hadLists = s.lists.length > 0;
+      s.lists = idx.libs.map((l) => ({ store: l.store, campaign: l.campaign, name: l.name || l.campaign }));
+      const key = `${lib.store}|${lib.campaign}`;
+      const prods = Lib.smpProducts({ imports: [imp] }).length;
+      const name = saved?.name || Lib.listName(lib);
+      const nw = imp.warnings?.length || 0;
+      s.msg = '';
+      if (!hadLists || !s.lists.some((l) => `${l.store}|${l.campaign}` === s.listKey)) {
+        await selSetList(s, key);
+        // The warning box carries the review action itself (only while that list is the selected one).
+        s.imp = { text: `Imported “${name}” (${plural(prods, 'product')}).`, kind: nw ? 'warn' : 'ok', warn: nw ? `${plural(nw, 'warning')} ${nw === 1 ? 'needs' : 'need'} review.` : '', campaign: lib.campaign };
+        if (L.sel === s) selRender();
+      } else note(`Imported “${name}” (${plural(prods, 'product')}) as a new list. Choose it from the list menu when you want it. The list you are using and your staged assignments are unchanged.${nw ? ` ${plural(nw, 'warning')} to review once you choose it.` : ''}`, 'ok');
+    } catch (e) { note(`${file.name}: ${e.message}`, 'bad'); }
+    s.importing = false;
+    if (L.sel === s) selRender();
+  }
+
   const isFileDrag = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
   function onDrag(e) {
     if (!L.open || !isFileDrag(e)) return;
@@ -781,6 +834,7 @@
     const files = [...(e.dataTransfer?.files || [])];
     if (!files.length) { say('Nothing to import: the drop contained no file.', 'bad'); return; }
     if (files.length > 1) { say('Drop one file at a time.', 'bad'); return; }
+    if (L.sel?.embedded && !L.review) { selImportFile(L.sel, files[0]); return; } // Assign Products: its own import, never the hidden Library list
     handleFile(files[0]);
   }
 
@@ -1510,7 +1564,7 @@
       const find = (st, id) => s.lists.find((l) => l.store === st && l.campaign === id);
       const want = (s.prefer && find(s.prefer.store, s.prefer.campaign)) || (cur?.list && find(cur.list.store || '', cur.list.id)) || (act && find(act.store, act.campaign)) || s.lists[0] || null;
       s.busy = false;
-      if (!s.lists.length) s.msg = 'No Product Library list is saved yet. Close this, open More tools → Import Product List, upload your list, then choose again.';
+      if (!s.lists.length) s.msg = s.embedded ? '' : 'No Product Library list is saved yet. Close this, open Products → Product Library on the Blueline home screen, import your list, then choose again.';
       else await selSetList(s, want ? `${want.store}|${want.campaign}` : '');
       if (L.sel === s && (s.mode === 'variant' || s.mode === 'approve') && cur) {
         if (s.lib && cur.list?.id === s.lib.campaign && s.rows.some((r) => r.key === cur.product.key)) await selOpenProduct(s, cur.product.key, true);
@@ -1575,9 +1629,21 @@
     if (s.step === 'products' || !s.key) {
       h.textContent = 'Choose a product'; sub.textContent = s.embedded ? `${s.ctx || ''} · Nothing in the Library changes.` : `For ${forCard}. Nothing in the Library changes.`;
       const opts = s.lists.map((l) => `<option value="${esc(`${l.store}|${l.campaign}`)}"${`${l.store}|${l.campaign}` === s.listKey ? ' selected' : ''}>${esc(l.name)}${l.store ? ` · ${esc(host(l.store))}` : ''}</option>`).join('');
+      const curCamp = s.lists.find((l) => `${l.store}|${l.campaign}` === s.listKey)?.campaign;
+      const warnBox = !!(s.imp?.warn && s.embedded && s.lib && s.imp.campaign === curCamp); // the review action lives in the box: no second button below
+      const impNote = !s.imp ? ''
+        : s.imp.warn ? `<div class="lib-vv-notice lib-imp-warn" role="status"><div>${esc(s.imp.text)}</div><div>${esc(s.imp.warn)}</div>${warnBox ? '<div class="lib-imp-act"><button class="xb lib-primary" data-x="lib-sel-review" title="Open the Product Library for this list to set a store, check Shopify and resolve warnings. You return here afterwards.">Review &amp; verify products</button></div>' : ''}</div>`
+        : `<div class="lib-vv-notice${s.imp.kind === 'bad' ? ' bad' : ''}" role="status">${esc(s.imp.text)}</div>`;
+      const impFile = '<input type="file" accept=".csv,.tsv,.json,.docx" data-lib="sel-file" hidden>';
+      const sm = s.embedded && s.lib && s.rows ? Lib.summarize(s.rows) : null;
+      const rvStatus = sm ? `${plural(sm.total, 'product')} · ${sm.variantsResolved ? `${sm.variantsResolved} found in Shopify` : 'Not verified in Shopify'}${sm.needsReview ? ` · ${sm.needsReview} to review` : ''}` : '';
+      const rvRow = sm ? `<div class="lib-sel-rv"><span class="sub" role="status">${esc(rvStatus)}</span>${warnBox ? '' : '<button class="xb lib-primary" data-x="lib-sel-review" title="Open the Product Library for this list to set a store, check Shopify and resolve warnings. You return here afterwards.">Review &amp; verify products</button>'}</div>` : '';
+      const impBtn = s.embedded ? `<div class="lib-sel-imp"><button class="xb" data-x="lib-sel-import"${s.importing ? ' disabled' : ''}>Import another list</button>${impFile}</div>` : '';
       body.innerHTML = s.lists.length
-        ? `${s.msg && !s.lib ? `<div class="lib-vv-notice">${esc(s.msg)}</div>` : ''}<div class="lib-sel-ctl"><label>Product Library list<select data-lib="sel-list" aria-label="Product Library list">${opts}</select></label><label>Search<input data-lib="sel-q" placeholder="Product name, SKU or flavor" aria-label="Search products" value="${esc(s.q)}" autocomplete="off"></label></div>${s.msg && s.lib ? `<div class="sub">${esc(s.msg)}</div>` : ''}<div class="lib-sel-results" role="list"></div>`
-        : `<div class="lib-vv-notice">${esc(s.msg)}</div>`;
+        ? `${impNote}${s.msg && !s.lib ? `<div class="lib-vv-notice">${esc(s.msg)}</div>` : ''}<div class="lib-sel-ctl"><label>Product Library list<select data-lib="sel-list" aria-label="Product Library list">${opts}</select></label><label>Search<input data-lib="sel-q" placeholder="Product name, SKU or flavor" aria-label="Search products" value="${esc(s.q)}" autocomplete="off"></label></div>${rvRow}${s.msg && s.lib ? `<div class="sub">${esc(s.msg)}</div>` : ''}<div class="lib-sel-results" role="list"></div>${impBtn}`
+        : s.embedded
+          ? `${impNote}<div class="lib-sel-empty"><b>No product lists yet</b><div class="sub">Import a CSV, JSON or DOCX product list to assign its products to the cards on this page. You can also drop a file here. Your file is only read.</div><button class="xb lib-primary" data-x="lib-sel-import"${s.importing ? ' disabled' : ''}>Import Product List</button>${impFile}</div>`
+          : `<div class="lib-vv-notice">${esc(s.msg)}</div>`;
       selRenderResults();
       foot.innerHTML = s.embedded ? '' : '<button class="xb" data-x="lib-sel-cancel">Cancel</button>';
       return;
@@ -2707,6 +2773,7 @@
   function closeBulk(result) {
     const s = L.bulk;
     if (!s) return;
+    L.review = null;
     dragEnd(false);
     if (L.sel) { const r = L.sel.resolve; L.sel = null; try { r(null); } catch { /* ignore */ } }
     if (L.map) { const m = L.map; L.map = null; try { m.opts.onPending?.(null, m.saved); } catch { /* ignore */ } m.resolve({ action: 'cancel', saved: m.saved }); }
@@ -2715,7 +2782,7 @@
     if (L.root) {
       asUnmountSel();
       const sh = q('.lib-sheet');
-      sh.classList.remove('lib-pmode', 'lib-smode', 'lib-amode', 'lib-narrow', 'lib-tiny'); sh.setAttribute('aria-label', 'Product Library'); q('.lib-head').textContent = 'Product Library';
+      sh.classList.remove('lib-pmode', 'lib-smode', 'lib-amode', 'lib-narrow', 'lib-tiny', 'lib-review', 'lib-vmode', 'lib-mmode'); sh.setAttribute('aria-label', 'Product Library'); q('.lib-head').textContent = 'Product Library';
       for (const k of ['width', 'height', 'transform']) sh.style[k] = '';
       sh._tx = 0; sh._ty = 0;
       q('.lib-sheet header')?.removeAttribute('data-nodrag');
@@ -2723,6 +2790,49 @@
       q('[data-m="library"]').hidden = true;
     }
     s.resolve({ action: 'cancel', ...(result || {}) });
+  }
+  // "Review & verify products": the existing Product Library view (Set Store, Check in Shopify, price resolution, warnings) is
+  // shown in this same window for the chosen list, then Back (or Esc, or ✕) returns to the workspace. The workspace object
+  // (staged assignments, selected card, position and size) is never touched; only the list's facts are re-read on return.
+  async function bkReview(s) {
+    const sel = L.sel;
+    if (L.review || s.picking || s.saving || L.map || !sel?.embedded) return;
+    const l = sel.lists.find((x) => `${x.store}|${x.campaign}` === sel.listKey);
+    if (!l) return;
+    L.review = { s, key: sel.listKey, campaign: l.campaign };
+    L.store = l.store; L.listId = l.campaign; L.showStoreInput = false;
+    const sh = q('.lib-sheet');
+    sh.classList.remove('lib-pmode', 'lib-amode'); sh.classList.add('lib-review');
+    q('.lib-head').textContent = 'Product Library'; sh.setAttribute('aria-label', 'Product Library');
+    try { await loadCurrent(); } catch (e) { say(e.message, 'bad'); }
+    q('[data-x="lib-rv-back"]')?.focus({ preventScroll: true });
+  }
+  async function exitReview() {
+    const rv = L.review;
+    if (!rv) return;
+    L.review = null;
+    if (L.mgr) closeMgr();
+    if (L.find?.mode === 'variants') leaveVariants(L.find.key); else if (L.find) hideFind();
+    L.pending = null;
+    const s = rv.s;
+    if (L.root) {
+      const sh = q('.lib-sheet');
+      sh.classList.remove('lib-review', 'lib-vmode', 'lib-mmode'); sh.classList.add('lib-pmode', 'lib-amode');
+      q('.lib-head').textContent = 'Assign Products'; sh.setAttribute('aria-label', 'Assign Products');
+    }
+    const sel = L.sel;
+    if (L.bulk !== s || !sel?.embedded) return;
+    try {
+      await Lib.reconcileListNames(storage());
+      const idx = await Lib.loadIndex(storage());
+      sel.lists = idx.libs.map((l) => ({ store: l.store, campaign: l.campaign, name: l.name || l.campaign }));
+      const hit = sel.lists.find((l) => l.campaign === rv.campaign) || sel.lists.find((l) => `${l.store}|${l.campaign}` === rv.key) || sel.lists[0];
+      sel.msg = '';
+      await selSetList(sel, hit ? `${hit.store}|${hit.campaign}` : '');
+    } catch (e) { sel.msg = `Couldn’t read the Product Library: ${e.message}`; }
+    if (L.sel === sel) selRender();
+    asApply(s); bkRender(s); // no rescan: the cards on the page did not change, and staged work must stay exactly as it was
+    q('[data-x="lib-sel-review"]')?.focus({ preventScroll: true });
   }
   // Assign Products (from the Product Library or Home): saved cards are listed at once; with none, Define Product Card starts it.
   async function assignStart() {
@@ -2991,13 +3101,15 @@
     if (x === 'lib-assign') { assignStart(); return; }
     if (x.startsWith('lib-bk')) { bkClick(b); return; }
     if (x.startsWith('lib-as-') || x.startsWith('lib-rep-')) { asClick(b); return; }
+    if (x === 'lib-rv-back') { exitReview(); return; }
+    if (x === 'lib-sel-review') { if (L.bulk && L.sel?.embedded) bkReview(L.bulk); return; }
+    if (x === 'lib-sel-import') { q('[data-lib="sel-file"]')?.click(); return; }
     if (x.startsWith('lib-sel')) { selClick(b); return; }
     if (x.startsWith('lib-el-')) { if (L.map) fieldClick(L.map, b); return; }
     if (x.startsWith('lib-map')) { mapClick(b); return; }
     if (x !== 'lib-delete' && L.confirmDelete) { L.confirmDelete = false; render(); }
     if (L.recent && key !== L.recent && x !== 'lib-copy' && x !== 'lib-prov' && !x.startsWith('lib-vv')) L.recent = null; // the highlight lasts until the next thing you do
     switch (x) {
-      case 'library': openLibrary(); break;
       case 'lib-close': closeLibrary(); break;
       case 'lib-open': applyStore(); break;
       case 'lib-lists': if (L.mgr) closeMgr(); else openMgr(); break;
@@ -3076,6 +3188,7 @@
   }
   function onChange(e) {
     const t = e.target;
+    if (t.dataset?.lib === 'sel-file') { const f = t.files[0]; t.value = ''; if (L.sel) selImportFile(L.sel, f); return; }
     if (t.dataset?.lib === 'sel-list') { const s0 = L.sel; if (s0) { s0.q = ''; selSetList(s0, t.value).then(() => { if (L.sel === s0) selRender(); }); } return; }
     if (t.dataset?.lib === 'listsel') { const o = L.listOpts?.[+t.value]; if (o && !(L.lib && o.store === L.lib.store && o.campaign === L.lib.campaign)) { L.store = o.store; L.listId = o.campaign; loadCurrent().then(() => q('[data-lib="listsel"]')?.focus()); } return; }
     if (t.dataset?.lib === 'map-f') { mapEdit(t.dataset.f, t.value); return; }
@@ -3099,7 +3212,7 @@
       if (order.length && (!order.includes(at) || (e.shiftKey && at === order[0]) || (!e.shiftKey && at === order[order.length - 1]))) { e.preventDefault(); (e.shiftKey ? order[order.length - 1] : order[0]).focus(); }
       return;
     }
-    if (L.sel && L.sel.embedded) {
+    if (L.sel && L.sel.embedded && !L.review) {
       if (e.key === 'Escape' && !L.map) {
         e.preventDefault(); e.stopPropagation();
         if (drag && drag.on) dragCancel();
@@ -3108,7 +3221,7 @@
       }
       return;
     }
-    if (L.sel) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (L.sel.step === 'detail' && !L.sel.direct) { L.sel.step = 'products'; L.sel.key = null; selRender(); } else closeSel(null); } return; }
+    if (L.sel && !L.review) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (L.sel.step === 'detail' && !L.sel.direct) { L.sel.step = 'products'; L.sel.key = null; selRender(); } else closeSel(null); } return; }
     if (L.map) {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (!L.map.saving) closeMap({ action: 'cancel' }); }
       else if (e.key === 'Enter' && e.target.dataset?.lib === 'map-f') { e.preventDefault(); e.target.blur(); }
@@ -3133,7 +3246,7 @@
     try { await init(opts && opts.existing ? { existing: true } : {}); } catch (e) { say(e.message, 'bad'); }
     if (!L.map && !L.sel && !L.mgr) q('.lib-sheet')?.focus({ preventScroll: true }); // keys (Esc) go to the window
   }
-  function closeLibrary() { if (L.sel && L.sel.embedded && L.bulk && !L.map) { closeBulk({ action: 'cancel' }); return; } if (L.sel) { closeSel(null); return; } if (L.map) { closeMap({ action: 'cancel' }); return; } if (L.bulk) { closeBulk({ action: 'cancel' }); return; } closeMgr(); L.open = false; clearTimeout(liveT); liveSeq++; L.find = null; L.recent = null; L.scroll = null; if (L.root) { q('.lib-sheet').classList.remove('lib-vmode'); q('[data-m="library"]').hidden = true; q('.lib-find').hidden = true; q('.lib-modal').classList.remove('lib-drag'); } }
+  function closeLibrary() { if (L.review) { exitReview(); return; } if (L.sel && L.sel.embedded && L.bulk && !L.map) { closeBulk({ action: 'cancel' }); return; } if (L.sel) { closeSel(null); return; } if (L.map) { closeMap({ action: 'cancel' }); return; } if (L.bulk) { closeBulk({ action: 'cancel' }); return; } closeMgr(); L.open = false; clearTimeout(liveT); liveSeq++; L.find = null; L.recent = null; L.scroll = null; if (L.root) { q('.lib-sheet').classList.remove('lib-vmode'); q('[data-m="library"]').hidden = true; q('.lib-find').hidden = true; q('.lib-modal').classList.remove('lib-drag'); } }
 
   function mount(root) {
     if (!root || root.querySelector('[data-m="library"]')) return;
@@ -3145,10 +3258,6 @@
     t.innerHTML = HTML.trim();
     const modal = t.content.firstElementChild;
     root.appendChild(modal);
-    const acts = root.querySelector('[data-d="aids"] .acts');
-    const btn = document.createElement('template');
-    btn.innerHTML = '<button class="act" data-x="library" title="Upload a product list (CSV, JSON or DOCX). A Shopify store is optional."><b>Import Product List</b><span>Upload a list; optionally verify it in Shopify</span></button>';
-    acts?.insertBefore(btn.content.firstElementChild, acts.firstChild);
     BL.toolsApi?.makeDraggable?.(root.querySelector('.lib-sheet'), root.querySelector('.lib-sheet header'), { translate: true });
     root.addEventListener('pointerdown', (e) => { if (L.bulk && e.target.closest?.('.lib-as-resize')) asResizeStart(L.bulk, e); else onDragDown(e); });
     root.addEventListener('dragstart', (e) => { if (L.bulk) e.preventDefault(); });
