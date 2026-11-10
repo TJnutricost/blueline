@@ -26,6 +26,7 @@
     cssRule: null, cssAdded: [], fieldsOpen: null, partsDraft: {},
     card: null, cardDirty: false, cardCheck: null, cardUi: null, cardSlot: null,
     mapping: null, mapDirty: false, mapCheck: null, mapRm: false, mapEdit: false, cardFields: false, shopCheck: null, shopBusy: false,
+    cs: { mode: null, plan: null, planEl: null, stale: false, refresh: false, eff: 'card' },
   });
   let P = emptyPop();
   const touched = new WeakMap(); // el -> { prop: { v, p } } inline styles we overwrote for previews
@@ -318,7 +319,14 @@
 
   function applyItemPreview(it, on) {
     if (it.path !== here() || it.kind === 'region') return;
-    if (it.elementEdits) { for (const edit of it.elementEdits) applyItemPreview({ ...edit, path: it.path, bps: it.bps }, on); return; }
+    if (it.elementEdits) {
+      // A card-scoped note paints its source element through its own target (per-target conflict state), not here.
+      const own = it.cardScope?.targets?.length ? it.cardScope.source?.selector : null;
+      for (const edit of it.elementEdits) if (!own || !on || edit.el?.selector !== own) applyItemPreview({ ...edit, path: it.path, bps: it.bps }, on);
+      if (it.cardScope?.targets?.length) { if (it.id) paintSavedGroup(it, on); }
+      else if (it.id) clearGroupPaint(`item:${it.id}`);
+      return;
+    }
     const live = on && appliesHere(it);
     const els = targetsOf(it);
     for (const el of els) {
@@ -356,9 +364,10 @@
     const list = (S.batch?.items || []).filter((it) => hasPreview(it) && (forceOff || it.id !== open));
     for (const it of list) applyItemPreview(it, false);
     if (on) for (const it of list) if (appliesHere(it)) applyItemPreview(it, true);
-    if (!S.pop || forceOff) return;
+    if (!S.pop || forceOff) { if (forceOff) clearGroupPaint('editor'); return; }
     rememberElement();
     for (const [el, r] of P.edits) paintCss(el, r);
+    paintEditorGroup();
   }
 
   // Turns "Hide my live edits" off again (a change made or saved now should be visible).
@@ -371,6 +380,7 @@
   }
 
   function revertLive() {
+    clearGroupPaint('editor');
     rememberElement();
     for (const [el, record] of P.edits) {
       for (const prop of Object.keys(record.tweaks)) restoreInline(el, prop);
@@ -586,6 +596,302 @@
     if (sr) out.rule = { selector: sr.rule.matched || sr.rule.selector, source: sr.rule.source, context: sr.rule.context, reliable: sr.reliable };
     if (!out.rule) delete out.rule;
     return out;
+  }
+
+  // ------------------------------------------------------------------ product-card scope (Slice D)
+  // One note can apply to the same part of several defined product cards ("This card", "Cards in this section", "All
+  // product cards on this page"). The note stays ONE note; its `cardScope` records the reviewed membership as independent
+  // targets (one per card, each with its own identity and its own CSS-conflict state), so previews, conflicts and the
+  // Change Report all agree. Matching lives in cards.js; nothing here is guessed: a card whose element can't be matched
+  // reliably is skipped and reported. Product-specific values (title, image, price, link, SKU, variant) are never copied.
+  const ROLE_NOUN = { title: 'title', image: 'image', sale: 'sale price', regular: 'regular price', badge: 'badge', cta: 'button', link: 'link', card: 'card' };
+  const ROLE_NAME = { title: 'product title', image: 'product image', sale: 'sale price', regular: 'regular price', badge: 'discount badge', cta: 'Add to Cart button', link: 'product link', card: 'product card' };
+  const roleNoun = (role) => ROLE_NOUN[role?.key] || 'element';
+  const fieldItemsOf = (it) => { const Lb = libApi(); return it && it.productMapping && Lb?.isMapping(it.productMapping) ? Lb.fieldItems(it.productMapping) : {}; };
+  const cardNameOf = (el) => { const b = cardsApi().cardBrief(el); return b.title || b.placeholder || BL.label(el); };
+
+  // The page's defined product cards, as the Product Mapping workflow sees them: cards saved with a note or definition
+  // (confirmed on the page now), cards built like them (automatic discovery), minus cards marked "not a card".
+  function cardClaims() {
+    const C = cardsApi();
+    const Lb = libApi();
+    const claims = new Map();
+    const excl = new Set();
+    const seeds = [];
+    for (const it of S.batch?.items || []) {
+      if (it.path !== here() || it.kind === 'page' || it.kind === 'region') continue;
+      if (Lb?.isExclusion(it)) {
+        let r; try { r = C.evaluate(it.exclusion.card); } catch { continue; }
+        if ((r.state === 'confirmed' || r.state === 'hidden') && r.el?.isConnected) excl.add(r.el);
+        continue;
+      }
+      const card = savedCard(it);
+      if (!card) continue;
+      let r; try { r = C.evaluate(card); } catch { continue; }
+      if ((r.state === 'confirmed' || r.state === 'hidden') && r.el?.isConnected && !claims.has(r.el)) { claims.set(r.el, it); if (it.cardRecord === true && !it.noSeed) seeds.push(r.el); }
+    }
+    for (const el of [...excl]) if (claims.has(el)) excl.delete(el);
+    return { claims, excl, seeds };
+  }
+
+  // Everything needed to offer, preview and save a card scope for the selected element, or null when it is not inside a
+  // defined product card. Rows cover EVERY card found on this page; the three scopes are filters over them.
+  function cardScopePlan(srcEl) {
+    const C = cardsApi();
+    if (!C?.sectionInfo || !srcEl || !srcEl.isConnected) return null;
+    const { claims, excl, seeds } = cardClaims();
+    if (!claims.size) return null; // nothing is defined as a product card on this page yet
+    const found = new Map();
+    let limited = false;
+    let review = 0;
+    for (const sd of new Set([...seeds, ...claims.keys()])) {
+      if (found.get(sd)?.family === 'same') continue; // already found by an earlier seed's layout family
+      const d = C.discoverCards(sd);
+      if (d.cards.length >= 150) limited = true;
+      for (const c of d.cards) { if (c.family === 'same') { if (!found.has(c.el)) found.set(c.el, c); } else if (!claims.has(c.el)) review++; }
+    }
+    for (const el of claims.keys()) if (!found.has(el)) found.set(el, { el, family: 'saved' });
+    for (const el of [...found.keys()]) for (const k of C.siblingCards(el)) if (!found.has(k)) found.set(k, { el: k, family: 'sibling' });
+    if (document.querySelectorAll('body *').length > 6000) limited = true;
+    const holders = [...found.keys()].filter((c) => c.contains(srcEl) && !excl.has(c));
+    if (!holders.length) return null;
+    const srcCard = holders.reduce((a, b) => (a.contains(b) ? b : a));
+    const cards = [...found.keys()].filter((el) => !excl.has(el) || el === srcCard).sort((a, b) => (a === b ? 0 : a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+    const exclEls = [...excl].filter((el) => found.has(el) && el !== srcCard);
+    const srcItems = fieldItemsOf(claims.get(srcCard));
+    const role = C.roleOfElement(srcCard, srcEl, srcItems);
+    const section = C.sectionInfo(srcCard);
+    const rows = cards.map((cardEl) => {
+      const sec = C.sectionInfo(cardEl);
+      const base = { cardEl, claim: claims.get(cardEl) || null, inSection: !!section.reliable && sec.reliable && sec.node === section.node };
+      if (cardEl === srcCard) return { ...base, state: 'matched', el: srcEl, basis: 'source', reasons: [] };
+      if (C.isHidden(cardEl)) return { ...base, state: 'unavailable', el: null, basis: null, reasons: ['the card is hidden on the page right now (for example by a filter)'] };
+      return { ...base, ...C.findCorresponding(role, cardEl, fieldItemsOf(base.claim)) };
+    });
+    for (const cardEl of exclEls) rows.push({ cardEl, claim: null, inSection: false, state: 'excluded', el: null, basis: null, reasons: ['the card was marked “not a card”'] });
+    rows.sort((a, b) => (a.cardEl === b.cardEl ? 0 : a.cardEl.compareDocumentPosition(b.cardEl) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+    for (const r of rows) if (r.state === 'excluded') r.inSection = !!section.reliable && C.sectionInfo(r.cardEl).node === section.node;
+    return { srcEl, srcCard, role, section, rows, limited, review };
+  }
+  const scopeRows = (plan, mode) => (mode === 'card' ? plan.rows.filter((r) => r.cardEl === plan.srcCard) : mode === 'section' ? plan.rows.filter((r) => r.inSection) : plan.rows);
+
+  // "Featured Deals · 5 matching titles · 1 needs review", "15 matching buttons across this page". Counts are of resolved
+  // rows (state: matched | confirmed count as matched), never of assumptions.
+  function cardScopeSummary(rows, role, mode, label) {
+    const n = (...states) => rows.filter((r) => states.includes(r.state)).length;
+    const noun = roleNoun(role);
+    const m = n('matched', 'confirmed');
+    const parts = [plural(m, `matching ${noun}`)];
+    const rv = n('missing', 'ambiguous', 'review');
+    if (rv) parts.push(`${rv} ${rv === 1 ? 'needs' : 'need'} review`);
+    if (n('excluded')) parts.push(`${n('excluded')} excluded`);
+    if (n('unavailable')) parts.push(`${n('unavailable')} hidden`);
+    if (n('absent')) parts.push(`${n('absent')} marked as having no ${noun}`);
+    const head = mode === 'section' ? `${label || 'This section'} · ` : '';
+    return `${head}${parts.join(' · ')}${mode === 'page' && parts.length === 1 ? ' across this page' : ''}`;
+  }
+
+  // The reviewed membership, as saved with the note. Independent targets; `set` holds each target's own conflict state
+  // ({ [css property]: { bps } }) so an exception for one card never touches the others.
+  function cardScopeSnapshot(plan, mode, prev, seedSet) {
+    const C = cardsApi();
+    const rows = scopeRows(plan, mode);
+    const targets = [];
+    const skipped = [];
+    const total = rows.length;
+    rows.forEach((r, i) => {
+      const where = `card ${i + 1} of ${total}`;
+      const name = clip(cardNameOf(r.cardEl), 60);
+      if (r.state !== 'matched' || !r.el) { skipped.push({ n: i + 1, name, where, state: r.state, reasons: (r.reasons || []).slice(0, 2) }); return; }
+      const selector = BL.cssPath(r.el);
+      const old = (prev?.targets || []).find((t) => t.selector === selector);
+      const t = { id: `t${i + 1}`, selector, label: BL.label(r.el), where, name, source: r.cardEl === plan.srcCard, basis: r.basis, card: clone(C.describe(r.cardEl)), ref: clone(C.fieldRef(r.cardEl, r.el, plan.role.key || 'other')) };
+      const set = old?.set || (t.source && seedSet && Object.keys(seedSet).length ? seedSet : null);
+      if (set) t.set = clone(set);
+      targets.push(t);
+    });
+    return clone({
+      v: 1, mode, path: here(),
+      section: mode === 'section' ? { label: plan.section.label, ref: plan.section.ref } : null,
+      role: { key: plan.role.key, basis: plan.role.basis, name: ROLE_NAME[plan.role.key] || 'element', noun: roleNoun(plan.role) },
+      source: { selector: BL.cssPath(plan.srcEl), where: `card ${Math.max(1, rows.findIndex((r) => r.cardEl === plan.srcCard) + 1)} of ${total}` },
+      targets, skipped, limited: plan.limited || undefined, review: plan.review || undefined, reviewedAt: Date.now(),
+    });
+  }
+
+  // Saved targets checked against the page as it is now (conservative card policies; nothing is re-pointed). state:
+  // confirmed | review (changed, moved, missing or ambiguous) | unavailable (hidden) | excluded | unchecked (other page).
+  const csCache = new WeakMap();
+  function resolveCardScope(cs, { fresh = false } = {}) {
+    const C = cardsApi();
+    if (!cs?.targets) return { rows: [], section: null, other: false };
+    const hit = csCache.get(cs);
+    if (!fresh && hit && Date.now() - hit.at < 1500) return hit.res;
+    let res;
+    if (cs.path !== here() || !C) res = { rows: cs.targets.map((t) => ({ t, state: 'unchecked', el: null, cardEl: null, claim: null, reasons: [] })), section: null, other: true };
+    else {
+      const { claims, excl } = cardClaims();
+      const rows = cs.targets.map((t) => {
+        const row = { t, state: 'review', el: null, cardEl: null, claim: null, reasons: [] };
+        let r; try { r = C.evaluate(t.card); } catch { r = { state: 'not-found', reasons: ['the card can’t be checked'] }; }
+        if (r.state === 'hidden') { row.state = 'unavailable'; row.reasons = ['the card is hidden on the page right now']; return row; }
+        if (r.state !== 'confirmed' || !r.el) { row.reasons = [r.state === 'not-found' ? 'the card was not found' : 'the card can’t be confirmed (the page changed)', ...(r.reasons || []).slice(0, 1)]; return row; }
+        row.cardEl = r.el;
+        row.claim = claims.get(r.el) || null;
+        if (excl.has(r.el)) { row.state = 'excluded'; row.reasons = ['the card was marked “not a card” after this note was saved']; return row; }
+        const x = C.resolveFieldRef(r.el, cs.role?.key || 'other', t.ref);
+        if (x.state === 'ok') { row.state = 'confirmed'; row.el = x.el; return row; }
+        row.reasons = [x.state === 'moved' ? 'the element moved inside the card; confirm it before applying' : x.reasons[0] || 'the element can’t be confirmed'];
+        return row;
+      });
+      res = { rows, section: cs.section?.ref ? C.resolveSection(cs.section.ref).state : null, other: false };
+    }
+    csCache.set(cs, { at: Date.now(), res });
+    return res;
+  }
+
+  // ---- previews on the other targets (per target: a target set aside by a conflict is not painted)
+  const groupPaint = new Map(); // key -> [{ el, props }]
+  function clearGroupPaint(key) { for (const e of groupPaint.get(key) || []) for (const p of e.props) restoreInline(e.el, p); groupPaint.delete(key); }
+  function paintGroup(key, entries) {
+    clearGroupPaint(key);
+    const rec = [];
+    for (const { el, tweaks } of entries) {
+      const props = new Set();
+      for (const t of cssOrder(tweaks)) { setInline(el, t.prop, t.to); props.add(t.prop); }
+      if (props.size) rec.push({ el, props });
+    }
+    groupPaint.set(key, rec);
+  }
+  function paintSavedGroup(it, on) {
+    const key = `item:${it.id}`;
+    clearGroupPaint(key);
+    if (!on || !appliesHere(it)) return;
+    const cs = it.cardScope;
+    const src = it.elementEdits.find((e) => e.el?.selector === cs.source?.selector);
+    const base = (src?.tweaks || []).filter((t) => !t.snap);
+    if (!base.length) return;
+    const entries = [];
+    for (const row of resolveCardScope(cs).rows) {
+      if (row.state !== 'confirmed' || !row.el) continue;
+      const tweaks = base.map((t) => targetTweak(row.t, t)).filter((t) => !offAt(t, bpNow()));
+      if (tweaks.length) entries.push({ el: row.el, tweaks });
+    }
+    paintGroup(key, entries);
+  }
+  // The open note's own preview on the other targets of the scope being offered.
+  function paintEditorGroup() {
+    clearGroupPaint('editor');
+    if (!S.pop || !S.active || S.prefs.previews === false || P.cs.eff === 'card' || !P.cs.plan || P.cs.planEl !== P.el) return;
+    const tweaks = Object.values(P.tweaks).filter((t) => !t.snap && !offAt(t, bpNow()));
+    if (!tweaks.length) return;
+    const saved = P.item?.cardScope && P.item.cardScope.mode === P.cs.eff && !P.cs.refresh ? P.item.cardScope : null;
+    const entries = [];
+    if (saved) {
+      for (const row of resolveCardScope(saved).rows) if (row.state === 'confirmed' && row.el && row.el !== P.el) entries.push({ el: row.el, tweaks: Object.values(P.tweaks).filter((t) => !t.snap).map((t) => targetTweak(row.t, t)).filter((t) => !offAt(t, bpNow())) });
+    } else for (const r of scopeRows(P.cs.plan, P.cs.eff)) if (r.state === 'matched' && r.el && r.el !== P.el) entries.push({ el: r.el, tweaks });
+    paintGroup('editor', entries);
+  }
+
+  // ---- the "Apply to" control in the note editor
+  // Group scope carries CSS and written instructions. Copy replacement, hide, move, match style, alignment, a Shopify
+  // variant and a Product Mapping always stay on this card (one-off or product-specific by nature).
+  const csAllowed = () => P.els.length <= 1 && !P.textEdit && !P.hide && !P.move && !P.match && !P.variant && !P.mapping && !Object.keys(P.align).length && !P.alignEl?.x && !P.alignEl?.y;
+  function csPlan() {
+    if (!P.el || isRegionPop() || P.els.length > 1) return null;
+    if (P.cs.planEl !== P.el || P.cs.stale) { P.cs.plan = cardScopePlan(P.el); P.cs.planEl = P.el; P.cs.stale = false; }
+    return P.cs.plan;
+  }
+  const csSavedFor = (mode) => (P.item?.cardScope && P.item.cardScope.mode === mode && !P.cs.refresh ? P.item.cardScope : null);
+  function csOffered(plan) { return { section: !!plan.section.reliable && plan.role.ok, page: plan.role.ok }; }
+  // The mode in effect: the person's choice (or the saved one), else the default. "Cards in this section" is the default
+  // only when the section is reliable and at least two cards correspond; otherwise "This card". A saved scope keeps its mode.
+  function csMode(plan, allowed) {
+    if (!plan || !allowed) return 'card';
+    const m = P.cs.mode;
+    if (m && csSavedFor(m)) return m;
+    const off = csOffered(plan);
+    if (m) return m === 'card' || off[m] ? m : 'card';
+    return off.section && scopeRows(plan, 'section').filter((r) => r.state === 'matched').length >= 2 ? 'section' : 'card';
+  }
+  function updateCardScope() {
+    const box = q('.cs-box');
+    if (!box) return;
+    const plan = csPlan();
+    const scopeBox = q('[data-d="scope"]');
+    // A saved scope stays visible and editable-as-saved even when the page's cards can't be confirmed right now (a
+    // changed page must never make the scope silently disappear from the note).
+    const savedOnly = !plan && !!P.item?.cardScope && !!P.el && P.els.length <= 1 && P.cs.mode === P.item.cardScope.mode && csAllowed();
+    box.hidden = !plan && !savedOnly;
+    if (savedOnly) {
+      const sv = P.item.cardScope;
+      P.cs.eff = sv.mode;
+      for (const r of qa('[name="cscope"]')) { r.checked = r.value === sv.mode; r.disabled = r.value !== 'card' && r.value !== sv.mode; }
+      const rows = resolveCardScope(sv, { fresh: true }).rows.map((r) => ({ state: r.state })).concat((sv.skipped || []).map((x) => ({ state: x.state })));
+      q('.cs-sum').textContent = cardScopeSummary(rows, sv.role, sv.mode, sv.section?.label);
+      q('.cs-detail').textContent = 'Saved membership. The page’s product cards can’t be confirmed right now (the page changed), so it can’t be refreshed here; the saved cards are kept as they are.';
+      q('.cs-refresh').hidden = true;
+      csLegacyScope(scopeBox);
+      return;
+    }
+    if (!plan) { P.cs.eff = 'card'; if (scopeBox) scopeBox.hidden = false; clearGroupPaint('editor'); return; }
+    const allowed = csAllowed();
+    const mode = csMode(plan, allowed);
+    P.cs.eff = mode;
+    const off = csOffered(plan);
+    const saved = csSavedFor(mode);
+    for (const r of qa('[name="cscope"]')) {
+      r.checked = r.value === mode;
+      r.disabled = r.value === 'card' ? false : !allowed || (!off[r.value] && !csSavedFor(r.value));
+    }
+    let text = '';
+    let detail = '';
+    if (mode === 'card') text = allowed ? '' : 'Copy, hide, move, match-style, alignment and product-mapping changes apply to this card only.';
+    else {
+      const rows = saved ? resolveCardScope(saved, { fresh: true }).rows.map((r) => ({ state: r.state })).concat((saved.skipped || []).map((s) => ({ state: s.state === 'matched' ? 'review' : s.state }))) : scopeRows(plan, mode);
+      text = cardScopeSummary(rows, plan.role, mode, saved ? saved.section?.label : plan.section.label);
+      if (saved) detail = 'Saved membership, checked against the page now. New cards are not added automatically.';
+      else if (P.item?.cardScope) detail = 'Refreshed from the page now. Update the note to save this membership.';
+      const bad = (saved ? [] : scopeRows(plan, mode)).filter((r) => r.state !== 'matched');
+      if (bad.length) detail += `${detail ? ' ' : ''}${bad.slice(0, 3).map((r) => `${cardNameOf(r.cardEl)}: ${r.reasons[0] || r.state}`).join('; ')}${bad.length > 3 ? `; and ${bad.length - 3} more` : ''}.`;
+      if (plan.limited) detail += `${detail ? ' ' : ''}Card discovery hit its scan limit, so cards beyond it may not be counted.`;
+    }
+    if (mode === 'card' && allowed && !off.section) {
+      const why = !plan.role.ok ? plan.role.why : plan.section.why;
+      detail = `Cards in this section isn’t offered: ${why}.`;
+      if (!off.page) detail = `Other cards can’t be matched: ${plan.role.why}.`;
+    }
+    q('.cs-sum').textContent = text;
+    q('.cs-detail').textContent = detail;
+    q('.cs-refresh').hidden = !(P.item?.cardScope && mode !== 'card' && P.item.cardScope.mode === mode && !P.cs.refresh);
+    csLegacyScope(scopeBox);
+    paintEditorGroup();
+  }
+  // Inside a defined product card the "Apply to" control is the only scope control. This is behavior, not just hiding:
+  // the legacy site-wide scope is reset to "just this one" on every edited element, so "This card" stays on the selected
+  // target and nothing can widen it. A note SAVED with a legacy group/everywhere scope keeps showing its old control, so
+  // existing notes are neither changed nor made uneditable.
+  function csLegacyScope(scopeBox) {
+    const legacy = !!P.item && [P.scope, ...[...P.edits.values()].map((r) => r.scope)].some((m) => m && m !== 'one') && P.cs.eff === 'card';
+    if (!legacy) {
+      P.scope = 'one';
+      for (const r of P.edits.values()) r.scope = 'one';
+    }
+    if (scopeBox) scopeBox.hidden = !legacy;
+  }
+  // What the editor saves: nothing for "This card" (the note is exactly as before), or the reviewed membership.
+  function csCollect() {
+    const plan = csPlan();
+    const kept = P.item?.cardScope;
+    if (!plan && kept && P.el && P.els.length <= 1 && P.cs.mode === kept.mode && csAllowed() && kept.source?.selector === BL.cssPath(P.el)) return clone(kept);
+    if (!plan || !csAllowed()) return undefined;
+    const mode = csMode(plan, true);
+    if (mode === 'card') return undefined;
+    const saved = P.item?.cardScope;
+    if (saved && csSavedFor(mode) && saved.source?.selector === BL.cssPath(P.el)) return clone(saved);
+    const seed = {};
+    for (const t of Object.values(P.tweaks)) if (t.inactive && !t.snap) seed[t.prop] = clone(t.inactive);
+    return cardScopeSnapshot(plan, mode, saved, seed);
   }
 
   // ------------------------------------------------------------------ token hints
@@ -1409,6 +1715,14 @@
       <label class="radio"><input type="radio" name="scope" value="group"> All like it inside <select class="xin grp-sel" style="width:auto;max-width:170px"></select></label>
       <label class="radio"><input type="radio" name="scope" value="all"> Everywhere on the site <span class="sub all-count"></span></label>
       <div class="sub scope-info"></div></details>
+    <div class="cs-box" role="radiogroup" aria-label="Apply to" hidden>
+      <div class="tb-h">Apply to</div>
+      <label class="radio"><input type="radio" name="cscope" value="card" checked> This card</label>
+      <label class="radio"><input type="radio" name="cscope" value="section"> Cards in this section</label>
+      <label class="radio"><input type="radio" name="cscope" value="page"> All product cards on this page</label>
+      <div class="sub cs-sum"></div><div class="sub cs-detail"></div>
+      <div class="xbtns"><button type="button" class="xb cs-refresh" data-x="cs-refresh" title="Re-scan the page and replace the saved cards with what matches now" hidden>Refresh targets</button></div>
+    </div>
   `;
 
   const LINK_HTML = `
@@ -2310,6 +2624,7 @@
       P.bps = new Set(item.bps || []);
       P.scope = item.scope?.mode || 'one';
       P.scopeTouched = !!item.scope?.chosen;
+      P.cs.mode = item.cardScope?.mode || 'card'; // a saved note keeps its saved behavior; only a new note gets the default
       P.auto = !!item.auto;
       (item.tweaks || []).forEach((t) => { P.tweaks[t.prop] = { ...t }; });
       P.textEdit = item.textEdit ? { ...item.textEdit } : null;
@@ -3645,6 +3960,7 @@
     if (sm) sm.textContent = '';
     clearMeas();
     hideDr();
+    clearGroupPaint('editor');
     if (!P.committed) revertLive();
     const panel = q('.panel');
     if (panel) panel.classList.remove('composing');
@@ -3687,6 +4003,10 @@
   // ------------------------------------------------------------------ scope ("Apply to")
 
   function updateScope() {
+    updateCardScope();
+    updateScopeCss();
+  }
+  function updateScopeCss() {
     const sm = q('.x-sim');
     const el = P.el;
     if (!el || isRegionPop()) { T.simEls = null; if (sm) sm.textContent = ''; return; }
@@ -5755,6 +6075,7 @@
       case 'color-remove': record(); P.colors.splice(+b.dataset.i, 1); renderStrips(); break;
       case 'rm-colors': record(); P.colors = []; renderStrips(); break;
       case 'rm-variant': P.variant = null; renderStrips(); break;
+      case 'cs-refresh': P.cs.refresh = true; P.cs.stale = true; updateCardScope(); break;
       case 'card-start': cardStart(); break;
       case 'card-up': cardStep(1); break;
       case 'card-down': cardStep(-1); break;
@@ -5828,6 +6149,7 @@
     if (t.classList.contains('element-choice')) { holdPosition(q('.element-editor'), () => chooseElement(+t.value)); return; }
     if (t.classList.contains('css-rule')) { chooseRule(t.value); return; }
     if (t.classList.contains('pv') && (t.type === 'checkbox' || t.tagName === 'SELECT' || t.classList.contains('num'))) { partsEdit(t.closest('.st'), true); return; }
+    if (t.name === 'cscope') { P.cs.mode = t.value; updateCardScope(); return; }
     if (t.name === 'scope') { P.scope = t.value; P.scopeTouched = true; updateScope(); }
     else if (t.classList.contains('grp-sel')) { P.groupIdx = +t.value; P.scope = 'group'; P.scopeTouched = true; updateScope(); }
     else if (t.classList.contains('mv-pos') && P.move) { P.move.position = t.value; renderAnn(); }
@@ -6289,7 +6611,25 @@
   // note changes, and the decision is part of the saved data.
 
   // A note's CSS changes with the elements they apply to (older notes: one set of changes for every element).
+  // A card-scoped note's CSS is resolved into one independent edit per target card. Each target's tweaks are views of the
+  // note's shared values whose set-aside state (`inactive`) lives on that target alone, so a conflict decision for one card
+  // never reaches the others and a decision made later is saved in the note it belongs to.
+  function targetTweak(target, tw) {
+    return new Proxy({ ...tw }, {
+      get: (o, k) => (k === 'inactive' ? target.set?.[tw.prop] : o[k]),
+      has: (o, k) => (k === 'inactive' ? !!target.set?.[tw.prop] : k in o),
+      set: (o, k, v) => { if (k === 'inactive') { target.set = target.set || {}; if (v) target.set[tw.prop] = v; else delete target.set[tw.prop]; } else o[k] = v; return true; },
+      deleteProperty: (o, k) => { if (k === 'inactive') { if (target.set) delete target.set[tw.prop]; if (target.set && !Object.keys(target.set).length) delete target.set; } else delete o[k]; return true; },
+    });
+  }
   function cssEdits(it) {
+    if (it.elementEdits && it.cardScope?.targets?.length) {
+      const cs = it.cardScope;
+      const src = it.elementEdits.find((e) => e.el?.selector === cs.source?.selector);
+      const rest = it.elementEdits.filter((e) => e !== src).map((e) => ({ sels: [e.el?.selector].filter(Boolean), label: e.el?.label, tweaks: e.tweaks || [] }));
+      const per = src ? cs.targets.map((t) => ({ sels: [t.selector], label: `${t.label} (${t.where})`, tweaks: (src.tweaks || []).map((tw) => (tw.snap ? tw : targetTweak(t, tw))) })) : [];
+      return [...rest, ...per];
+    }
     if (it.elementEdits) return it.elementEdits.map((e) => ({ sels: [e.el?.selector].filter(Boolean), label: e.el?.label, tweaks: e.tweaks || [] }));
     const sels = [it.el?.selector, ...(it.also || []).map((a) => a.selector)].filter(Boolean);
     return it.tweaks?.length ? [{ sels, label: it.el?.label, tweaks: it.tweaks }] : [];
@@ -6464,6 +6804,7 @@
       f.also = P.els.length > 1 ? P.els.slice(1).map(alsoInfo) : undefined;
       f.elementEdits = elementFields();
       for (const key of ['scope', 'tweaks', 'textEdit', 'hidden', 'match', 'move', 'align', 'measures']) f[key] = undefined;
+      f.cardScope = csCollect();
       // Instances whose element isn't on the page stay in the note. When that includes the note's own element,
       // it stays first, so the note keeps its details and the elements found here all go to "also".
       if (P.missing.length) {
@@ -6650,8 +6991,9 @@
     const hasRule = items.some((i) => edits(i).some((e) => (e.tweaks || []).some((t) => t.rule)));
     const hasPreview = items.some((i) => edits(i).some((e) => (e.tweaks || []).some((t) => !t.snap && !t.rule) || e.textEdit));
     const hasAlign = items.some((i) => edits(i).some((e) => e.alignEl?.x || e.alignEl?.y || (e.align || []).length));
-    if (hasRule || hasPreview) key.push(`Values were previewed live on the selected element only and are the target${hasRule ? '; **added** means the rule didn\u2019t declare that property before' : ''}. **Scope** says where the real change goes. Use existing tokens or classes rather than hardcoding.`);
+    if (hasRule || hasPreview) key.push(`Values were previewed live on the selected element only${items.some((i) => i.cardScope?.targets) ? ' (except notes scoped to several product cards, which were previewed on each matched target)' : ''} and are the target${hasRule ? '; **added** means the rule didn\u2019t declare that property before' : ''}. **Scope** says where the real change goes. Use existing tokens or classes rather than hardcoding.`);
     if (items.some((i) => edits(i).some((e) => (e.tweaks || []).some((t) => t.inactive)))) key.push('Where notes asked for different values of the same CSS property, only the value that was chosen is listed. The other value was set aside on purpose; don\u2019t implement it.');
+    if (items.some((i) => i.cardScope?.targets)) key.push('**Scope: shared across product cards** means one note covers the corresponding element in several product cards on this page. Apply it to the listed targets only, per card, and keep each card\u2019s own product data (title, image source, price, product page link, SKU, variant) unchanged unless the note says otherwise.');
     if (hasAlign) key.push('Alignment is a relationship to a reference element that stays put. Any pixel shift is only a preview: build it with layout (flex or grid, margins, order), not a fixed offset or transform.');
     if (items.some((i) => i.kind === 'region')) key.push('**Region**: empty space where something new goes. Add it, following its neighbours.');
     if (items.some((i) => refBits(i).length)) key.push('Measurements and sampled colors are reference only, not changes. **(reference only)** items need no edits.');
@@ -6742,14 +7084,14 @@
   // CSS changes grouped by the rule they were made in: where it is, then one line per property. "added" means the
   // rule didn't declare the property before; the original value is otherwise the rule's own, as written.
   const onlyText = (t) => (t.only ? ` (only on ${t.only.join(' and ')}; another note's value is used on the other screen sizes)` : '');
-  function cssRuleLines(tweaks) {
+  function cssRuleLines(tweaks, each = false) {
     const groups = new Map();
     for (const t of tweaks) { const k = t.rule.key; if (!groups.has(k)) groups.set(k, { rule: t.rule, list: [] }); groups.get(k).list.push(t); }
     const L = [];
     for (const { rule: r, list } of groups.values()) {
       const sel = r.matched || r.selector;
       const head = r.key === 'element'
-        ? 'CSS on this element only (not in a stylesheet rule):'
+        ? (each ? 'CSS to apply to each matched target (set on the element, not in a stylesheet rule):' : 'CSS on this element only (not in a stylesheet rule):')
         : `CSS rule ${code(sel)} in ${r.source}${r.context ? ` (${r.context})` : ''}${r.selector && r.selector !== sel ? `, from the selector ${code(r.selector)}` : ''}:`;
       const notes = [
         r.notFound ? 'Not found on the page when saved; locate it by selector and source.' : '',
@@ -6766,11 +7108,122 @@
   // stays in the saved note (selection, undo, reopening); the export only leaves out its own instructions.
   const isEmptyInstance = (e) => !((e.tweaks || []).some((t) => liveBps(e, t).length) || e.textEdit || e.hidden || e.match || e.move || (e.align || []).length || e.alignEl?.x || e.alignEl?.y || (e.measures || []).length);
 
+
+  // ---- Change Report: a card-scoped note. One shared instruction, the reviewed targets re-checked against the page, the
+  // effective CSS per target (exceptions named), and each card's own product data. Written for text-only notes too.
+  const validUrl = (u) => { try { new URL(u, location.href); return /^(https?:\/\/|\/)/.test(String(u)); } catch { return false; } };
+  const cartish = (u) => /\/cart\b|checkout|add-to-cart|[?&]add=/i.test(u || '');
+  // Where a click on this card's product should go: its approved Product Mapping, else a verified link already on the card.
+  // Never the image asset, never a cart action, never another card's address; otherwise unresolved (not guessed).
+  function cardDestination(row, imgSrc) {
+    const Lb = libApi();
+    const C = cardsApi();
+    const m = row.claim?.productMapping;
+    if (m && Lb?.isMapping(m) && m.identity?.state !== 'substitute-pending') {
+      const ev = Lb.effectiveValues(m);
+      if (ev.url && !cartish(ev.url) && validUrl(ev.url) && ev.url !== imgSrc) return { url: ev.url, basis: ev.edited.includes('url') ? 'approved Product Mapping (page-specific address)' : 'approved Product Mapping' };
+    }
+    let ex = null;
+    try { ex = C.exportFields(row.cardEl, fieldItemsOf(row.claim)).fields; } catch { ex = null; }
+    const l = ex?.link;
+    if (l && (l.basis === 'confirmed' || l.basis === 'detected') && l.value?.href && !l.value.placeholder && !l.sharesCta && !cartish(l.value.href) && l.value.href !== imgSrc) {
+      return { url: l.value.href, basis: l.basis === 'confirmed' ? 'confirmed product link on the card' : 'existing link on the card, detected but not confirmed' };
+    }
+    return null;
+  }
+  const LINK_INTENT = /\b(link|links|linked|linking|clickable|click|clicks|href|url|urls|navigate|redirect|product page|product pages)\b/i;
+  function cardScopeLines(it) {
+    const cs = it.cardScope;
+    const L = [];
+    const add = (s) => L.push(`- ${s}`);
+    const C = cardsApi();
+    const res = resolveCardScope(cs, { fresh: true });
+    const noun = cs.role?.name || 'element';
+    const sizes = bpsOf(it).length === 3 ? 'all screen sizes' : bpsOf(it).join(' + ');
+    const rows = res.rows;
+    const live = rows.filter((r) => r.state === 'confirmed');
+    const n = res.other ? rows.length : live.length;
+    const where = cs.mode === 'section' ? `in the section ${cs.section?.label ? `“${cs.section.label}”` : '(unnamed)'} of this page` : 'on this page';
+    add(`**Scope: ${cs.mode === 'section' ? 'cards in this section' : 'all product cards on this page'}.** One shared instruction, not one note per card. Apply the note above to the corresponding ${noun} in each of the ${n} matched product card${n === 1 ? '' : 's'} ${where} (${code(cs.path)}). Applies at ${sizes}. Other pages are not affected.`);
+    if (it.note) add(`Shared instruction: “${clip(it.note.replace(/\s+/g, ' '), 400)}”`);
+    add(`Source element: ${code(it.el?.label || cs.source?.selector)} (${cs.source?.where || 'the source card'}), identified as the ${noun}${cs.role?.basis === 'structure' ? ' by its structure inside the card' : cs.role?.basis === 'confirmed' ? ' from the confirmed product-field assignment' : cs.role?.basis === 'detected' ? ' by Blueline’s field detection' : ''}. Every other card’s element was found relative to that card, not copied from this one.`);
+    if (res.other) add('These targets were reviewed on another page and are not re-checked here.');
+    L.push(`- Corresponding elements (${n}${res.other ? ', as reviewed' : ', confirmed on the page now'}); the selectors only help locate them:`);
+    const shown = rows.filter((r) => res.other || r.state === 'confirmed');
+    shown.slice(0, 30).forEach((r) => L.push(`  - ${r.t.where}${r.t.name ? ` “${r.t.name}”` : ''}: ${code(r.t.selector)}`));
+    if (shown.length > 30) L.push(`  - …and ${shown.length - 30} more`);
+    const left = [];
+    for (const r of rows) if (!res.other && r.state !== 'confirmed') left.push({ state: r.state === 'review' ? 'review' : r.state, text: `${r.t.where}${r.t.name ? ` “${r.t.name}”` : ''}: ${r.reasons[0] || r.state}` });
+    for (const s of cs.skipped || []) left.push({ state: s.state, text: `${s.where}${s.name ? ` “${s.name}”` : ''}: ${s.reasons?.[0] || s.state}` });
+    const review = left.filter((x) => ['review', 'missing', 'ambiguous'].includes(x.state));
+    const other = left.filter((x) => !review.includes(x));
+    if (review.length) { add(`**Not applied, needs review (${review.length}):** the ${noun} could not be matched reliably. Do not guess; confirm each one.`); review.slice(0, 20).forEach((x) => L.push(`  - ${x.text}`)); }
+    if (other.length) { add(`Left out (${other.length}): excluded, hidden or without this element.`); other.slice(0, 20).forEach((x) => L.push(`  - ${x.text}`)); }
+    if (cs.limited) add('Card discovery reached its scan limit when this was reviewed, so cards beyond the limit may not be counted.');
+    if (cs.review) add(`${cs.review} repeated group${cs.review === 1 ? '' : 's'} built differently were found and not included; define them as product cards first.`);
+    if (cs.mode === 'section' && res.section && res.section !== 'ok') add('The section container could not be found again on the page, so each target was checked on its own.');
+
+    // Effective CSS per target, with individual exceptions.
+    const edit = (it.elementEdits || []).find((e) => e.el?.selector === cs.source?.selector);
+    const base = (edit?.tweaks || []).filter((t) => !t.snap);
+    const targets = res.other ? [] : live;
+    if (base.length && targets.length) {
+      const liveOf = (row, t) => liveBps(it, targetTweak(row.t, t));
+      const sig = (row) => base.map((t) => `${t.prop}@${liveOf(row, t).join('+')}`).join('|');
+      const count = new Map();
+      targets.forEach((r) => count.set(sig(r), (count.get(sig(r)) || 0) + 1));
+      const main = [...count.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      const mainRows = targets.filter((r) => sig(r) === main);
+      const exc = targets.filter((r) => sig(r) !== main);
+      const proxy = (row) => base.map((t) => targetTweak(row.t, t));
+      const prev = base.filter((t) => liveOf(mainRows[0], t).length).map((t) => { const lv = liveOf(mainRows[0], t); return { ...t, only: lv.length < bpsOf(it).length ? lv : null }; });
+      if (prev.length) {
+        add(`**Effective CSS** for ${mainRows.length === targets.length ? `all ${targets.length}` : `${mainRows.length} of ${targets.length}`} targets${mainRows.length === targets.length ? '' : ' (the rest are exceptions below)'}:`);
+        const loose = prev.filter((t) => !t.rule);
+        if (loose.length) L.push(`  - ${loose.map((t) => `${t.prop} ${t.from} → ${t.to}${t.token ? ` (≈ ${t.token})` : ''}${onlyText(t)}`).join('; ')}`);
+        L.push(...cssRuleLines(prev.filter((t) => t.rule), true).map((x) => `  ${x}`));
+      } else add('Every target’s CSS value is set aside by another note’s value, so there is no shared CSS to implement.');
+      if (exc.length) {
+        add(`**Individual exceptions (${exc.length}):** only these cards differ from the shared CSS; the others keep it.`);
+        for (const r of exc) {
+          const parts = [];
+          for (const t of proxy(r)) {
+            const lv = liveBps(it, t);
+            const off = bpsOf(it).filter((b) => !lv.includes(b));
+            if (!off.length) continue;
+            const w = (() => { for (const o of itemsHere()) { if (o === it) continue; for (const e of cssEdits(o)) { if (!e.sels.some((x) => sameTarget(x, r.t.selector))) continue; const x = e.tweaks.find((y) => y.prop === t.prop && !y.snap && liveBps(o, y).some((b) => off.includes(b))); if (x) return { n: noteNo(o), to: x.to }; } } return null; })();
+            parts.push(`${t.prop}: ${t.to} is not applied at ${sizeWords(off).toLowerCase()}${w ? `; note ${w.n} sets ${t.prop}: ${w.to} there and that value is used` : '; another note’s value is used'}${lv.length ? `. It still applies at ${sizeWords(lv).toLowerCase()}` : ''}`);
+          }
+          L.push(`  - ${r.t.where}${r.t.name ? ` “${r.t.name}”` : ''}: ${parts.join('; ')}`);
+        }
+      }
+    }
+    // Product-specific data stays per card.
+    add('Keep these separate: the product **image source** (the asset URL), the **product page link** (where a click goes) and **Add to Cart** (its own control, variant and cart integration). Do not copy the source card’s title, image, price, link, SKU or variant to other cards, and do not change the Add to Cart control unless the note says so.');
+    if (LINK_INTENT.test(it.note || '') && !res.other) {
+      add(`Link each ${noun} to **its own card’s** product page. Preserve the image source, keep Add to Cart working, and do not nest an anchor inside an existing link. Per card:`);
+      const none = [];
+      for (const r of live) {
+        let imgSrc = '';
+        try { const ex = C.exportFields(r.cardEl, fieldItemsOf(r.claim)).fields; imgSrc = ex.image?.value?.src || ''; } catch { imgSrc = ''; }
+        const d = cardDestination(r, imgSrc);
+        const wrap = r.el && r.el !== r.cardEl ? r.el.closest('a[href]') : null;
+        const linked = wrap && r.cardEl.contains(wrap) ? ` Already inside a link to ${code(wrap.getAttribute('href'))}: change that link, don’t add another.` : '';
+        if (d) L.push(`  - ${r.t.where}${r.t.name ? ` “${r.t.name}”` : ''}: product page ${code(d.url)} (${d.basis}).${imgSrc ? ` Keep image source ${code(clip(imgSrc, 80))}.` : ''}${linked}`);
+        else { none.push(r); L.push(`  - ${r.t.where}${r.t.name ? ` “${r.t.name}”` : ''}: **destination not resolved**; no approved Product Mapping or verified product link.${imgSrc ? ` Keep image source ${code(clip(imgSrc, 80))}.` : ''}${linked}`); }
+      }
+      if (none.length) add(`**Unresolved product pages (${none.length}):** do not guess a URL or reuse another card’s; get the address for each first.`);
+    }
+    return L;
+  }
+
   hooks.promptItem = (it) => {
     const L = [];
     const add = (s) => L.push(`- ${s}`);
+    if (it.cardScope?.targets) L.push(...cardScopeLines(it));
     if (it.elementEdits?.length) {
-      const edits = it.elementEdits.map((e) => ({ ...e, bps: it.bps }));
+      const grouped = it.cardScope?.targets ? it.cardScope.source?.selector : null;
+      const edits = it.elementEdits.filter((e) => !grouped || e.el?.selector !== grouped).map((e) => ({ ...e, bps: it.bps }));
       const active = edits.filter((e) => !isEmptyInstance(e));
       // An element that is the note's own target is not "also selected".
       const idle = edits.filter((e) => isEmptyInstance(e) && e.el?.selector !== it.el?.selector);
@@ -6839,6 +7292,7 @@
   BL.toolsApi = {
     assign: assignApi,
     elementFields, chooseElement, rememberElement, renderChanges, elKind, previewAlign, realign, layoutRect, holdPosition, restoreElementRecord, visitElement, arrowHit, editArrowPointer, setDrawingColor, applyItemPreview, revertLive, removeGuide, styleInput, togglePopHide, buildAlignRows, emptyPop,
+    cardScopePlan, cardScopeSnapshot, resolveCardScope, cardScopeSummary, cardScopeLines, scopeRows, cssEdits, targetTweak, clearGroupPaint, updateCardScope,
     similarSelector, similar, groupOptions, scopeInfo, tokenHint, spacingClasses, regionContext, measureRects, measureText, parseCSV, sheetFromRows, checkPrices,
     normForVar, stepVal, normInput, compositeFor, composeCss, stepNum, cssTokens, findCssConflicts, applyConflictChoices, reviveSetAside, priceReportText, scopeLines, marksSummary, snapTo, autoSelect, pointTarget, startSelect, startArea, T, A, D, getP: () => P, setP: (p) => { P = p; }, setAnnotate, setTarget, makeDraggable,
   };
