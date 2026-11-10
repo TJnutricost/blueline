@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Slice D fixture: product-card scopes (synthetic)</title>
+<style>
+  body { margin: 0; font: 14px/1.4 sans-serif; padding-bottom: 600px; }
+  section, .loose { padding: 10px 16px; }
+  .row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+  .deal { border: 1px solid #ccc; padding: 6px; }
+  .deal img { width: 100%; height: 50px; background: #eee; display: block; }
+  .nm { font-weight: 600; font-size: 16px; margin: 4px 0; }
+  .pr { display: flex; gap: 8px; } .sale { font-weight: 700; } .reg { text-decoration: line-through; }
+  .go { display: inline-block; padding: 3px 8px; background: #06c; color: #fff; }
+</style>
+</head>
+<body>
+
+<!-- Section A: five cards, deliberately different markup -->
+<section id="s-a" aria-labelledby="h-a">
+  <h2 id="h-a">Featured Deals</h2>
+  <div class="row" id="row-a">
+    <article class="deal" id="a1"><a class="il" href="/products/alpha"><img src="/img/a1.jpg" alt="Alpha"></a><h3 class="nm">Alpha Protein</h3><div class="pr"><span class="sale">$19.99</span><span class="reg">$29.99</span></div><a class="go" href="/cart/add?id=11">Add to cart</a></article>
+    <article class="deal" id="a2"><a class="il" href="/products/bravo"><img src="/img/a2.jpg" alt="Bravo"></a><h3 class="nm">Bravo Creatine</h3><div class="pr"><span class="sale">$24.99</span><span class="reg">$34.99</span></div><a class="go" href="/cart/add?id=12">Add to cart</a></article>
+    <article class="deal" id="a3"><img src="/img/a3.jpg" alt="Charlie"><div class="body"><h3 class="nm">Charlie Omega</h3><div class="pr"><span class="sale">$14.99</span><span class="reg">$19.99</span></div></div><a class="go" href="/cart/add?id=13">Add to cart</a></article>
+    <article class="deal" id="a4"><img src="/img/a4.jpg" alt="Delta"><h3 class="nm">Delta Greens</h3><div class="pr"><span class="sale">$29.99</span><span class="reg">$39.99</span></div><a class="go" href="/cart/add?id=14">Add to cart</a></article>
+    <article class="deal" id="a5"><a class="il" href="/products/echo"><img src="/img/a5.jpg" alt="Echo"></a><h3 class="nm">Echo Sleep</h3><div class="pr"><span class="sale">$9.99</span></div><a class="go" href="/cart/add?id=15">Add to cart</a></article>
+  </div>
+</section>
+
+<!-- Section B: a DIFFERENT section with the SAME heading text; one card hidden by a filter -->
+<section id="s-b" aria-labelledby="h-b">
+  <h2 id="h-b">Featured Deals</h2>
+  <div class="row" id="row-b">
+    <article class="deal" id="b1"><img src="/img/b1.jpg" alt="Foxtrot"><h3 class="nm">Foxtrot Whey</h3><div class="pr"><span class="sale">$39.99</span><span class="reg">$49.99</span></div><a class="go" href="/cart/add?id=21">Add to cart</a></article>
+    <article class="deal" id="b2"><img src="/img/b2.jpg" alt="Golf"><h3 class="nm">Golf BCAA</h3><div class="pr"><span class="sale">$27.99</span><span class="reg">$32.99</span></div><a class="go" href="/cart/add?id=22">Add to cart</a></article>
+    <article class="deal" id="b3" hidden><img src="/img/b3.jpg" alt="Hotel"><h3 class="nm">Hotel Zinc</h3><div class="pr"><span class="sale">$8.99</span><span class="reg">$12.99</span></div><a class="go" href="/cart/add?id=23">Add to cart</a></article>
+  </div>
+</section>
+
+<!-- Section C: a section with no heading at all -->
+<section id="s-c">
+  <div class="row" id="row-c">
+    <article class="deal" id="c1"><img src="/img/c1.jpg" alt="India"><h3 class="nm">India Collagen</h3><div class="pr"><span class="sale">$21.99</span><span class="reg">$26.99</span></div><a class="go" href="/cart/add?id=31">Add to cart</a></article>
+    <article class="deal" id="c2"><img src="/img/c2.jpg" alt="Juliet"><h3 class="nm">Juliet Magnesium</h3><div class="pr"><span class="sale">$18.99</span><span class="reg">$22.99</span></div><a class="go" href="/cart/add?id=32">Add to cart</a></article>
+  </div>
+</section>
+
+<!-- Group D: no section container at all (a heading alone is not a section) -->
+<h2>Loose picks</h2>
+<div class="loose" id="loose">
+  <div class="row" id="row-d">
+    <article class="deal" id="d1"><img src="/img/d1.jpg" alt="Kilo"><h3 class="nm">Kilo Biotin</h3><div class="pr"><span class="sale">$11.99</span><span class="reg">$15.99</span></div><a class="go" href="/cart/add?id=41">Add to cart</a></article>
+    <article class="deal" id="d2"><img src="/img/d2.jpg" alt="Lima"><h3 class="nm">Lima Iron</h3><div class="pr"><span class="sale">$12.99</span><span class="reg">$16.99</span></div><a class="go" href="/cart/add?id=42">Add to cart</a></article>
+  </div>
+</div>
+
+<!-- Not a card: a lone banner image with text -->
+<p id="lone">Free shipping over $50</p>
+
+</body>
+</html>

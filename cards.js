@@ -1034,6 +1034,129 @@
     return { seed: seedEl, cards };
   }
 
+  // ------------------------------------------------------------------ shared annotations across cards (Slice D)
+  //
+  // One note can apply to the same part of several cards. Nothing here stores anything: it identifies the SECTION a card
+  // sits in (by its container, never by heading text, which two sections may share) and finds the element in another card
+  // that corresponds to the one selected in the source card. Matching is relative to each card and conservative: a
+  // confirmed field reference first, then Blueline's own field detection, then a validated structural signature. Anything
+  // uncertain is skipped and reported, never guessed. Absolute paths, nth-child positions and "the first similar element"
+  // are never copied from one card to another.
+
+  const SECTION_SEL = 'section,[role="region"],[aria-labelledby],[aria-label]';
+  function sectionNode(el) {
+    if (!el || !el.parentElement) return null;
+    const own = el.parentElement.closest('[data-blueline-product-section]');
+    if (own) return own;
+    for (let n = el.parentElement; n && n !== document.body && n !== document.documentElement; n = n.parentElement) if (n.matches(SECTION_SEL)) return n;
+    return null;
+  }
+  const sectionRef = (node) => JSON.parse(JSON.stringify({
+    tag: tagOf(node), id: node.id && stableId(node.id) ? node.id : undefined, explicit: node.getAttribute('data-blueline-product-section') || undefined, path: pathOf(node), classes: classesOf(node).slice(0, 4),
+  }));
+  // Finds a saved section container again: a unique id, then a unique explicit marker, then its structural path. Several
+  // matches is 'ambiguous' and none is 'missing'; the heading is a label only and is never used to find the container.
+  function resolveSection(ref) {
+    if (!ref || !ref.tag) return { state: 'missing', node: null };
+    const tries = [];
+    if (ref.id) tries.push(`#${esc(ref.id)}`);
+    if (ref.explicit) tries.push(`[data-blueline-product-section="${esc(ref.explicit)}"]`);
+    if (ref.path) tries.push(ref.path);
+    let multi = false;
+    for (const sel of tries) {
+      const hit = qsa(sel).filter((n) => tagOf(n) === ref.tag);
+      if (hit.length === 1) return { state: 'ok', node: hit[0] };
+      if (hit.length > 1) multi = true;
+    }
+    return { state: multi ? 'ambiguous' : 'missing', node: null };
+  }
+  // The section a card is in. `reliable` only when a real container surrounds the card and its saved reference finds that
+  // same container again. A heading alone never makes a section (the label is for people).
+  function sectionInfo(cardEl) {
+    const label = sectionOf(cardEl).heading;
+    const node = sectionNode(cardEl);
+    if (!node) return { node: null, reliable: false, label, ref: null, why: 'no section container surrounds this card, and a heading alone can’t tell sections apart' };
+    const ref = sectionRef(node);
+    const back = resolveSection(ref);
+    const reliable = back.state === 'ok' && back.node === node;
+    // The label is the section's own heading: a name given to the container, else a heading that is not inside a card
+    // (the first heading in a section can be a card's title).
+    const cardSel = tagOf(cardEl) + classesOf(cardEl).map((c) => `.${esc(c)}`).join('');
+    const own = node.getAttribute('aria-labelledby') || node.getAttribute('data-blueline-product-section') || node.getAttribute('aria-label') ? headingText(node) : '';
+    const loose = own ? '' : qsa('h1,h2,h3,h4,h5,h6', node).filter((h) => !h.closest(cardSel))[0];
+    const named = own || (loose ? textOf(loose) : '');
+    return { node, reliable, label: clip(named, 80) || null, ref, why: reliable ? null : 'the section container can’t be identified again reliably' };
+  }
+
+  function signatureOf(cardEl, el) {
+    const p = el.parentElement;
+    return { tag: tagOf(el), classes: classesOf(el), role: roleTag(el), parent: p && p !== cardEl ? { tag: tagOf(p), classes: classesOf(p) } : null };
+  }
+  function signatureHits(cardEl, sig) {
+    return qsa('*', cardEl).slice(0, 450).filter((n) => {
+      if (SKIP_TAG.test(n.tagName) || tagOf(n) !== sig.tag || !sameList(classesOf(n), sig.classes) || roleTag(n) !== sig.role) return false;
+      const p = n.parentElement;
+      return sig.parent ? !!p && p !== cardEl && tagOf(p) === sig.parent.tag && sameList(classesOf(p), sig.parent.classes) : p === cardEl;
+    });
+  }
+  // What the selected element IS inside its card. `items` = the card's saved field assignments ({ key: { state, ref } }).
+  // key: a field (title, image, sale, regular, badge, cta, link), 'card' (the card itself) or null (any other element,
+  // matched by structure). ok:false when the element can't be told apart from look-alikes inside its own card.
+  function roleOfElement(cardEl, el, items = {}) {
+    if (!cardEl || !el) return { key: null, ok: false, basis: null, why: 'nothing is selected' };
+    if (el === cardEl) return { key: 'card', ok: true, basis: 'card' };
+    if (!cardEl.contains(el)) return { key: null, ok: false, basis: null, why: 'the element is outside the card' };
+    for (const key of FIELD_KEYS) {
+      const s = items[key];
+      if (s && s.state === 'confirmed') { const x = resolveFieldRef(cardEl, key, s.ref); if (x.state === 'ok' && x.el === el) return { key, ok: true, basis: 'confirmed' }; }
+    }
+    const det = detectFields(cardEl).fields;
+    for (const key of FIELD_KEYS) if (det[key].status === 'suggested' && det[key].best && det[key].best.el === el) return { key, ok: true, basis: 'detected' };
+    const sig = signatureOf(cardEl, el);
+    const hits = signatureHits(cardEl, sig);
+    if (hits.length === 1 && hits[0] === el) return { key: null, ok: true, basis: 'structure', sig };
+    return { key: null, ok: false, basis: null, why: 'several elements inside this card look the same, so which one corresponds in the other cards can’t be told' };
+  }
+  // The element in `cardEl` that corresponds to the role. state: matched | missing | ambiguous | absent (the card
+  // explicitly has no such field) | review (a saved reference no longer holds).
+  function findCorresponding(role, cardEl, items = {}) {
+    if (!role || !role.ok) return { state: 'ambiguous', el: null, basis: null, reasons: [role?.why || 'the element has no reliable role'] };
+    if (role.key === 'card') return { state: 'matched', el: cardEl, basis: 'card', reasons: [] };
+    if (role.key) {
+      const s = items[role.key];
+      if (s && s.state === 'unmapped') return { state: 'absent', el: null, basis: 'unmapped', reasons: [`this card was marked as having no ${FIELD_LABELS[role.key].toLowerCase()}`] };
+      if (s && s.state === 'confirmed') {
+        const x = resolveFieldRef(cardEl, role.key, s.ref);
+        if (x.state === 'ok') return { state: 'matched', el: x.el, basis: 'confirmed', reasons: [] };
+        return { state: x.state === 'ambiguous' ? 'ambiguous' : 'review', el: null, basis: null, reasons: x.reasons.length ? x.reasons : ['the confirmed element can’t be found'] };
+      }
+      const det = detectFields(cardEl).fields;
+      const d = det[role.key];
+      if (d.status === 'suggested' && d.best && role.key === 'link') {
+        // The Add to Cart control is not the product link: a card whose only link IS its button has no separate link.
+        const cta = det.cta.best && det.cta.best.el;
+        if (cta && (cta === d.best.el || cta.contains(d.best.el) || d.best.el.contains(cta))) return { state: 'missing', el: null, basis: null, reasons: ['this card’s only link is its Add to Cart control, not a product link'] };
+      }
+      if (d.status === 'suggested' && d.best) return { state: 'matched', el: d.best.el, basis: 'detected', reasons: [] };
+      if (d.status === 'ambiguous') return { state: 'ambiguous', el: null, basis: null, reasons: [`more than one element could be the ${FIELD_LABELS[role.key].toLowerCase()}`] };
+      return { state: 'missing', el: null, basis: null, reasons: [`no ${FIELD_LABELS[role.key].toLowerCase()} found in this card`] };
+    }
+    const hits = signatureHits(cardEl, role.sig);
+    if (hits.length === 1) return { state: 'matched', el: hits[0], basis: 'structure', reasons: [] };
+    if (hits.length > 1) return { state: 'ambiguous', el: null, basis: null, reasons: [`${hits.length} elements in this card look like it`] };
+    return { state: 'missing', el: null, basis: null, reasons: ['no element with the same structure in this card'] };
+  }
+
+  // Cards that sit in the same list as `cardEl`, carry the same tag and classes and hold product content, even when their inner
+  // markup differs (a wrapper, another order). Discovery compares inner structure and can miss them; they are still candidates
+  // for a shared annotation, and each is matched element by element, so a different build is reported, not assumed.
+  function siblingCards(cardEl) {
+    const p = cardEl && cardEl.parentElement;
+    if (!p) return [];
+    const cls = classesOf(cardEl);
+    return [...p.children].filter((k) => k !== cardEl && k.tagName === cardEl.tagName && sameList(classesOf(k), cls) && productLike(signals(k)) && !containsCards(k));
+  }
+
   // ------------------------------------------------------------------ report
 
   const NOTE = {
@@ -1060,6 +1183,7 @@
 
   return {
     SCHEMA, hash, propose, describe, evaluate, measure, discoverSlots, slotElement, reportLines, isBroad, cardLike, group, sectionOf, signals,
+    sectionInfo, resolveSection, roleOfElement, findCorresponding, siblingCards,
     discoverCards, cardBrief, isHidden, FIELD_KEYS, FIELD_LABELS, pricesIn, parseBadge, detectFields, exportFields, fieldLocator, snapPick, fieldRef, fieldValue, resolveFieldRef, roleOk,
   };
 });
