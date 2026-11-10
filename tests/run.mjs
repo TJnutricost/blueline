@@ -3553,8 +3553,8 @@ console.log('\n# Product Library: import, check, correct, add, save, reload, iso
 
   // Opening
   await ui(() => { __BL.S.ui.root.querySelector('[data-d="aids"]').open = true; });
-  check('Product Library: the button is in More tools and the modal starts closed', (await ui(() => !!__BL.S.ui.root.querySelector('[data-d="aids"] [data-x="library"]'))) && !(await modalOpen()));
-  await click('[data-x="library"]');
+  check('Product Library: the entry is in the Home Products section (not More tools) and the modal starts closed', (await ui(() => !!__BL.S.ui.root.querySelector('[data-d="products"] [data-x="lib-home"]') && !__BL.S.ui.root.querySelector('[data-d="aids"] [data-x="library"]'))) && !(await modalOpen()));
+  await ui(() => __BL.libraryUi.open());
   await sleep(150);
   check('Product Library: opens; a non-Shopify page does not assume a store', (await modalOpen()) && (await ui(() => __BL.S.ui.root.querySelector('[data-lib="store"]').value)) === '' && !(await ui(() => __BL.S.ui.root.querySelector('.lib-start').hidden)), await Q('.lib-msg'));
   await setVal('[data-lib="store"]', 'http://shop.example.com');
@@ -3565,7 +3565,7 @@ console.log('\n# Product Library: import, check, correct, add, save, reload, iso
   await key('[data-lib="store"]', 'Enter');
   await sleep(250);
   check('Product Lists: an empty list says "Upload a product list" with Upload File and the accepted formats', (await ui(() => !__BL.S.ui.root.querySelector('.lib-start').hidden)) && /Upload a product list/.test(await Q('.lib-start')) && /Upload File/.test(await Q('.lib-start')) && /CSV, JSON, DOCX/.test(await Q('.lib-start')) && !/SMP|Campaign/i.test(await Q('.lib-start')) && (await rowsCount()) === 0, await Q('.lib-start'));
-  check('Product Lists: nothing is saved for an untouched new list, and the title is Product Library while the entry point stays generic', !Object.keys(await ui(() => chrome.storage.local.get())).some((k) => k.startsWith('blueline:lib:smp:') || k.startsWith('blueline:lib:work:')) && /Product Library/.test(await Q('.xmodal[data-m="library"] header')) && !/Import Product List/.test(await Q('.xmodal[data-m="library"] header')) && /Import Product List/.test(await Q('[data-x="library"]')));
+  check('Product Lists: nothing is saved for an untouched new list, and the title is Product Library while the entry point stays generic', !Object.keys(await ui(() => chrome.storage.local.get())).some((k) => k.startsWith('blueline:lib:smp:') || k.startsWith('blueline:lib:work:')) && /Product Library/.test(await Q('.xmodal[data-m="library"] header')) && !/Import Product List/.test(await Q('.xmodal[data-m="library"] header')) && !(await ui(() => !!__BL.S.ui.root.querySelector('[data-x="library"]'))));
 
   // Import the SMP (.docx)
   await addFile('Spring SMP.docx', docx);
@@ -3774,7 +3774,7 @@ console.log('\n# Product Library: import, check, correct, add, save, reload, iso
   await sleep(300);
   check('Reopening restores the same library, decisions and manual product from storage', (await rowsCount()) === 7 && (await row('ACM200101')).prices[2].includes('$15.50') && /Chosen by you/.test((await row('ACM500107')).text) && !!(await row('ACM999001')));
   const reloaded = await open('toolbox.html', { http: true, realStorage: true, seed: snapshot });
-  await reloaded.evaluate(() => { __BL.S.ui.root.querySelector('[data-d="aids"]').open = true; __BL.S.ui.root.querySelector('[data-x="library"]').click(); });
+  await reloaded.evaluate(() => { __BL.S.ui.root.querySelector('[data-d="aids"]').open = true; __BL.libraryUi.open(); });
   await sleep(400);
   const updAt = (o) => o['blueline:lib:index'].libs.find((l) => l.campaign === listId)?.updatedAt;
   check('Opening a list in a new session (which re-detects the store currency) does not change Last edited', updAt(await reloaded.evaluate(() => chrome.storage.local.get('blueline:lib:index'))) === updAt(snapshot) && !!updAt(snapshot), String(updAt(snapshot)));
@@ -3784,7 +3784,7 @@ console.log('\n# Product Library: import, check, correct, add, save, reload, iso
 
   // Isolation: another website (a different origin, here localhost) starts empty even though the data is in storage
   const other = await open('toolbox.html', { http: true, realStorage: true, seed: snapshot, host: 'localhost' });
-  await other.evaluate(() => { __BL.S.ui.root.querySelector('[data-d="aids"]').open = true; __BL.S.ui.root.querySelector('[data-x="library"]').click(); });
+  await other.evaluate(() => { __BL.S.ui.root.querySelector('[data-d="aids"]').open = true; __BL.libraryUi.open(); });
   await sleep(400);
   check('Another website does not inherit the library: no store, no products, and the upload prompt shows', (await other.evaluate(() => __BL.S.ui.root.querySelector('[data-lib="store"]').value)) === '' && (await other.evaluate(() => __BL.S.ui.root.querySelectorAll('.lib-row').length)) === 0 && (await other.evaluate(() => !__BL.S.ui.root.querySelector('.lib-start').hidden)));
   await other.evaluate(() => { const i = __BL.S.ui.root.querySelector('[data-lib="store"]'); i.value = 'https://another-store.example.com'; __BL.S.ui.root.querySelector('[data-x="lib-open"]').click(); });
@@ -3859,7 +3859,7 @@ console.log('\n# Product lists without Shopify: upload, drag and drop, import ch
   const reqs0 = shopRequests.length;
 
   // 1. No store at all
-  await ui(() => { __BL.S.ui.root.querySelector('[data-d="aids"]').open = true; __BL.S.ui.root.querySelector('[data-x="library"]').click(); });
+  await ui(() => { __BL.S.ui.root.querySelector('[data-d="aids"]').open = true; __BL.libraryUi.open(); });
   await sleep(250);
   check('Upload File is active with no store (not dimmed, not disabled), the formats are shown beneath it, the store is marked optional', await ui(() => { const b = __BL.S.ui.root.querySelector('.lib-start .xb-file'); const cs = getComputedStyle(b); return !b.querySelector('input').disabled && cs.opacity === '1' && cs.pointerEvents !== 'none'; }) && /CSV, JSON, DOCX/.test(await Q('.lib-start')) && /optional/i.test(await Q('.lib-cfg')) && /Upload a product list/.test(await Q('.lib-start')));
   check('The empty upload screen is compact, not a tall empty modal', (await ui(() => __BL.S.ui.root.querySelector('.lib-sheet').getBoundingClientRect().height)) < 520, String(await ui(() => __BL.S.ui.root.querySelector('.lib-sheet').getBoundingClientRect().height)));
@@ -3969,7 +3969,7 @@ console.log('\n# Product lists without Shopify: upload, drag and drop, import ch
   const imp = LibNode.importCsv('SKU,Name,Price\nL1,Legacy One,$5.00\n', { fileName: 'legacy.csv', sha256: 'legacy' });
   const seed = { 'blueline:lib:index': { v: 1, libs: [{ store: ORIG, campaign: 'legacy-list', name: 'Legacy list', updatedAt: 1 }], active: { [ORIG]: { store: ORIG, campaign: 'legacy-list' } } }, [`blueline:lib:smp:${ORIG}|legacy-list`]: { v: 1, imports: [imp] }, [`blueline:lib:work:${ORIG}|legacy-list`]: { v: 1, shopify: {}, decisions: {}, manualProducts: {}, settings: { currency: 'USD', currencySource: 'assumed' }, updatedAt: null } };
   const old = await open('toolbox.html', { http: true, realStorage: true, seed });
-  await old.evaluate(() => { __BL.S.ui.root.querySelector('[data-d="aids"]').open = true; __BL.S.ui.root.querySelector('[data-x="library"]').click(); });
+  await old.evaluate(() => { __BL.S.ui.root.querySelector('[data-d="aids"]').open = true; __BL.libraryUi.open(); });
   await sleep(500);
   check('A list saved before this change loads with its name, store and products', (await old.evaluate(() => __BL.S.ui.root.querySelectorAll('.lib-row').length)) === 1 && (await libName(old)) === 'Legacy list' && (await old.evaluate(() => __BL.S.ui.root.querySelector('[data-lib="store"]').value)) === ORIG);
   check('No page errors (old list)', old.errors.length === 0, old.errors.join(' | '));
@@ -4025,7 +4025,7 @@ console.log('\n# List Manager: identifiable lists, stable order, rename, duplica
   const B = 'SKU,Name,Price\nB1,Gamma,$3.00\n';
   const rename = (name) => libRename(page, name);
 
-  await ui(() => { __BL.S.ui.root.querySelector('[data-d="aids"]').open = true; __BL.S.ui.root.querySelector('[data-x="library"]').click(); });
+  await ui(() => { __BL.S.ui.root.querySelector('[data-d="aids"]').open = true; __BL.libraryUi.open(); });
   await sleep(250);
   await file('A.csv', A); await sleep(250); await rename('Weekly');
   const id1 = await listId();
@@ -4118,7 +4118,7 @@ console.log('\n# Product Library refinement: compact cards, Details, Change Vari
   csv += 'ACM100101,Acme Black Seed Oil,$19.97,\nACM999001,Acme Fish Oil Softgels,$30.97,\nACM200101,Acme Charcoal,$15.97,\nACM400101,Acme ZMA Capsules,$27.97,\n';
   for (let i = 25; i <= 37; i++) csv += `FILL${String(i).padStart(3, '0')},Filler Product ${i},$${10 + i}.00,\n`;
 
-  await ui(() => { __BL.S.ui.root.querySelector('[data-d="aids"]').open = true; __BL.S.ui.root.querySelector('[data-x="library"]').click(); });
+  await ui(() => { __BL.S.ui.root.querySelector('[data-d="aids"]').open = true; __BL.libraryUi.open(); });
   await sleep(250);
   // Header
   const hd = await ui(() => { const r = __BL.S.ui.root; const name = r.querySelector('.lib-lsel').getBoundingClientRect(); const link = r.querySelector('[data-x="lib-lists"]'); const lr = link.getBoundingClientRect(); const st = r.querySelector('[data-x="lib-open"]'); return { link: link.textContent.trim(), linkTag: link.className, below: lr.top >= name.bottom - 1, noDropdown: true, set: st.textContent.trim(), cfg: r.querySelector('.lib-cfg').innerText, storePlaceholder: r.querySelector('[data-lib="store"]').placeholder }; });
@@ -4315,7 +4315,7 @@ console.log('\n# Product Library QA fixes: Manage Lists view, pencil rename, Sho
   const vis = (sel) => ui((sel) => { const e = __BL.S.ui.root.querySelector(sel); return !!e && e.getClientRects().length > 0; }, sel);
   const accents = () => ui(() => [...__BL.S.ui.root.querySelectorAll('.lib-sheet *')].filter((e) => !e.closest('.lib-row') && !e.closest('.lib-cmp') && /(^| )[1-9]\d*px 0px 0px 0px inset/.test(getComputedStyle(e).boxShadow)).map((e) => e.className || e.tagName));
 
-  await ui(() => { __BL.S.ui.root.querySelector('[data-d="aids"]').open = true; __BL.S.ui.root.querySelector('[data-x="library"]').click(); });
+  await ui(() => { __BL.S.ui.root.querySelector('[data-d="aids"]').open = true; __BL.libraryUi.open(); });
   await sleep(250);
   // Shopify Store: a plain form group
   const sb = await ui(() => { const r = __BL.S.ui.root; const b = r.querySelector('.lib-storebox'); const cs = getComputedStyle(b); const sh = r.querySelector('.lib-sheet').getBoundingClientRect(); const br = b.getBoundingClientRect(); return { shadow: cs.boxShadow, bl: cs.borderLeftWidth, bg: cs.backgroundColor, left: br.left - sh.left, right: sh.right - br.right, text: b.innerText, btn: !!b.querySelector('[data-x="lib-open"]'), field: !!b.querySelector('[data-lib="store"], [data-lib="storesel"]') }; });
@@ -5208,19 +5208,19 @@ console.log('\n# Product Mapping UX: one save action, accurate markers, Product 
   const NAME1 = '#rail-feat > article:nth-child(1) .nm';
   const NAME2 = '#rail-feat > article:nth-child(2) .nm';
   const libRaw = () => A.evaluate(() => chrome.storage.local.get().then((r) => JSON.stringify(Object.fromEntries(Object.entries(r).filter(([k]) => /^blueline:lib:(smp|work):/.test(k)).sort()))));
-  const homeBtn = () => A.evaluate(() => { const r = __BL.S.ui.root; const b = r.querySelector('[data-x="lib-home"]'); const add = r.querySelector('.addnote'); const a = add.getBoundingClientRect(); const c = b.getBoundingClientRect(); return { hidden: b.hidden, shown: c.height > 0, text: b.textContent.trim(), under: add.nextElementSibling === b && c.top >= a.bottom - 1, addBg: getComputedStyle(add).backgroundColor, bg: getComputedStyle(b).backgroundColor, color: getComputedStyle(b).color, full: Math.abs(c.width - add.getBoundingClientRect().width) < 3, importStill: !!r.querySelector('[data-x="library"]') }; });
+  const homeBtn = () => A.evaluate(() => { const r = __BL.S.ui.root; const sec = r.querySelector('[data-d="products"]'); sec.open = true; const b = r.querySelector('[data-x="lib-home"]'); const add = r.querySelector('.addnote'); const a = add.getBoundingClientRect(); const c = b.getBoundingClientRect(); return { hidden: b.hidden, shown: c.height > 0, text: b.querySelector('b').textContent.trim(), under: add.nextElementSibling === sec && sec.contains(b) && c.top >= a.bottom - 1, full: c.width > add.getBoundingClientRect().width * 0.8, importStill: !!r.querySelector('[data-x="library"]') }; });
   const reboot = async () => { await A.evaluate(() => __BLUELINE_TEST__.api.setActive(false)); await sleep(500); await A.evaluate(() => __BLUELINE_TEST__.api.setActive(true)); await sleep(700); };
 
   // ---- Product Library button: hidden with no list, shown with one, opens the list manager
   let hb = await homeBtn();
-  check('No saved list: the Product Library button is hidden; Import Product List is still the way to import', hb.hidden && !hb.shown && hb.importStill, JSON.stringify(hb));
+  check('No saved list: Product Library is still available in Products, and More tools has no import entry', !hb.hidden && hb.shown && !hb.importStill, JSON.stringify(hb));
   await A.evaluate((l) => BluelineLibrary.saveLibrary(chrome.storage.local, l, { smpChanged: true }), lib);
   await reboot();
   hb = await homeBtn();
-  check('With a saved list the Product Library button appears directly under + Add note as a full-width GREEN button with white text', !hb.hidden && hb.shown && hb.text === 'Product Library' && hb.under && hb.bg === 'rgb(30, 122, 62)' && hb.color === 'rgb(255, 255, 255)' && hb.full, JSON.stringify(hb));
+  check('With a saved list Product Library sits in the Products section directly under + Add note, full width', !hb.hidden && hb.shown && hb.text === 'Product Library' && hb.under && hb.full, JSON.stringify(hb));
   await A.evaluate(() => __BL.S.ui.root.querySelector('[data-x="lib-home"]').click()); await sleep(800);
   const dims = await A.evaluate(() => { const r = __BL.S.ui.root; const g = (e) => { const c = getComputedStyle(e); const b = e.getBoundingClientRect(); return { w: Math.round(b.width), h: Math.round(b.height), pad: c.padding, fs: c.fontSize, fw: c.fontWeight, br: c.borderRadius, ta: c.textAlign, bg: c.backgroundColor }; }; return { add: g(r.querySelector('.addnote')), lib: g(r.querySelector('[data-x="lib-home"]')) }; });
-  check('+ Add note and Product Library have identical width, height, padding, font size and weight, radius and alignment; only the colour differs (blue / green)', ['w', 'h', 'pad', 'fs', 'fw', 'br', 'ta'].every((k) => dims.add[k] === dims.lib[k]) && dims.add.bg === 'rgb(43, 78, 255)' && dims.lib.bg === 'rgb(30, 122, 62)', JSON.stringify(dims));
+  check('+ Add note and Product Library have the same width and alignment; Add note stays the blue primary and Product Library is the sky-blue secondary (Slice A: two-line button inside Products)', dims.add.w === dims.lib.w && dims.add.ta === dims.lib.ta && dims.add.bg === 'rgb(43, 78, 255)' && dims.lib.bg === 'rgb(216, 238, 255)', JSON.stringify(dims));
   const lv = () => A.evaluate(() => { const r = __BL.S.ui.root; const sel = r.querySelector('[data-lib="listsel"]'); return { open: !r.querySelector('[data-m="library"]').hidden, mgr: !r.querySelector('.lib-mgr').hidden, rows: r.querySelectorAll('.lib-list .lib-row').length, listId: __BL.libraryUi.L.listId, sel: sel.options[sel.selectedIndex]?.textContent, opts: [...sel.options].map((o) => o.textContent), label: r.querySelector('.lib-lsel').textContent.trim().slice(0, 5), manage: !!r.querySelector('[data-x="lib-lists"]')?.getClientRects().length, pencil: !!r.querySelector('[data-x="lib-name-edit"]'), head: r.querySelector('.lib-head').textContent.trim() }; });
   const lv1 = await lv();
   check('Clicking Product Library opens the products directly (no Manage Lists step), headed "List: [selected list]", with Manage lists below and no rename pencil', lv1.open && !lv1.mgr && lv1.rows >= 1 && lv1.label === 'List:' && /UX list/.test(lv1.sel) && lv1.manage && !lv1.pencil && lv1.head === 'Product Library', JSON.stringify(lv1));
@@ -6758,9 +6758,9 @@ console.log('\n# Workspace: Define Product Card, Find Similar Cards, independenc
     };
   });
   const homeInfo = (P) => P.evaluate(() => {
-    const r = __BL.S.ui.root; const rb = (e) => e.getBoundingClientRect();
+    const r = __BL.S.ui.root; const rb = (e) => e.getBoundingClientRect(); const sec0 = r.querySelector('[data-d="products"]'); if (sec0) sec0.open = true;
     const a = r.querySelector('[data-x="assign-home"]'); const l = r.querySelector('[data-x="lib-home"]'); const add = r.querySelector('.addnote'); const fresh = r.querySelector('[data-x="start-fresh"]'); const rs = r.querySelector('[data-x="restore-session"]');
-    return { assignHidden: a.hidden, assignShown: rb(a).height > 0, assignText: a.textContent.trim(), sameSize: rb(a).height > 0 && Math.abs(rb(a).height - rb(l).height) < 1 && Math.abs(rb(a).width - rb(l).width) < 1, count: r.querySelector('.count')?.textContent || '', addBelow: rb(a).top > rb(add).bottom - 1,
+    return { assignHidden: a.hidden, assignShown: rb(a).height > 0, assignText: a.querySelector('b')?.textContent.trim() || a.textContent.trim(), sameSize: rb(a).height > 0 && Math.abs(rb(a).height - rb(l).height) < 1 && Math.abs(rb(a).width - rb(l).width) < 1, count: r.querySelector('.count')?.textContent || '', addBelow: rb(a).top > rb(add).bottom - 1,
       fresh: !!fresh && rb(fresh).height > 0, freshText: fresh?.textContent.trim(), freshApart: !!fresh && rb(fresh).top > rb(a).bottom + 40, freshClass: fresh?.className || '', restoreVisible: !!rs && !rs.hidden && rb(rs).height > 0, restoreText: rs?.textContent.trim(), restoreSub: r.querySelector('.ws-restore-sub')?.textContent || '' };
   });
   const colored = (P) => P.evaluate(() => ({ ls: getComputedStyle(document.querySelector('#h-feat')).letterSpacing, pmk: __BL.S.ui.root.querySelectorAll('.x-pmbox .pmk').length }));
@@ -6771,7 +6771,7 @@ console.log('\n# Workspace: Define Product Card, Find Similar Cards, independenc
   const PATH = await A.evaluate(() => __BL.currentPath());
   const lib = mkLib(ORIGIN);
   let hi = await homeInfo(A);
-  check('Home: with no usable Product Library list the Assign Products action is not shown (the import workflow stays available)', hi.assignHidden && !hi.assignShown && await A.evaluate(() => !!__BL.S.ui.root.querySelector('[data-x="library"]')), JSON.stringify(hi));
+  check('Home: with no usable Product Library list Assign Products is still available in Products (its workspace offers the import), and More tools has no import', !hi.assignHidden && hi.assignShown && await A.evaluate(() => !__BL.S.ui.root.querySelector('[data-x="library"]')), JSON.stringify(hi));
   await A.evaluate((l) => BluelineLibrary.saveLibrary(chrome.storage.local, l, { smpChanged: true }), lib);
   await reboot(A);
   hi = await homeInfo(A);
@@ -7073,17 +7073,18 @@ console.log('\n# Final adjustments: Home Define Product Card (no Library list), 
   const FIX_BEFORE = { cg: sha('card-groups.html'), pf: sha('product-fields.html') };
   const CSVW = 'Section,SKU,Product Name,Original Price,Sale Price\nFeatured,ACM400101,Acme ZMA Capsules,$27.97,$19.99\n';
   const mkLib = (origin) => { const v = LibNode.normalizeProduct(PRODUCTS.find((p) => p.handle === 'zma'), origin, 'USD').variants[0]; let l = { store: origin, campaign: 'l-final', name: 'Final list', smp: { v: 1, imports: [LibNode.importCsv(CSVW, { fileName: 'f.csv', sha256: 'f1' })] }, work: LibNode.emptyWork() }; l = LibNode.decide(LibNode.chooseVariant(l, 'sku:ACM400101', v), 'sku:ACM400101', 'smp'); return l; };
-  const home = (P) => P.evaluate(() => { const r = __BL.S.ui.root; const d = r.querySelector('[data-x="define-home"]'); const a = r.querySelector('[data-x="assign-home"]'); const l = r.querySelector('[data-x="lib-home"]'); const add = r.querySelector('.addnote'); const rb = (e) => e.getBoundingClientRect(); return { def: d?.textContent.trim(), defShown: !!d && rb(d).height > 0 && !d.hidden, defOn: !!d && !d.disabled, assignHidden: a.hidden, libHidden: l.hidden, count: r.querySelector('.count')?.textContent || '', restore: !r.querySelector('[data-x="restore-session"]').hidden, sameSize: !!d && Math.abs(rb(d).width - rb(add).width) < 3, order: [...r.querySelectorAll('.body > [data-x]')].map((b) => b.dataset.x).filter((x) => /add-note|lib-home|assign-home|define-home/.test(x)) }; });
+  const home = (P) => P.evaluate(() => { const r = __BL.S.ui.root; const sec0 = r.querySelector('[data-d="products"]'); if (sec0) sec0.open = true; const d = r.querySelector('[data-x="define-home"]'); const a = r.querySelector('[data-x="assign-home"]'); const l = r.querySelector('[data-x="lib-home"]'); const add = r.querySelector('.addnote'); const rb = (e) => e.getBoundingClientRect(); return { def: d?.textContent.trim(), defShown: !!d && rb(d).height > 0 && !d.hidden, defOn: !!d && !d.disabled, assignHidden: a.hidden, libHidden: l.hidden, count: r.querySelector('.count')?.textContent || '', restore: !r.querySelector('[data-x="restore-session"]').hidden, sameSize: !!d && Math.abs(rb(d).width - rb(add).width) < 3, order: [...r.querySelectorAll('.body > [data-x]')].map((b) => b.dataset.x).filter((x) => /add-note|lib-home|assign-home|define-home/.test(x)) }; });
 
   // ---- Task 1: Define Product Card from Home, with no Product Library list at all
   let A = await open('card-groups.html', { http: true, realStorage: true });
   const ORIGIN = await A.evaluate(() => location.origin);
   const PATH = await A.evaluate(() => __BL.currentPath());
   let h = await home(A);
-  check('Home has a main "Define Product Card" action with no Product Library list at all (Product Library and Assign Products stay separate actions, hidden until a list exists)', h.def === 'Define Product Card' && h.defShown && h.defOn && h.assignHidden && h.libHidden, JSON.stringify(h));
-  await xClick(A, 'define-home', 500);
+  check('Home has no separate Define Product Card action; Product Library and Assign Products are both available in Products with no list at all', h.def === undefined && !h.defShown && !h.assignHidden && !h.libHidden, JSON.stringify(h));
+  await xClick(A, 'assign-home', 900);
+  await xClick(A, 'lib-bk-define', 500);
   const m1 = await A.evaluate(() => { const m = __BL.S.ui.root.querySelector('.x-mini'); return m && !m.hidden ? m.textContent.replace(/\s+/g, ' ') : null; });
-  check('Home → Define Product Card starts the existing page picker (the same note-independent flow)', /Define Product Card/.test(m1 || '') && /Click any part of the product card/.test(m1 || ''), m1);
+  check('Assign Products → Define Product Card starts the existing page picker (the same note-independent flow)', /Define Product Card/.test(m1 || '') && /Click any part of the product card/.test(m1 || ''), m1);
   await clickAt(A, `${FEAT(1)} .nm`);
   const adj = await A.evaluate(() => [...__BL.S.ui.root.querySelectorAll('.x-mini [data-x="mini-act"]')].map((b) => b.textContent.trim()));
   check('The whole card is proposed with Parent, Child and Confirm Card to expand or narrow the boundary', adj.join() === 'Parent ▲,Child ▼,Confirm Card', JSON.stringify(adj));
@@ -7199,7 +7200,7 @@ console.log('\n# Final adjustments: Home Define Product Card (no Library list), 
   all = await allOf(P);
   check('With "Also delete all Product Library lists and imported data": every list, imported record, approval and last-used reference is gone, the settings stay', !BL_KEYS(all).some((k) => k.startsWith('blueline:lib:')) && JSON.stringify(all['blueline:prefs']) === JSON.stringify(PREFS) && !all['blueline:batch'], JSON.stringify(BL_KEYS(all)));
   hh = await home(P);
-  check('Home then shows no Product Library and no Assign Products (no lists remain), but Define Product Card stays', hh.libHidden && hh.assignHidden && hh.defShown, JSON.stringify(hh));
+  check('Home still offers Product Library and Assign Products after the lists are gone (no separate Define Product Card)', !hh.libHidden && !hh.assignHidden && !hh.defShown, JSON.stringify(hh));
   await P.close();
 
   // global reset with the settings option only
@@ -7217,7 +7218,7 @@ console.log('\n# Final adjustments: Home Define Product Card (no Library list), 
   const rem2 = await P.evaluate(() => ({ removed: window.__removed, cleared: window.__cleared }));
   check('With both options, no Blueline key is left at all, and the unrelated keys are untouched', BL_KEYS(all).length === 0 && all.notblueline === 'keep me' && all['other-extension:data'].keep === 1 && rem2.removed.every((k) => k.startsWith('blueline:')) && !rem2.cleared, JSON.stringify(BL_KEYS(all)));
   hh = await home(P);
-  check('Home is a clean installation: no notes, nothing to restore, no Product Library or Assign Products, Define Product Card and Import Product List available', hh.count === '' && !hh.restore && hh.libHidden && hh.assignHidden && hh.defShown && await P.evaluate(() => !!__BL.S.ui.root.querySelector('[data-x="library"]')), JSON.stringify(hh));
+  check('Home is a clean installation: no notes, nothing to restore, Products still offers Product Library and Assign Products, and More tools has no import entry', hh.count === '' && !hh.restore && !hh.libHidden && !hh.assignHidden && !hh.defShown && await P.evaluate(() => !__BL.S.ui.root.querySelector('[data-x="library"]')), JSON.stringify(hh));
   const R2 = await open('card-groups.html', { http: true, realStorage: true, seed: all });
   await sleep(900); await R2.evaluate(() => __BL.render()); await sleep(600);
   const fr = await R2.evaluate(async () => ({ keys: Object.keys(await chrome.storage.local.get()).filter((k) => k.startsWith('blueline:')), side: __BL.S.prefs.side, collapsed: __BL.S.prefs.collapsed, notes: (__BL.S.batch?.items || []).length }));
