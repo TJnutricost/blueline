@@ -30,6 +30,9 @@
   const S = {
     active: false,
     exportCart: false, // 'Include Add to Cart implementation' in the export window; off until ticked, never saved
+    // Additional instructions typed in the export window, appended to the report on copy/save. Memory only: never
+    // written to storage and never read back into notes, assignments or mappings.
+    extra: '',
     picking: false,
     page: {},
     batch: null,
@@ -1320,6 +1323,10 @@
     .out { flex: 1; min-height: 360px; margin: 0 16px; border: 1px solid #D9DCE4; border-radius: 8px; padding: 10px;
       font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #1E2230; background: #FAFBFC; resize: none; }
     .sheet-foot { display: flex; align-items: center; gap: 8px; padding: 12px 16px; }
+    .extra-wrap { display: block; margin: 8px 16px 0; font-size: 12px; color: #4A5063; }
+    .extra-wrap b { font-weight: 600; }
+    .extra { display: block; width: 100%; box-sizing: border-box; margin-top: 3px; height: 54px; min-height: 40px; border: 1px solid #D9DCE4; border-radius: 8px; padding: 6px 10px;
+      font: 12px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1E2230; resize: vertical; }
     .status { flex: 1; color: #6B7183; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #1E2230; color: #fff;
@@ -1376,7 +1383,9 @@
         <header class="sheet-head"><h2>Webpage change request</h2><button class="icon" data-act="modal-close" aria-label="Close">✕</button></header>
         <div class="opt"><button class="primary" data-act="export-shots">Export Screenshots</button><span class="shots-note"></span></div>
         <label class="opt cart-opt" title="Off by default. When on, the report asks the coding AI to implement working Add to Cart for the mapped products."><input type="checkbox" class="opt-cart"> Include Add to Cart implementation</label>
-        <textarea class="out" readonly spellcheck="false"></textarea>
+        <textarea class="out" readonly spellcheck="false" aria-label="Change report"></textarea>
+        <label class="extra-wrap"><b>Additional instructions</b> (added to the end of the report when you copy or save)
+          <textarea class="extra" spellcheck="true" placeholder="Anything else the coding AI should do, e.g. “Keep the existing mobile layout” or “Don’t touch checkout.”"></textarea></label>
         <footer class="sheet-foot">
           <span class="status"></span>
           <button class="ghost" data-act="save-md">Save as .md</button>
@@ -1448,10 +1457,14 @@
     });
 
     root.addEventListener('change', (e) => {
-      if (e.target.classList.contains('opt-cart')) { S.exportCart = e.target.checked; S.ui.$('.out').value = buildPrompt(S.batch); return; }
+      if (e.target.classList.contains('opt-cart')) { S.exportCart = e.target.checked; syncReport(); return; }
       if (e.target.classList.contains('pop-broken')) {
         setPopType(e.target.checked ? 'bug' : S.popBase);
       }
+    });
+
+    root.addEventListener('input', (e) => {
+      if (e.target.classList?.contains('extra')) S.extra = e.target.value;
     });
 
     root.addEventListener('keydown', (e) => {
@@ -1913,6 +1926,8 @@
     const keys = notesOf().flatMap((i) => [shotKey(i.id), shotKey(i.id) + ':markup']);
     if (keys.length) chrome.storage.local.remove(keys);
     if (BL.hooks.onClear) BL.hooks.onClear();
+    S.extra = '';
+    if (S.ui) syncExtra();
     // Notes go; product cards and assignments stay (as card records).
     const kept = (S.batch?.items || []).map((it) => (isNote(it) ? lib()?.toCardRecord?.(it) : it)).filter(Boolean);
     if (kept.length && S.batch) S.batch = { ...S.batch, items: kept, guides: [], priceReport: undefined }; else S.batch = null;
@@ -1930,6 +1945,8 @@
     await refreshExport();
     S.ui.$('[data-act="copy"]').focus();
   }
+
+  BL.refreshExport = () => refreshExport();
 
   function closeModal() {
     if (S.ui) S.ui.$('.modal').hidden = true;
@@ -1965,8 +1982,22 @@
           : `${plural(jobs.length, 'screenshot')} not exported. The report doesn’t list them until you press Export Screenshots.`;
     const cartBox = $('.opt-cart');
     if (cartBox) cartBox.checked = !!S.exportCart;
-    $('.out').value = buildPrompt(S.batch);
+    syncReport();
+    syncExtra();
   }
+
+  // The generated report always follows the notes, mappings and options.
+  function syncReport() { S.ui.$('.out').value = buildPrompt(S.batch); }
+
+  // What Copy and Save use: the report as shown, plus the Additional instructions under their own heading (only when
+  // there are some). The instructions live outside the report text, so they are added once, here, and nowhere else.
+  function reportText() {
+    const body = S.ui.$('.out').value;
+    const extra = (S.extra || '').trim();
+    return extra ? `${body.replace(/\s+$/, '')}\n\n## Additional instructions\n\n${extra}\n` : body;
+  }
+
+  function syncExtra() { const ex = S.ui.$('.extra'); if (ex && ex.value !== S.extra) ex.value = S.extra; }
 
   // Explicit: downloads the screenshots not exported yet (using the capture saved with each note) and then adds their
   // paths to the report. Nothing is claimed as exported unless the download reports a path.
@@ -1993,12 +2024,16 @@
 
   async function copyOut() {
     const ta = S.ui.$('.out');
+    const text = reportText();
     try {
-      await navigator.clipboard.writeText(ta.value);
+      await navigator.clipboard.writeText(text);
     } catch {
+      const keep = ta.value;
+      ta.value = text;
       ta.focus();
       ta.select();
       document.execCommand('copy');
+      ta.value = keep;
     }
     const cb = S.ui.$('[data-act="copy"]');
     if (cb) {
@@ -2014,10 +2049,10 @@
   }
 
   async function saveMd() {
-    const text = S.ui.$('.out').value;
+    const text = reportText();
     const res = await send({
       type: 'blueline:download',
-      folder: `blueline/${S.batch.id}`,
+      folder: '', // one standalone file: no blueline/ or timestamp folder
       files: [{ id: 'prompt', name: 'blueline-change-report.md', dataUrl: 'data:text/markdown;charset=utf-8,' + encodeURIComponent(text) }],
     });
     const path = res?.paths?.[0]?.path;
