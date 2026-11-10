@@ -1432,22 +1432,57 @@
     return L;
   }
   // Always present when the report holds product mappings. Off by default.
-  function cartLines({ on = false, hasVariants = true } = {}) {
+  // C1: `mode` is the cart integration chosen for the destination in the Change Report ('auto' | 'theme' | 'custom');
+  // `name` and `notes` are optional free text for it. 'auto' keeps the original platform-neutral wording, so nothing
+  // is assumed about the destination. `shopify` (the destination was chosen as Shopify) only adds Shopify routing advice.
+  function cartLines({ on = false, hasVariants = true, mode = 'auto', name = '', notes = '', shopify = false, detected = '', dest = '' } = {}) {
     if (!on) return ['', '## Add to Cart', '- Not requested. Don’t add or change cart, checkout or purchase behavior. Variant ids are reference data, or for a cart control a card already has. Prices shown on cards are display values and don’t change what checkout charges.'];
-    return [
+    const tick = (x) => '`' + String(x).replace(/`/g, "'") + '`';
+    const nm = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    const nt = String(notes || '').replace(/\s+/g, ' ').trim().slice(0, 600);
+    const theme = mode === 'theme';
+    const custom = mode === 'custom';
+    // dest: 'shopify' (selected in Blueline), 'detected' (Auto, Shopify found on the inspected page, unconfirmed), 'other', or unknown.
+    const D = dest || (shopify === true ? 'shopify' : 'unknown');
+    const routesCore = 'build Ajax routes from `window.Shopify.routes.root` (for example `window.Shopify.routes.root + \'cart/add.js\'`) rather than a hard-coded `/cart/add.js`, so locale and market prefixes keep working, and after a successful add reuse the destination’s existing cart refresh (its cart drawer or cart component re-render, its cart-update event, or the app’s own refresh/open method) instead of reloading the page or building a second cart UI.';
+    // Shopify routing is unconditional only for a destination selected as Shopify; otherwise it is conditional or absent, so it never conflicts with another integration.
+    const cap = (x) => x.charAt(0).toUpperCase() + x.slice(1);
+    const routesFor = (kind) => (D === 'other' ? '' : D === 'shopify' && kind !== 'custom' ? ' ' + cap(routesCore)
+      : kind === 'custom' ? ' Only if that integration itself uses Shopify Ajax routes (check its code or docs): ' + routesCore
+        : ' If the destination is confirmed to be a Shopify theme: ' + routesCore);
+    const step1 = theme
+      ? '  1. Inspect the destination’s existing theme cart (cart form, drawer or cart component, counter, refresh logic) and use it. Don’t assume an app cart, and don’t add a parallel cart.'
+      : custom
+        ? `  1. Inspect how the destination’s ${nm ? '**' + nm + '**' : 'app or custom'} cart integration is installed and what API, events or methods it exposes, and use those. Don’t assume a different app or the theme’s own cart.`
+        : D === 'shopify' ? '  1. Inspect the destination Shopify theme’s existing cart architecture (cart form, drawer, counter, API calls) and build on it.'
+          : D === 'detected' ? '  1. Inspect the target project and its existing cart architecture (cart form, drawer, counter, API calls). Shopify was detected on the inspected page, so expect a Shopify theme, but confirm that against the destination project before relying on it.'
+            : '  1. Inspect the target project, identify its ecommerce platform and existing cart architecture (cart form, drawer, counter, API calls). Don’t assume Shopify.';
+    const L = [
       '', '## Add to Cart implementation (requested)',
-      '- Implement working Add to Cart for the mapped products below that have an exact variant id. Blueline doesn’t assume a platform; the target project decides how.',
+      '- Implement working Add to Cart for the mapped products below that have an exact variant id. ' + (D === 'detected' ? 'Blueline detected Shopify on the inspected page, but the target project decides how; verify the destination platform first.' : D === 'shopify' ? 'The destination was selected as Shopify in Blueline; the target project still decides how.' : 'Blueline doesn’t assume a platform; the target project decides how.'),
+    ];
+    if (theme) L.push('- **Cart integration (selected in Blueline):** the destination’s existing theme cart.');
+    if (custom) L.push(`- **Cart integration (selected in Blueline):** app or custom integration${nm ? ' ' + tick(nm) : ' (name not given; identify it in the project)'}.`);
+    const det = String(detected || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    if (mode === 'auto' && det) L.push(`- Source-detected cart integration: ${tick(det)} (a marker on the inspected page, not confirmed for the destination). Verify the destination project actually uses it before wiring to it; if it doesn’t, use the destination’s own cart.`);
+    if (nt) L.push(`- Cart instructions from the requester: ${nt}`);
+    L.push(
       '- A card’s call-to-action that Blueline lists as its Add to Cart control (for example a “SHOP DEAL” button) is the control to wire, even if it is currently a plain link; don’t also turn it into a product-page link. Product URLs are separate mapping data. Cards with no such control are normal: say so, and if one needs a control leave its placement and design to the developer and designer.',
-      '  1. Inspect the target project, identify its ecommerce platform and existing cart architecture (cart form, drawer, counter, API calls). Don’t assume Shopify.',
+      step1,
       '  2. Implement behavior compatible with it and preserve existing cart drawers, counters and interactions.',
       '  3. Handle loading, error and unavailable or sold-out variant states.',
       '  4. Use only the exact product and variant ids in each mapping (variant ids are strings; keep them exact). Never invent or guess a missing id.',
       '  5. Never silently change checkout or product prices. The sale prices here are display values from the list; they don’t establish what Shopify or any checkout charges. If the live price differs, report it instead of overriding it.',
       '  6. If the target can’t support working cart operations without more integration (a standalone HTML page, an unknown platform, no backend), don’t fake it: implement what is possible and report the blockers.',
-      '- **Shopify theme targets:** use the theme’s own cart mechanism, such as the Ajax Cart API (`POST /cart/add.js` with `{ id: <variant id>, quantity: 1 }`) or the theme’s cart component and section refresh, with the exact variant id from the mapping. A standalone or third-party page can’t call a store’s same-origin Ajax Cart API, and a Shopify product source doesn’t mean the destination uses Shopify checkout.',
-      '- **Other targets:** inspect their actual cart implementation; don’t fabricate a generic cart API.',
-      ...(hasVariants ? [] : ['- No mapped product in this report has a recorded variant id, so there is nothing to wire; report that as a blocker.']),
-    ];
+    );
+    if (custom) {
+      L.push('- **App or custom integration:** call that integration’s own add-to-cart and refresh mechanism with the exact variant id. Don’t bypass it with a direct cart API call unless its documentation or the project’s code does the same.' + routesFor('custom'));
+    } else if (D !== 'other') {
+      L.push('- **Shopify theme targets' + (D === 'detected' ? ' (Shopify was detected on the inspected page; verify the destination is a Shopify theme first)' : '') + ':** use the theme’s own cart mechanism, such as the Ajax Cart API (`POST /cart/add.js` with `{ id: <variant id>, quantity: 1 }`) or the theme’s cart component and section refresh, with the exact variant id from the mapping. A standalone or third-party page can’t call a store’s same-origin Ajax Cart API, and a Shopify product source doesn’t mean the destination uses Shopify checkout.' + (D !== 'unknown' || theme ? routesFor('theme') : ''));
+    }
+    if (!custom) L.push('- **Other targets:** inspect their actual cart implementation; don’t fabricate a generic cart API.');
+    if (!hasVariants) L.push('- No mapped product in this report has a recorded variant id, so there is nothing to wire; report that as a blocker.');
+    return L;
   }
 
   // ------------------------------------------------------------------ list names (unique, case-insensitive)
