@@ -11,7 +11,7 @@ npm test
 
 No `npm install` step is needed. The suite has no npm dependencies: it drives your installed Chrome through a small DevTools-protocol client (`cdp.mjs`) built on Node's built-in WebSocket.
 
-`npm test` runs the Product Library unit tests (`library.test.mjs`), the Product Mapping unit tests (`mapping.test.mjs`) and then the browser tests; it exits non-zero if any check fails. `npm run test:library` runs only the unit tests. To test another copy of the extension, for example `main` checked out elsewhere, run `node run.mjs <extension-dir>`.
+`npm test` runs the Product Library unit tests (`library.test.mjs`), the importer tests (`importer.test.mjs`: Current Price and DOCX records), the Product Mapping unit tests (`mapping.test.mjs`), the card-discovery browser tests (`cards-discovery.test.mjs`, fixture `card-families.html`) and then the browser tests; it exits non-zero if any check fails. `npm run test:library` runs only the unit tests. To test another copy of the extension, for example `main` checked out elsewhere, run `node run.mjs <extension-dir>`.
 
 ## Requirements
 
