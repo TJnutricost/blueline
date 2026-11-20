@@ -149,9 +149,10 @@
       if (c === null && (text !== undefined || cents !== undefined)) warnings.push(`${where}: couldn\u2019t read the ${label} price "${text ?? cents}".`);
       return c;
     };
-    const ocRaw = pick(o, ['original price cents', 'original cents']);
+    const ocRaw = pick(o, ['original price cents', 'original cents', 'current price cents', 'current cents']);
     const scRaw = pick(o, ['sale price cents', 'sale cents', 'discount price cents']);
-    const origText = pick(o, ['original price', 'original', 'regular price', 'price', 'compare at price', 'list price', 'msrp']);
+    // "Current Price" is the SMP's regular/reference price (same field as "Original Price"); "Discount Price" is the promo.
+    const origText = pick(o, ['original price', 'original', 'current price', 'current', 'regular price', 'price', 'compare at price', 'list price', 'msrp']);
     const saleText = pick(o, ['sale price', 'discount price', 'discounted price', 'promo price', 'promotional price', 'sale']);
     const section = pick(o, ['section', 'group', 'list', 'placement', 'category']);
     const list = pick(o, ['campaign list', 'theme']);
@@ -259,7 +260,7 @@
     return out.join('\n');
   }
 
-  const HEADING = /^(highlighted products?|best sellers?|product cta|featured products?|top picks?)\b/i;
+  const HEADING = /^(highlighted products?|best sellers?|product cta|featured products?|top picks?|bundles(?:\s+section)?)\b/i;
   const THEME_TAIL = /\(([^()]*\b(?:theme|driven)\b[^()]*)\)\s*$/i;
 
   // The "Black Friday SMP" layout: section headings ("Highlighted Products (Black Friday Theme)") followed by
@@ -282,19 +283,32 @@
       if (pcts.length === 1) campaign.meta.discountPercent = +pcts[0];
     }
     // Headings become markers; everything else is joined into one stream so a name on one line and its SKU on the
-    // next still belong together.
+    // next still belong together. Marketing descriptions ("Includes: ...", "Theme fit: ...") are not part of any
+    // product, so they are cut out before the stream is built. A heading's "(list)" may sit on the next line.
+    const PAREN_LINE = /^\(([^()]*)\)$/;
     const chunks = [{ group: null, text: [] }];
-    for (const l of lines) {
-      if (!/SKU\s*:/i.test(l) && (HEADING.test(l) || THEME_TAIL.test(l))) {
+    for (const line of lines) {
+      let l = line;
+      const dm = l.match(/\b(?:includes?|theme\s*fit)\s*:/i);
+      if (dm && !/SKU\s*:/i.test(l.slice(dm.index))) l = l.slice(0, dm.index).trim();
+      if (!l) continue;
+      const cur = chunks[chunks.length - 1];
+      const hasSku = /SKU\s*:/i.test(l);
+      if (!hasSku && cur.group && !cur.group.list && !cur.text.length && PAREN_LINE.test(l)) cur.group.list = l.match(PAREN_LINE)[1].trim() || null;
+      else if (!hasSku && (HEADING.test(l) || THEME_TAIL.test(l))) {
         const list = l.match(THEME_TAIL)?.[1].trim() || null;
         const base = l.replace(THEME_TAIL, '').trim();
         const count = base.match(/\((\d+)\s*products?\)/i)?.[1];
         const label = base.replace(/\(\s*\d+\s*products?\s*\)/gi, '').replace(/\s+/g, ' ').trim() || l;
         chunks.push({ group: { label, list, declaredCount: count ? +count : null }, text: [] });
-      } else chunks[chunks.length - 1].text.push(l);
+      } else cur.text.push(l);
     }
+    // Labels: Current / Regular / Original Price are the regular price; Discount / Sale Price is the promo. Any dash,
+    // colon or nothing may follow a label, and a value may be blank or a status such as OUT OF STOCK.
     const num = '([\\d,]+(?:\\.\\d+)?)';
-    const REC = new RegExp(`([\\s\\S]*?)SKU\\s*:\\s*([A-Za-z0-9][A-Za-z0-9_.\\-]*?)(?=Original|Discount|Sale|\\s|$)\\s*(?:Original\\s*Price\\s*[-–:]?\\s*\\$?\\s*${num})?\\s*(?:(?:Discount|Sale)(?:ed)?\\s*Price\\s*[-–:]?\\s*\\$?\\s*${num})?`, 'gi');
+    const dash = '[-\\u2010-\\u2015\\u2212:]?';
+    const REC = new RegExp(`([\\s\\S]*?)SKU\\s*:\\s*([A-Za-z0-9][A-Za-z0-9_.\\-]*?)(?=Original|Current|Regular|Discount|Sale|\\s|$)\\s*(?:(?:Original|Current|Regular)\\s*Price\\s*${dash}\\s*(?:\\$?\\s*${num})?)?\\s*(?:(?:Discount|Sale)(?:ed)?\\s*Price\\s*${dash}\\s*(?:\\$?\\s*${num}|(OUT\\s*OF\\s*STOCK|SOLD\\s*OUT))?)?`, 'gi');
+    const PRICE_FRAGMENT = new RegExp(`\\b(?:Original|Current|Regular|Discount|Discounted|Sale)\\s*Price\\s*${dash}\\s*(?:\\$?\\s*[\\d,]+(?:\\.\\d+)?|OUT\\s*OF\\s*STOCK)?`, 'gi');
     const warnings = [];
     const placements = [];
     for (const ch of chunks) {
@@ -303,10 +317,12 @@
       let m;
       while ((m = REC.exec(s)) && m[0]) {
         const raw = m[0].trim();
-        const p = { sku: m[2], name: cleanName(m[1]) || null, originalCents: m[3] ? toCents(m[3]) : null, saleCents: m[4] ? toCents(m[4]) : null, group: ch.group, raw: { name: m[1].trim(), sku: m[2], original: m[3] ? `$${m[3]}` : null, sale: m[4] ? `$${m[4]}` : null, text: raw } };
+        const nameText = m[1].replace(PRICE_FRAGMENT, ' ');
+        const status = m[5] ? m[5].replace(/\s+/g, ' ').toUpperCase() : null;
+        const p = { sku: m[2], name: cleanName(nameText) || null, originalCents: m[3] ? toCents(m[3]) : null, saleCents: m[4] ? toCents(m[4]) : null, group: ch.group, raw: { name: nameText.trim(), sku: m[2], original: m[3] ? `$${m[3]}` : null, sale: m[4] ? `$${m[4]}` : status, text: raw } };
         if (!p.name) warnings.push(`${p.sku}: no product name found.`);
         if (p.originalCents === null) warnings.push(`${p.sku}: no original price found.`);
-        if (p.saleCents === null) warnings.push(`${p.sku}: no discount price found.`);
+        if (p.saleCents === null) warnings.push(`${p.sku}: no discount price found${status ? ` (the document says ${status})` : ''}.`);
         placements.push(p);
       }
     }

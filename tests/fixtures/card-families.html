@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Card families fixture</title>
+<style>
+  body { margin: 0; font: 16px/1.4 system-ui, sans-serif; }
+  section { padding: 24px; }
+  .rail { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; }
+  .f-coral { background: #ffafa3; } .f-peach { background: #ffd2a8; } .f-sky { background: #a8d4ff; } .f-lav { background: #d6c8ff; }
+  article { display: flex; flex-direction: column; border-radius: 32px; padding: 16px; }
+  .media { position: relative; height: 330px; display: flex; align-items: flex-end; justify-content: center; }
+  .badge { position: absolute; top: 8px; right: 8px; width: 84px; height: 84px; border-radius: 50%; background: #a82300; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .badge span { font-size: 12px; }
+  .body { flex: 1; padding: 20px 10px 8px; display: flex; flex-direction: column; gap: 10px; }
+  .nm { font-weight: 700; font-size: 26px; }
+  .prices { display: flex; gap: 12px; align-items: baseline; } .prices .now { font-weight: 700; font-size: 24px; } .prices .was { text-decoration: line-through; }
+  .btn { display: inline-block; padding: 8px 16px; background: #13284a; color: #fff; text-decoration: none; }
+  ul.list { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; list-style: none; margin: 0; padding: 0; }
+  .tile { border: 1px solid #ccc; padding: 12px; } .tile h3 { margin: 8px 0; } .tile p { margin: 4px 0; font-weight: 700; }
+  .bundles { display: flex; gap: 16px; } .bundle { flex: 1; border: 2px dashed #888; padding: 14px; }
+  .hero { padding: 60px; background: #eef; } nav ul { display: flex; gap: 16px; list-style: none; margin: 0; padding: 12px; }
+  footer { padding: 24px; background: #222; color: #fff; } .gift { display: inline-block; margin-right: 12px; padding: 10px; border: 1px solid #fff; }
+  .ph { display: block; height: 120px; background: #eee; }
+</style>
+</head>
+<body>
+<nav aria-label="Main"><ul><li><a href="#featured">Featured</a></li><li><a href="#best">Best Sellers</a></li><li><a href="#bundles">Bundles</a></li></ul></nav>
+<div class="hero" id="hero"><h1>Start the year off right</h1><p>Save 30% on the collection</p><a class="btn" href="#featured">Shop now</a></div>
+
+<!-- 1. Three cards in one section told apart only by their colour class. Each holds repeated badges, price spans and wrappers. -->
+<section id="featured" aria-labelledby="feat-h">
+  <h2 id="feat-h">Featured Deals</h2>
+  <div class="rail" id="rail-feat">
+    <article class="f-coral" id="fc1">
+      <div class="media"><span class="ph">[Product shot]</span><div class="badge"><span>SAVE</span><span>30%</span></div></div>
+      <div class="body"><div class="nm">Acme Electrolytes, Strawberry Lemonade</div><div class="prices"><span class="now">$13.98</span><span class="was">$19.97</span></div><a class="btn" href="/products/electrolytes">Shop Deal</a><div class="opt"><select aria-label="Variant"><option>60 servings</option></select></div></div>
+    </article>
+    <article class="f-peach" id="fc2">
+      <div class="media"><span class="ph">[Product shot]</span><div class="badge"><span>SAVE</span><span>30%</span></div></div>
+      <div class="body"><div class="nm">Acme Melatonin Capsules, 5 mg</div><div class="prices"><span class="now">$8.38</span><span class="was">$11.97</span></div><a class="btn" href="/products/melatonin">Shop Deal</a><div class="opt"><select aria-label="Variant"><option>240 capsules</option></select></div></div>
+    </article>
+    <article class="f-sky" id="fc3">
+      <div class="media"><span class="ph">[Product shot]</span><div class="badge"><span>SAVE</span><span>30%</span></div></div>
+      <div class="body"><div class="nm">Acme Organic Pea Protein Powder</div><div class="prices"><span class="now">$25.18</span><span class="was">$35.97</span></div><a class="btn" href="/products/pea-protein">Shop Deal</a><div class="opt"><select aria-label="Variant"><option>2 lbs</option></select></div></div>
+    </article>
+  </div>
+</section>
+
+<!-- 2. Another section with a different card layout (a list of tiles). -->
+<section id="best" aria-labelledby="best-h">
+  <h2 id="best-h">Best Sellers</h2>
+  <ul class="list" id="list-best">
+    <li class="tile a" id="bt1"><span class="ph">[Product image]</span><h3>Acme BCAA Powder</h3><p>$13.98</p><button type="button">Add to cart</button></li>
+    <li class="tile b" id="bt2"><span class="ph">[Product image]</span><h3>Acme Taurine Capsules</h3><p>$12.58</p><button type="button">Add to cart</button></li>
+    <li class="tile c" id="bt3"><span class="ph">[Product image]</span><h3>Acme HMB Capsules</h3><p>$11.18</p><button type="button">Add to cart</button></li>
+    <li class="tile d" id="bt4"><span class="ph">[Product image]</span><h3>Acme Fish Oil Softgels</h3><p>$23.08</p><button type="button">Add to cart</button></li>
+  </ul>
+</section>
+
+<!-- 3. A third layout: bundles (flex row of divs). -->
+<section id="bundles" aria-labelledby="bun-h">
+  <h2 id="bun-h">Bundles</h2>
+  <div class="bundles" id="row-bundles">
+    <div class="bundle" id="bb1"><span class="ph">[Product shot]</span><h3>Anti-Stress Kit</h3><p>$31.47</p><a class="btn" href="/products/anti-stress">View bundle</a></div>
+    <div class="bundle" id="bb2"><span class="ph">[Product shot]</span><h3>Magnesium Double Bundle</h3><p>$19.94</p><a class="btn" href="/products/mag-2">View bundle</a></div>
+  </div>
+</section>
+
+<!-- 4. A genuine multi-card wrapper: two rows of cards inside one container (not a section tag, no heading of its own). -->
+<div id="picks">
+  <div class="rail" id="rail-a">
+    <article class="f-lav" id="pa1"><div class="media"><span class="ph">[Product shot]</span></div><div class="body"><div class="nm">Acme NMN</div><div class="prices"><span class="now">$15.38</span></div><a class="btn" href="/products/nmn">Shop Deal</a></div></article>
+    <article class="f-coral" id="pa2"><div class="media"><span class="ph">[Product shot]</span></div><div class="body"><div class="nm">Acme Creatine</div><div class="prices"><span class="now">$16.78</span></div><a class="btn" href="/products/creatine">Shop Deal</a></div></article>
+  </div>
+  <div class="rail" id="rail-b">
+    <article class="f-sky" id="pb1"><div class="media"><span class="ph">[Product shot]</span></div><div class="body"><div class="nm">Acme ALA</div><div class="prices"><span class="now">$19.58</span></div><a class="btn" href="/products/ala">Shop Deal</a></div></article>
+    <article class="f-peach" id="pb2"><div class="media"><span class="ph">[Product shot]</span></div><div class="body"><div class="nm">Acme Glutamine</div><div class="prices"><span class="now">$12.58</span></div><a class="btn" href="/products/glutamine">Shop Deal</a></div></article>
+  </div>
+</div>
+
+<footer id="foot"><h2>Gift cards</h2><div class="gift"><span class="ph">[Product shot]</span>$25 <a href="#">Buy</a></div><div class="gift"><span class="ph">[Product shot]</span>$50 <a href="#">Buy</a></div></footer>
+</body>
+</html>

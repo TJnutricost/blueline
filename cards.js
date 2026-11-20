@@ -119,6 +119,20 @@
     return { parent: p, members, index: members.indexOf(el) + 1, count: members.length };
   }
 
+  // The same structural test WITHOUT the class check: cards of one family are often told apart only by a colour or theme
+  // class (f-coral / f-peach / f-sky), which says nothing about whether they are the same kind of card. Used to find and
+  // to count cards. group() / similar() stay as they are because they are part of a saved card's identity.
+  function familySimilar(a, shapeA, b) {
+    return a.tagName === b.tagName && dice(shapeA, shapeTokens(b)) >= 0.6;
+  }
+  function family(el) {
+    const p = el.parentElement;
+    if (!p) return { parent: null, members: [el], count: 1 };
+    const sa = shapeTokens(el);
+    const members = [...p.children].filter((c) => c === el || familySimilar(el, sa, c));
+    return { parent: p, members, count: members.length };
+  }
+
   // ------------------------------------------------------------------ product-like content
 
   const PRICE_RE = /(?:[$€£¥]\s?\d[\d.,]*)|(?:\b\d[\d.,]*\s?(?:USD|EUR|GBP|CAD|AUD)\b)|\[\s*[$€£]\s*[A-Za-z ]*\s*\]/i; // "$19.97", "19.97 USD", the placeholder "[$Sale]"
@@ -162,17 +176,20 @@
       if (kids.filter((k) => k.tagName === first.tagName).length < 2) continue;
       parents.add(p);
       if (parents.size > 40) break;
+      // Several comparable siblings that are each a product (an image/price/button of their own). Repeated badges, price
+      // spans, buttons or layout wrappers inside ONE card are not enough: only one of them holds a product.
       for (const c of kids.slice(0, 3)) {
-        const g = group(c);
-        if (g.count >= 2 && productLike(signals(c))) return true;
+        const f = family(c);
+        if (f.count < 2) continue;
+        let n = 0;
+        for (const m of f.members.slice(0, 8)) if (productLike(signals(m)) && ++n >= 2) return true;
       }
     }
     return false;
   }
   const cardLike = (el) => {
     if (el.hasAttribute('data-blueline-product-card')) return true;
-    const g = group(el);
-    return g.count >= 2 && productLike(signals(el)) && !containsCards(el);
+    return family(el).count >= 2 && productLike(signals(el)) && !containsCards(el);
   };
   const BROAD_TAGS = /^(SECTION|MAIN|HEADER|FOOTER|NAV|ASIDE)$/;
   // A container that would swallow several cards, or a whole region of the page: the UI asks for clear confirmation.
@@ -181,7 +198,10 @@
     if (el.hasAttribute('data-blueline-product-card')) return false;
     if (containsCards(el)) return true;
     const r = el.getBoundingClientRect();
-    return group(el).count < 2 && r.height > innerHeight * 1.5;
+    if (family(el).count >= 2 || r.height <= innerHeight * 1.5) return false;
+    // Tall for the window, with no look-alike sibling: a page region, unless it is one product card (its own image, price
+    // or button, under at most one heading). A short browser window must not turn a normal card into a "section".
+    return !(productLike(signals(el)) && qsa('h1,h2,h3,h4,h5,h6', el).length <= 1);
   }
 
   const chainOf = (el) => {
@@ -989,19 +1009,22 @@
     const add = (el, family, why) => { if (!found.has(el)) found.set(el, { family, why }); };
     add(seedEl, 'same', 'the card you confirmed');
 
-    // 1. Built like the confirmed card.
-    let pool;
-    if (seedClasses.length) pool = qsa(tagOf(seedEl) + seedClasses.map((c) => `.${esc(c)}`).join('')).slice(0, 400);
-    else {
-      const p = seedEl.parentElement;
-      const pc = p ? classesOf(p) : [];
-      const parents = p && pc.length ? qsa(tagOf(p) + pc.map((c) => `.${esc(c)}`).join('')).slice(0, 80) : p ? [p] : [];
-      pool = parents.flatMap((pp) => [...pp.children].filter((c) => c.tagName === seedEl.tagName));
+    // 1. Built like the confirmed card. Candidates are the elements with the same tag and classes, the confirmed card's own
+    // siblings, and the same-tag children of other containers like its parent. A card's styling class (a colour, a theme)
+    // is not required to match: cards of a family are told apart by structure and product content, not by class.
+    const pool = [];
+    if (seedClasses.length) pool.push(...qsa(tagOf(seedEl) + seedClasses.map((c) => `.${esc(c)}`).join('')).slice(0, 400));
+    const sp = seedEl.parentElement;
+    if (sp) {
+      const pc = classesOf(sp);
+      const parents = pc.length ? [sp, ...qsa(tagOf(sp) + pc.map((c) => `.${esc(c)}`).join('')).slice(0, 80)] : [sp];
+      for (const pp of parents) for (const c of pp.children) if (c.tagName === seedEl.tagName) pool.push(c);
     }
-    for (const el of pool) {
+    const overlaps = (el) => [...found.keys()].some((f) => f !== el && (f.contains(el) || el.contains(f)));
+    for (const el of new Set(pool)) {
       if (el === seedEl || found.has(el)) continue;
-      if (el.contains(seedEl) || seedEl.contains(el)) continue;
-      if (!similar(seedEl, sa, el)) continue;
+      if (el.contains(seedEl) || seedEl.contains(el) || overlaps(el)) continue;
+      if (!familySimilar(seedEl, sa, el)) continue;
       if (!productLike(signals(el)) || containsCards(el)) continue;
       add(el, 'same', 'built like the card you confirmed');
     }
@@ -1020,7 +1043,7 @@
         if (!rep || !PRICE_RE.test(textOf(rep)) || rep.closest(CHROME_AREA)) continue;
         examined++;
         const sr = shapeTokens(rep);
-        const members = group.filter((k) => !found.has(k) && !k.contains(seedEl) && !seedEl.contains(k) && (k === rep || similar(rep, sr, k)));
+        const members = group.filter((k) => !found.has(k) && !k.contains(seedEl) && !seedEl.contains(k) && (k === rep || familySimilar(rep, sr, k)));
         if (members.length < 2) continue;
         if (!members.every((k) => strongCard(signals(k)) && !containsCards(k) && !k.closest(CHROME_AREA))) continue;
         for (const k of members) if (![...found.keys()].some((f) => f.contains(k) || k.contains(f))) add(k, 'other', 'a repeated group with prices, titles and images or buttons, built differently from the card you confirmed');
@@ -1182,7 +1205,7 @@
   }
 
   return {
-    SCHEMA, hash, propose, describe, evaluate, measure, discoverSlots, slotElement, reportLines, isBroad, cardLike, group, sectionOf, signals,
+    SCHEMA, hash, propose, describe, evaluate, measure, discoverSlots, slotElement, reportLines, isBroad, cardLike, group, family, sectionOf, signals,
     sectionInfo, resolveSection, roleOfElement, findCorresponding, siblingCards,
     discoverCards, cardBrief, isHidden, FIELD_KEYS, FIELD_LABELS, pricesIn, parseBadge, detectFields, exportFields, fieldLocator, snapPick, fieldRef, fieldValue, resolveFieldRef, roleOk,
   };
