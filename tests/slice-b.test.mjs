@@ -47,7 +47,7 @@ async function open(fixture, { seed = null } = {}) {
   await page.addScriptTag({ content: STUB });
   await page.addScriptTag({ content: REAL_STORAGE });
   if (seed) await page.evaluate((s) => chrome.storage.local.set(s), seed);
-  for (const f of ['page-hook.js', 'content.js', 'library.js', 'cards.js', 'tools.js', 'library-ui.js']) await page.addScriptTag({ content: src(f) });
+  for (const f of ['page-hook.js', 'content.js', 'library.js', 'cards.js', 'tools.js', 'library-ui.js', 'sidebar.js']) await page.addScriptTag({ content: src(f) });
   await page.waitForFunction(() => window.__BL?.S?.active && window.__BL.S.ui);
   await sleep(150);
   return page;

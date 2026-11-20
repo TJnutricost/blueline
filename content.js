@@ -1329,17 +1329,24 @@
       box-shadow: 0 12px 32px rgba(30,34,48,.18); overflow: hidden; pointer-events: auto; }
     .panel.left { right: auto; left: 16px; }
     .panel.collapsed .body, .panel.collapsed .foot { display: none; }
-    .bar { display: flex; align-items: center; justify-content: space-between; padding: 6px 6px 6px 12px; border-bottom: 1px solid #EDEFF3; }
+    .bar { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 6px 8px 6px 10px; border-bottom: 1px solid #EDEFF3; }
     .panel.collapsed .bar { border-bottom: 0; }
-    .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; padding: 4px 0; }
-    .mark { width: 14px; height: 3px; background: ${INK}; border-radius: 2px; }
-    .count { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #EEF1FF; color: #1A33C7;
+    .brand { display: flex; align-items: center; gap: 6px; font-weight: 650; padding: 4px 0; min-width: 0; flex: 1 1 auto; white-space: nowrap; }
+    .mark { width: 14px; height: 3px; flex: none; background: ${INK}; border-radius: 2px; }
+    .count { flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #EEF1FF; color: #1A33C7;
       font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
     .count:empty { display: none; }
-    .mode { font-size: 11px; font-weight: 500; color: #6B7183; border: 1px solid #E2E5EC; border-radius: 4px; padding: 0 5px; line-height: 16px; }
-    .tools { display: flex; gap: 2px; }
+    .mode { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11px; font-weight: 500; color: #6B7183; border: 1px solid #E2E5EC; border-radius: 4px; padding: 0 5px; line-height: 16px; }
+    .bar.dense .mode { display: none; }
+    .tools { display: flex; align-items: center; gap: 2px; flex: none; }
+    .tools .icon { width: 28px; height: 28px; line-height: 28px; }
     .icon { width: 26px; height: 26px; border-radius: 6px; color: #6B7183; font-size: 13px; line-height: 26px; text-align: center; }
     .icon:hover { background: #F2F3F7; color: #1E2230; }
+    .dock { flex: none; margin-right: 2px; font-size: 12px; font-weight: 600; color: #1A33C7; border: 1px solid #B9C3FF; border-radius: 6px; padding: 0 7px; height: 28px; line-height: 26px; white-space: nowrap; }
+    .dock:hover { background: #F5F7FF; }
+    :host([data-nosb]) [data-act="sb-dock"] { display: none; }
+    .sb-only { display: none; flex: none; width: 100%; text-align: left; padding: 6px 12px; font-size: 12px; font-weight: 600; color: #1A33C7; background: #F7F8FF; border-bottom: 1px solid #EDEFF3; }
+    .sb-only:hover { background: #EEF1FF; }
 
     .body { padding: 10px 12px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
     .pick { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 10px; border: 1.5px dashed #B9C3FF;
@@ -1442,11 +1449,13 @@
       <header class="bar">
         <button class="brand" data-act="expand" title="Blueline"><span class="mark"></span>Blueline <span class="count"></span><span class="mode"></span></button>
         <div class="tools">
+          <button class="dock" data-act="sb-dock" title="Dock to sidebar: show Blueline in Chrome\u2019s side panel so the page stays unobstructed" aria-label="Dock to sidebar">Dock</button>
           <button class="icon" data-act="side" title="Move panel to the other side" aria-label="Move panel">⇆</button>
           <button class="icon" data-act="collapse" title="Minimize" aria-label="Minimize">–</button>
           <button class="icon" data-act="close" title="Turn off Blueline (Alt+Shift+Q)" aria-label="Turn off">✕</button>
         </div>
       </header>
+      <button class="sb-only" data-act="sb-undock" title="Show Blueline as a floating panel on the page again">⇱ Return to floating panel</button>
       <div class="body">
         <button class="pick" data-act="pick"><span class="pick-dot"></span><span class="pick-label">Pick an element</span><kbd>Alt+P</kbd></button>
         <p class="pick-hint" hidden>Click to add a note. ↑ ↓ to jump to the parent or child, Enter to select, Esc to stop. Open a menu or modal first, then press Alt+P to pick inside it.</p>
@@ -1553,6 +1562,8 @@
         case 'pick': setPicking(!S.picking); return;
         case 'side': S.prefs.side = S.prefs.side === 'left' ? 'right' : 'left'; savePrefs(); render(); return;
         case 'collapse': S.prefs.collapsed = !S.prefs.collapsed; savePrefs(); render(); return;
+        case 'sb-dock': BL.sidebar?.dock(); return;
+        case 'sb-undock': BL.sidebar?.undock(); return;
         case 'close': send({ type: 'blueline:toggle', on: false }); return;
         case 'export': openExport(); return;
         case 'clear': clearBatch(actEl); return;
@@ -1612,6 +1623,7 @@
     min.setAttribute('aria-label', min.title);
     $('.brand').title = S.prefs.collapsed ? `Expand Blueline ${VERSION}` : `Blueline ${VERSION}`;
     $('.count').textContent = items.length || '';
+    $('.bar').classList.toggle('dense', items.length >= 10); // two-digit count: the optional mode label gives way to the count (floating width is fixed)
     $('.mode').textContent = MODE_LABEL[modeOf(S.page)];
     $('.empty').hidden = items.length > 0;
     $('[data-act="export"]').disabled = !items.length && !(S.batch?.items || []).some((it) => it.productMapping);

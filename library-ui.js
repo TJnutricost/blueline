@@ -2277,6 +2277,18 @@
     sh._tx = 0; sh._ty = 0;
     const head = q('.lib-sheet header');
     if (!visible) { head?.removeAttribute('data-nodrag'); try { s.api.dock(false); } catch { /* the page side only */ } return; }
+    if (BL.sidebar && BL.sidebar.active()) {
+      // In Chrome's side panel the workspace fills the panel. It never reserves page space (that would resize the page
+      // being inspected, e.g. a DevTools phone emulation) and keeps the whole viewport as the free area for picking.
+      L.asSetting = true;
+      head?.removeAttribute('data-nodrag');
+      try { s.api.release(); s.api.setFree({ left: 0, top: 0, right: innerWidth, bottom: innerHeight }); s.api.dock(true); } catch { /* the page side only */ }
+      for (const b of q('.lib-as-docks').querySelectorAll('[data-mode]')) b.setAttribute('aria-pressed', 'false');
+      const rz = q('.lib-as-resize'); if (rz) rz.hidden = true;
+      setTimeout(() => { L.asSetting = false; }, 0);
+      asNarrow(s);
+      return;
+    }
     m.classList.add('lib-adock', `lib-d-${a.mode}`);
     L.asSetting = true;
     const docked = a.mode !== 'float';
@@ -3293,5 +3305,7 @@
   // After "Reset all Blueline work": whatever list the window had cached is dropped; the next open reads storage again.
   function afterReset() { L.lib = null; L.rows = []; L.listId = null; L.store = ''; L.pending = null; L.find = null; }
   function refreshWorkspace() { const s = L.bulk; if (s) { s.drafts = {}; s.removals = {}; s.rowErr = {}; s.sel = null; s.msg = 'Cleared. Press Define Product Card to start again.'; bkScan(s); bkRender(s); } }
-  BL.libraryUi = { refreshWorkspace, afterReset, fmtSize, L, selectProduct, openMapping, openAssign, openCards: openAssign, assignStart, openManager, open: openLibrary, close: closeLibrary, importFile: handleFile, exportJson, check: doCheck, render, fetchJson };
+  // The sidebar was docked or undocked while a workspace was open: lay it out again for the new surface.
+  function relayout() { if (L.bulk && L.root) { asApply(L.bulk); asKeepVisible(); } }
+  BL.libraryUi = { relayout, refreshWorkspace, afterReset, fmtSize, L, selectProduct, openMapping, openAssign, openCards: openAssign, assignStart, openManager, open: openLibrary, close: closeLibrary, importFile: handleFile, exportJson, check: doCheck, render, fetchJson };
 })();
