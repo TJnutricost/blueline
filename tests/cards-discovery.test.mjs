@@ -46,7 +46,7 @@ async function open({ width = 1280, height = 900, full = false } = {}) {
   if (!full) { await page.addScriptTag({ content: src('cards.js') }); return page; }
   await page.addScriptTag({ content: STUB });
   await page.addScriptTag({ content: REAL_STORAGE });
-  for (const f of ['page-hook.js', 'content.js', 'library.js', 'cards.js', 'tools.js', 'library-ui.js']) await page.addScriptTag({ content: src(f) });
+  for (const f of ['page-hook.js', 'content.js', 'library.js', 'cards.js', 'tools.js', 'library-ui.js', 'sidebar.js']) await page.addScriptTag({ content: src(f) });
   await page.waitForFunction(() => window.__BL?.S?.active && window.__BL.S.ui);
   await sleep(150);
   return page;

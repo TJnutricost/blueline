@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sidebar fixture</title>
+<style>
+  body { margin: 0; font: 16px/1.4 system-ui, sans-serif; }
+  header { padding: 12px; background: #eef; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px; }
+  .card { border: 1px solid #ccc; padding: 8px; min-height: 80px; }
+  .card h3 { margin: 0 0 4px; }
+  footer { padding: 12px; }
+</style>
+</head>
+<body>
+<header><h1 id="title">Mobile page</h1><input id="search" placeholder="Page search field"></header>
+<main class="grid">
+  <article class="card" id="c1"><h3 class="nm">Alpha</h3><p class="pr">$10.00</p><button class="buy">Buy</button></article>
+  <article class="card" id="c2"><h3 class="nm">Beta</h3><p class="pr">$12.00</p><button class="buy">Buy</button></article>
+  <article class="card" id="c3"><h3 class="nm">Gamma</h3><p class="pr">$14.00</p><button class="buy">Buy</button></article>
+  <article class="card" id="c4"><h3 class="nm">Delta</h3><p class="pr">$16.00</p><button class="buy">Buy</button></article>
+</main>
+<footer id="foot">Footer text</footer>
+</body>
+</html>

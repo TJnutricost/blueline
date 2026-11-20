@@ -75,7 +75,7 @@ async function open(fixture, { http = false, realStorage = false, seed = null, h
   await page.addScriptTag({ content: STUB });
   if (realStorage) await page.addScriptTag({ content: REAL_STORAGE });
   if (seed) await page.evaluate((s) => chrome.storage.local.set(s), seed); // a later session: what an earlier one saved
-  for (const f of ['page-hook.js', 'content.js', 'library.js', 'cards.js', 'tools.js', 'library-ui.js']) await page.addScriptTag({ content: src(f) });
+  for (const f of ['page-hook.js', 'content.js', 'library.js', 'cards.js', 'tools.js', 'library-ui.js', 'sidebar.js']) await page.addScriptTag({ content: src(f) });
   await page.waitForFunction(() => window.__BL?.S?.active && window.__BL.S.ui);
   await sleep(150);
   return page;

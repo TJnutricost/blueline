@@ -7,7 +7,8 @@
     "storage",
     "unlimitedStorage",
     "scripting",
-    "downloads"
+    "downloads",
+    "sidePanel"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -58,7 +59,8 @@
         "library.js",
         "cards.js",
         "tools.js",
-        "library-ui.js"
+        "library-ui.js",
+        "sidebar.js"
       ],
       "run_at": "document_idle"
     }

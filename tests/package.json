@@ -7,10 +7,11 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node library.test.mjs && node importer.test.mjs && node mapping.test.mjs && node cards-discovery.test.mjs && node run.mjs",
+    "test": "node library.test.mjs && node importer.test.mjs && node mapping.test.mjs && node cards-discovery.test.mjs && node sidebar-background.test.mjs && node sidebar.test.mjs && node run.mjs",
     "sweep": "node sweep.mjs",
     "test:library": "node library.test.mjs && node importer.test.mjs && node mapping.test.mjs",
     "test:cards": "node cards-discovery.test.mjs",
-    "test:c1": "node c1.test.mjs"
+    "test:c1": "node c1.test.mjs",
+    "test:sidebar": "node sidebar-background.test.mjs && node sidebar.test.mjs"
   }
 }

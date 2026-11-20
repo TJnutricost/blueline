@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blueline</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #fff; overflow: hidden;
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #1E2230; }
+  #mount { position: fixed; inset: 0; }
+  #mount[inert] { opacity: .45; }
+  #msg { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center;
+    color: #4A5063; z-index: 2; pointer-events: none; }
+  #msg[hidden] { display: none; }
+  #msg.over { align-items: flex-start; padding-top: 16px; }
+  #msg span { background: #fff; border: 1px solid #D9DCE4; border-radius: 8px; padding: 8px 12px; box-shadow: 0 8px 24px rgba(30,34,48,.12); }
+</style>
+</head>
+<body>
+<div id="mount"></div>
+<div id="msg" role="status" aria-live="polite"><span>Connecting to the page…</span></div>
+<script src="sidepanel.js"></script>
+</body>
+</html>

@@ -45,7 +45,7 @@ async function open(fixture) {
   await page.goto(pathToFileURL(join(here, 'fixtures', fixture)).href);
   await page.addScriptTag({ content: STUB });
   await page.addScriptTag({ content: REAL_STORAGE });
-  for (const f of ['page-hook.js', 'content.js', 'library.js', 'cards.js', 'tools.js', 'library-ui.js']) await page.addScriptTag({ content: src(f) });
+  for (const f of ['page-hook.js', 'content.js', 'library.js', 'cards.js', 'tools.js', 'library-ui.js', 'sidebar.js']) await page.addScriptTag({ content: src(f) });
   await page.waitForFunction(() => window.__BL?.S?.active && window.__BL.S.ui);
   await sleep(150);
   return page;
@@ -209,7 +209,8 @@ console.log('\n# Slice C1: Implementation target (fixtures/c1.html, a local HTML
   check('Never written to persistent storage', storeAfter === storeBefore && !/LeakCheck|Shogun/.test(storeAfter));
   check('No network request was made by any control (no store check, no SKU lookup)', await A.evaluate(() => window.__fetches.length === 0));
   check('The Product Library, card-mapping and library UI code never read the target selections', !/S\.target|\btarget\(\)|tgt-/.test(src('library.js') + src('library-ui.js') + src('cards.js') + src('tools.js') + src('page-hook.js') + src('background.js')));
-  check('manifest.json: permissions unchanged (storage, unlimitedStorage, scripting, downloads)', JSON.stringify(JSON.parse(src('manifest.json')).permissions) === JSON.stringify(['storage', 'unlimitedStorage', 'scripting', 'downloads']));
+  // sidePanel is the one permission added for the dockable sidebar (Chrome's Side Panel API); nothing else may be added.
+  check('manifest.json: permissions are the original four plus sidePanel only (storage, unlimitedStorage, scripting, downloads, sidePanel)', JSON.stringify(JSON.parse(src('manifest.json')).permissions) === JSON.stringify(['storage', 'unlimitedStorage', 'scripting', 'downloads', 'sidePanel']));
 
   // ---- navigation isolation (hash route: a path change Blueline tracks, valid on a file: page)
   await A.evaluate(() => { location.hash = '#/other-page'; });
@@ -239,7 +240,7 @@ console.log('\n# Slice C1 refinement: Auto shows what it will use (a live, non-f
   await page.evaluate(() => { window.Shopify = { shop: 'demo.myshopify.com', theme: { name: 'MAIN', id: 123, role: 'main' } }; });
   await page.addScriptTag({ content: STUB });
   await page.addScriptTag({ content: REAL_STORAGE });
-  for (const f of ['page-hook.js', 'content.js', 'library.js', 'cards.js', 'tools.js', 'library-ui.js']) await page.addScriptTag({ content: src(f) });
+  for (const f of ['page-hook.js', 'content.js', 'library.js', 'cards.js', 'tools.js', 'library-ui.js', 'sidebar.js']) await page.addScriptTag({ content: src(f) });
   await page.waitForFunction(() => window.__BL?.S?.active && window.__BL.S.ui);
   await sleep(200);
   const A = page;
